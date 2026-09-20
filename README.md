@@ -8,9 +8,7 @@
 
 ## 来源
 
-合成工具传输方案参考 [Xeltra233](https://github.com/Xeltra233) 的 [Antigravity-gateway](https://github.com/Xeltra233/Antigravity-gateway) 和 [Discord 原讨论](https://discord.com/channels/1134557553011998840/1543451029553545346)。
-
-[ken050210](https://github.com/ken050210) 将本地 router 中的实现提取为这个独立 JavaScript 网关，主要处理 Vertex 的流式输出。它是独立项目；原作者没有参与或背书本版本。两个项目都采用 MIT 许可证，原项目的版权声明和完整许可证见 [LICENSES/Antigravity-gateway-MIT.txt](LICENSES/Antigravity-gateway-MIT.txt)，本项目许可证见 [MIT](LICENSE)。完整来源说明见 [NOTICE.md](NOTICE.md)。
+合成工具传输方案参考 [Xeltra233](https://github.com/Xeltra233) 的 [Antigravity-gateway](https://github.com/Xeltra233/Antigravity-gateway)。
 
 ## 流式输出如何工作
 
