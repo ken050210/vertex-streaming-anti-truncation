@@ -8,9 +8,7 @@ Experimental release. Gemini 3.7 Flash is the only model offered. Requires Node.
 
 ## Credits
 
-The synthetic text-tool transport design comes from [Antigravity-gateway](https://github.com/Xeltra233/Antigravity-gateway) by [Xeltra233](https://github.com/Xeltra233), with context from the [original Discord discussion](https://discord.com/channels/1134557553011998840/1543451029553545346).
-
-[ken050210](https://github.com/ken050210) extracted this independent JavaScript gateway from a local router implementation to handle streaming on Vertex. The original author has not participated in or endorsed this release. Both projects use the MIT license. The upstream copyright notice and full license are in [LICENSES/Antigravity-gateway-MIT.txt](LICENSES/Antigravity-gateway-MIT.txt); this project's license is in [MIT](LICENSE). See [NOTICE.md](NOTICE.md) for provenance.
+The synthetic text-tool transport design comes from [Antigravity-gateway](https://github.com/Xeltra233/Antigravity-gateway) by [Xeltra233](https://github.com/Xeltra233).
 
 ## How streaming works
 
