@@ -2,9 +2,9 @@
 
 中文 | [English](README.en.md)
 
-为 Vertex AI / Gemini 3.7 Flash 提供工具调用抗截断传输。网关在生成过程中把正文逐段还原为 OpenAI 格式 SSE，可接入 SillyTavern 的自定义 OpenAI 连接。
+为 Vertex AI / Gemini 提供本地模型管理与工具调用抗截断传输。每个上游模型可保存正常、非流式抗截断和流式抗截断版本，可接入 SillyTavern 的自定义 OpenAI 连接。
 
-实验版，只提供 Gemini 3.7 Flash。需要 Node.js 22+，无第三方运行时依赖。
+实验版，支持配置多个 Gemini 模型；默认保留 Gemini 3.7 Flash 的原有入口。模型与流式参数功能是否可用取决于上游。需要 Node.js 22.9+，无第三方运行时依赖。
 
 ## 来源
 
@@ -31,27 +31,64 @@ SillyTavern / OpenAI-compatible client
 
 ## 启动
 
-需要已启用 Vertex AI API 的 Google Cloud 项目，以及有模型调用权限的服务账号或短期 OAuth access token。Vertex 调用按你的 Google Cloud 账户计费。
+支持完整 Vertex AI 服务账号、Express 快速模式 API Key，以及短期 OAuth access token。完整模式需要已启用 Vertex AI API 的项目和模型调用权限。实际推理按你的 Google Cloud 账户计费。
 
 ```sh
 git clone https://github.com/ken050210/vertex-streaming-anti-truncation.git
 cd vertex-streaming-anti-truncation
 npm ci --ignore-scripts
+npm start
 ```
+
+打开终端显示的本地控制台链接，默认地址为 `http://127.0.0.1:4780/`。首次启动会显示带设置密钥的链接；打开它即可进入设置。Windows 也可以双击 `Start-GUI.cmd`，无需预先创建 `.env`。
+
+控制台参考本地 LLM 订阅路由器的灰绿/青绿色界面，支持深浅主题和窄屏布局：
+
+- **连接配置**：填写项目 ID，粘贴或导入完整服务账号 JSON；也可切换到 Express API Key 或短期 OAuth Token。服务账号 JSON 中的项目 ID 可自动填入，也可覆盖为另一个有权限访问的目标项目。
+- **服务等级**：显式选择 Standard、Flex 或 Priority。Express、Flex 和 Priority 使用 `global`。Express 的项目 ID 可选填，仅作备注，其请求端点不包含项目和地区。
+- **本地网关**：设置 API 端口、超时和随机网关密钥。复制生成的网关密钥后再保存，后续凭据不回显；空白凭据字段保留已有值。
+- **模型与版本**：拉取并搜索 Google 模型目录，批量添加所需版本；也可手动填写上游 ID。分别编辑客户端名称、上游模型与传输模式，最多保存 100 个版本。
+- **总览与日志**：启动/停止网关，复制客户端 URL，检查请求状态、正文还原、结束原因以及请求档位/实际上游档位。记录仅保留最近 200 条。
+- **连接测试**：选择已保存的模型版本，勾选后手动发送一次最多 512 token 的测试，支持流式和普通响应、取消，以及流式正文到达统计。保存、校验、启动与拉取目录均不触发推理。
+
+配置保存到用户目录的 `~/.vertex-streaming-anti-truncation/settings.json`，可通过 `GATEWAY_STATE_DIR` 指定其他目录。凭据保存在本机明文文件中，请使用私人目录并限制文件访问。配置不会写进仓库或浏览器存储。保存采用版本检查和原子替换；端口冲突不会替换正在使用的配置。新请求使用新设置，正在进行的回复继续使用原设置。重启控制台会读取保存的配置并启动网关。用已设置的网关密钥再次登录。
+
+`GUI_PORT` 可更改控制台端口，默认 `4780`；API 端口默认 `4781`。保存的 GUI 配置优先于 `.env`。尚无保存配置时，可从已有 `.env` 初始化。
+
+### 添加多个模型及版本
+
+1. 在“连接配置”填写凭据，再进入“模型与版本”点击 **拉取 Model List**。拉取使用当前表单与已保存的凭据，无需先启动网关。
+2. 搜索并勾选一个或多个上游模型，选择需要的版本，点击添加。目录不可用时，也可填写 `gemini-…`、`google/gemini-…` 或 `publishers/google/models/gemini-…`。
+3. 按需修改客户端模型名称，再点 **保存全部配置**。它会一起保存连接和模型草稿；刷新客户端的模型列表即可选择。
+
+| 版本 | 行为 | 自动生成的名称 |
+| --- | --- | --- |
+| 正常 | 不加包装，遵循客户端的 `stream` 开关 | `<model>` |
+| 非流式抗截断 | 上游完整返回后还原；客户端要求 SSE 时一次性交付正文 | `<model>-antitruncation-nonstream` |
+| 流式抗截断 | 客户端开启流式时使用原生参数流；关闭时还原普通 JSON | `<model>-antitruncation-stream` |
+
+三个版本可同时存在，分别通过 `/v1/models` 暴露。名称必须唯一，可以用中文。添加时跳过已有的“上游 + 模式”组合；手动编辑仍可为同一组合保留不同别名。空列表会使客户端没有可选模型。
+
+升级会保留原来的 `gemini-3.7-flash-antitruncation` 名称：原先开启包装时迁移为流式抗截断，关闭时迁移为正常版本。新配置以每个版本的模式为准，不再受旧全局开关影响。
+
+目录来自 Google 的 [Publisher Models 列表接口](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/rest/v1beta1/publishers.models/list)，自动分页并筛选 Gemini。它是发布目录，不能证明目标项目、地区、档位或某种模态可以调用。Express 的[公开接口范围](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/express-mode/api-reference)未保证模型列表；如果 API Key 被拒绝，页面显示真实 HTTP 状态，可手动添加或改用服务账号拉取。失败不会清空已有模型，也不会用内置目录伪装拉取成功。
+
+### 仅命令行模式
 
 将 `.env.example` 复制为 `.env`：Windows PowerShell 使用 `Copy-Item .env.example .env`；Linux/macOS 使用 `cp .env.example .env`。然后填写：
 
 - `GATEWAY_API_KEY`：自己生成的随机本地访问密钥，至少 16 字符。
 - `VERTEX_PROJECT_ID`：Google Cloud 项目 ID。`VERTEX_LOCATION` 默认 `global`。
 - `GOOGLE_APPLICATION_CREDENTIALS`：仓库之外的服务账号 JSON 路径。Windows 可写成 `C:/keys/service-account.json`。
-- 如需用短期 Google OAuth access token，删掉上一项，改填 `VERTEX_ACCESS_TOKEN`。两种鉴权方式只能选一种。
+- 如需用短期 Google OAuth access token，删掉上一项，改填 `VERTEX_ACCESS_TOKEN`。快速模式改填 `VERTEX_API_KEY`，不要求项目 ID。三种鉴权方式只能选一种。
+- `VERTEX_SERVICE_TIER`：`standard`（默认）、`flex` 或 `priority`。`ANTI_TRUNCATION=false` 可关闭包装。
 - `PORT`：默认 `4781`。
 
 用以下命令生成随机网关密钥，填入 `.env` 后启动：
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
-npm start
+npm run gateway
 ```
 
 服务只监听 `127.0.0.1`。`GET /healthz` 检查进程状态；其余接口都需要 `Authorization: Bearer <GATEWAY_API_KEY>`。服务账号私钥只在本机签署 JWT，JWT 发给 Google OAuth 换取短期 access token，再用于模型请求。
@@ -63,9 +100,9 @@ npm start
 | 设置 | 值 |
 | --- | --- |
 | API URL | `http://127.0.0.1:4781/v1` |
-| API Key | `.env` 中的 `GATEWAY_API_KEY` |
-| 模型 | `gemini-3.7-flash-antitruncation` |
-| 流式传输 | 开启 |
+| API Key | GUI 中设置的本地网关密钥，或 `.env` 中的 `GATEWAY_API_KEY` |
+| 模型 | 刷新列表后选择保存的版本；默认 `gemini-3.7-flash-antitruncation` |
+| 流式传输 | 按需开启；非流式抗截断会等待完整回复 |
 
 如果预设已经有同类工具调用抗截断脚本，只保留一处包装。
 
@@ -73,13 +110,15 @@ npm start
 
 ## 适用范围与限制
 
-纯文本流式请求优先使用原生函数参数分段。非流式请求使用 Vertex OpenAI 兼容接口。遇到无法翻译的扩展字段、媒体或额外消息元数据时，网关保留原参数并回退到兼容接口，此时可能仍需等待全文。响应头 `x-anti-truncation-transport` 会显示 `tool-transport-buffered-fields`。
+流式抗截断版本的纯文本流式请求优先使用原生函数参数分段。Standard 服务账号/OAuth 模式的非流式请求使用 Vertex OpenAI 兼容接口；无法翻译的扩展字段、媒体或额外消息元数据保留原参数并回退到兼容接口，此时可能仍需等待全文。响应头 `x-anti-truncation-transport` 会显示 `tool-transport-buffered-fields`。
 
-已有 tools/functions、显式工具选择、工具历史、JSON/Schema 输出或多候选的请求会跳过包装。真实工具、usage、思考元数据，以及 `length` / `content_filter` 等结束原因会保留。流中断会报错；网关不自动续写或重试。
+Express、Flex 和 Priority 的普通/流式请求均走原生接口。支持文本、内嵌 base64 图片、函数工具与工具历史、JSON/Schema、候选数量及常用采样/思考参数。不支持远程图片 URL、旧式 `functions`、`parallel_tool_calls`、严格 Schema、logprobs 或未知扩展字段，遇到无法保留的参数返回 `400 unsupported_native_fields`，不会静默丢弃或改走 Standard。已有工具或结构化输出仍会跳过抗截断包装，原生接口继续正常翻译请求。
+
+已有 tools/functions、显式工具选择、工具历史、JSON/Schema 输出或多候选的请求会跳过包装，并继续遵循客户端的流式开关。真实工具、usage、思考元数据，以及 `length` / `content_filter` 等结束原因会保留。流中断会报错；网关不自动续写或重试。
 
 “抗截断”指通过工具参数传输并恢复已收到的文本。它不能恢复模型未生成或网络未收到的内容，也不能保证消除截断或绕过模型限制。
 
-独立包直接调用标准 Vertex，不包含多账号调度、额度管理、数据库或 GUI，也不会自动升级到 Flex/Priority。
+网关不会自动升级、降级或重试所选服务等级。Flex/Priority 发送官方服务等级标头，实际使用的等级以响应 `usage.traffic_type` 及日志 `trafficType` 为准；缺失时显示“上游未报告”。模型、账户及 Express 对档位的实际支持须由真实请求验证。参见 [Express 端点](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview)、[Flex](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo) 和 [Priority](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo) 官方说明。独立包不含多账号调度或额度管理。
 
 ## 查看验收结果
 
@@ -105,5 +144,7 @@ npm run verify
 # 可选：服务启动后，显式发送两条收费的短请求（各最多 512 tokens）
 npm run smoke -- --live
 ```
+
+烟测默认使用已保存的 GUI 配置，没有保存配置时使用环境变量；仅命令行服务可加 `--env` 强制使用 `.env`。默认测试第一个流式抗截断版本，也可加 `--model 你的模型名称` 指定；正常和非流式版本可在 GUI 测试页验证。
 
 默认测试使用本地模拟数据，不需要真实凭据，也不产生推理费用。烟测会统计正文到达次数和时间跨度，并用响应请求 ID 核对日志。验证范围见 [docs/VALIDATION.md](docs/VALIDATION.md)。

@@ -6,7 +6,7 @@ The standalone package's local tests and the live requests made before extractio
 
 ## Standalone package
 
-`npm run verify` runs syntax, credential and local-path checks, followed by 25 local tests covering:
+`npm run verify` runs syntax, credential and local-path checks, followed by local tests covering:
 
 - Split JSON, escapes, Unicode, byte boundaries and parser bounds.
 - Native `partialArgs` conversion, plain-text fallback, genuine tools and usage.
@@ -15,6 +15,11 @@ The standalone package's local tests and the live requests made before extractio
 - Field-preserving fallback and wrapper bypass for existing tools or structured output.
 - Client cancellation, interrupted streams, upstream errors, length endings and the absence of automatic retries.
 - Request-ID correlation and logs that exclude replies, prompts, random tool names and credentials.
+- Console session, Host/Origin/CSRF boundaries, write-only credentials, revision conflicts, occupied ports, persistence and key rotation.
+- Projectless Express endpoints, full service accounts with explicit target projects, Flex/Priority headers, native regular/streaming responses and actual tier logs.
+- Native-only rejection of unsupported fields before inference, without automatic tier fallback.
+
+The 0.2.0 browser check used isolated fixture credentials and a simulated upstream: Express/Flex save/apply, progressive text restoration, light/dark themes and narrow layouts. This does not prove live credentials, Gemini 3.7 availability or a particular account's Express/Flex/Priority entitlement.
 
 These tests use local fixtures and make no Vertex calls. CI is configured for Node.js 22 and 24 on both Linux and Windows. See [Actions](https://github.com/ken050210/vertex-streaming-anti-truncation/actions) for actual run results.
 
@@ -42,4 +47,6 @@ The receipt contains metadata only. Read counts and timing depend on the model, 
 
 Short requests and simulated streams do not prove that long replies will avoid truncation. The gateway cannot restore content the model never generated or the network never delivered. A model may also return ordinary text directly, in which case the log reports `restored: false`.
 
-This release offers only Gemini 3.7 Flash. Compatibility with 3.8, other providers, public remote deployment and other clients has not been established.
+Multiple Gemini models can now be configured; this does not establish live compatibility for every model. Compatibility with other providers, public remote deployment and other clients has not been established.
+
+Version 0.3.0 adds local tests for catalog authentication/pagination/errors, legacy migration, model persistence, alias routing, and normal/buffered/streaming modes with both JSON and SSE clients. Browser checks used a simulated catalog and upstream to save six profiles for two models, reject duplicate names, discard edits, reload saved profiles and select each mode for testing. Buffered replies arrived together; streaming replies arrived progressively. These checks do not verify real catalog permissions or model access.

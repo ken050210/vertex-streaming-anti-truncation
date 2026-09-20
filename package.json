@@ -1,6 +1,6 @@
 {
   "name": "vertex-streaming-anti-truncation",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Experimental Vertex Gemini text-tool gateway with progressive native function-argument streaming.",
   "type": "module",
@@ -11,14 +11,16 @@
     "url": "https://github.com/ken050210/vertex-streaming-anti-truncation.git"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.9.0"
   },
   "scripts": {
-    "start": "node --env-file=.env bin/start.mjs",
+    "start": "node --env-file-if-exists=.env bin/gui.mjs",
+    "gui": "node --env-file-if-exists=.env bin/gui.mjs",
+    "gateway": "node --env-file=.env bin/start.mjs",
     "check": "node scripts/check.mjs",
     "test": "node --test",
     "verify": "npm run check && npm test",
-    "smoke": "node --env-file=.env scripts/smoke.mjs"
+    "smoke": "node --env-file-if-exists=.env scripts/smoke.mjs"
   },
   "exports": {
     ".": "./src/gateway.mjs",

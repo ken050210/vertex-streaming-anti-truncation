@@ -40,12 +40,15 @@ export function supportsNativeTextStream(payload) {
 }
 
 export function buildNativeTextBody(payload) {
-  const body = buildNativeBody(payload);
+  const body = applyNativeOptions(buildNativeBody(payload), payload);
+  body.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
+  return body;
+}
+
+export function applyNativeOptions(body, payload) {
   const google = payload.extra_body?.google ?? {};
   // Match the compatible endpoint's provider defaults unless explicitly supplied.
   delete body.safetySettings;
-  const callingConfig = body.toolConfig.functionCallingConfig;
-  callingConfig.streamFunctionCallArguments = true;
   if (google.safety_settings != null) body.safetySettings = structuredClone(google.safety_settings);
   if (google.cached_content != null) body.cachedContent = google.cached_content;
   body.generationConfig ??= {};

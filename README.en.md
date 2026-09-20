@@ -2,9 +2,9 @@
 
 [中文](README.md) | English
 
-A local gateway for Vertex AI / Gemini 3.7 Flash that carries reply text through a synthetic function call and restores it as OpenAI SSE text while generation is still running. It works with SillyTavern's custom OpenAI connection.
+A local gateway for Vertex AI / Gemini with a model library and optional text-tool transport. Save normal, buffered anti-truncation and streaming anti-truncation aliases for each upstream model, then select them from SillyTavern's custom OpenAI connection.
 
-Experimental release. Gemini 3.7 Flash is the only model offered. Requires Node.js 22+ and has no third-party runtime dependencies.
+Experimental release with configurable Gemini models. The existing Gemini 3.7 Flash alias remains the default. Model and function-argument streaming availability depend on Google. Requires Node.js 22.9+ and has no third-party runtime dependencies.
 
 ## Credits
 
@@ -31,27 +31,56 @@ SillyTavern / OpenAI-compatible client
 
 ## Setup
 
-You need a Google Cloud project with the Vertex AI API enabled, plus a service account with permission to call the model or a short-lived OAuth access token. Vertex requests are billed to your Google Cloud account.
+Choose a full Vertex service-account JSON, an Express mode API key, or a short-lived OAuth access token. Full mode requires a Google Cloud project with the Vertex AI API enabled and permission to call the model. Inference is billed to your Google Cloud account.
 
 ```sh
 git clone https://github.com/ken050210/vertex-streaming-anti-truncation.git
 cd vertex-streaming-anti-truncation
 npm ci --ignore-scripts
+npm start
 ```
+
+Open the console link printed in the terminal (default `http://127.0.0.1:4780/`). On first launch, use the setup link containing a local bootstrap key. On Windows you can also double-click `Start-GUI.cmd`. No `.env` is required for GUI setup.
+
+The console includes light/dark themes, responsive layout, overview, connection settings, metadata-only request logs and a bounded test page:
+
+- Enter the target project ID and paste/import the **complete service-account JSON**, or select **Express API Key** or **OAuth Token**. A service account's project can be filled automatically and overridden for cross-project access. Express uses a projectless global endpoint; its optional project field is only a note.
+- Select **Standard, Flex or Priority**, an API port, timeout and anti-truncation setting. Express and non-standard tiers require `global`.
+- Generate and copy a local gateway key before saving. Saved credentials are write-only; blank fields retain previous values. Use that key for client access and subsequent console sign-in.
+- Save and apply without interrupting active replies. Port conflicts preserve the old listener and configuration. Starting, saving and validating do not call Google. The test page requires an explicit click and consent for each request, capped at 512 output tokens, with cancellation and streaming arrival statistics.
+
+Settings are stored as plaintext in `~/.vertex-streaming-anti-truncation/settings.json`, outside the repository. Keep this directory private. Override it with `GATEWAY_STATE_DIR`; change the console port with `GUI_PORT` (default `4780`). The API port defaults to `4781`. Saves use revision checks and atomic replacement. Restarting the console loads saved settings and starts the gateway. Saved GUI settings take precedence over `.env`; an existing `.env` can initialize an unsaved setup. Secrets are never stored in browser storage or returned by configuration APIs.
+
+### Model library and variants
+
+Enter credentials under **连接配置**, then open **模型与版本** and click **拉取 Model List**. Discovery uses the current connection form plus saved credentials, without starting inference or saving the draft. Search and select multiple models, check the variants to add, then click **保存全部配置** to save both connection and model drafts. Refresh the model list in your client afterwards.
+
+| Variant | Behavior | Generated alias |
+| --- | --- | --- |
+| Normal | No wrapper; follows the client's `stream` setting | `<model>` |
+| Buffered anti-truncation | Restores a complete upstream response; delivers it at once as SSE if requested | `<model>-antitruncation-nonstream` |
+| Streaming anti-truncation | Native argument streaming for SSE; ordinary restored JSON otherwise | `<model>-antitruncation-stream` |
+
+Save up to 100 profiles with unique public names, including Chinese aliases. Each row can change its upstream ID and mode. `/v1/models` exposes saved profiles. The add action skips existing upstream/mode pairs; manual edits may retain multiple aliases for the same pair. Saving an empty list exposes no models. Existing `gemini-3.7-flash-antitruncation` settings retain their name and previous enabled/disabled behavior on upgrade; explicit profiles replace the legacy global switch.
+
+Discovery uses Google's paginated [publisher model catalog](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/rest/v1beta1/publishers.models/list) and filters Gemini IDs. Catalog presence does not establish project access, region, modality or tier support. The [Express API reference](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/express-mode/api-reference) does not guarantee listing support: if an API key cannot list models, use a service account for discovery or manually enter `gemini-…`, `google/gemini-…` or `publishers/google/models/gemini-…`. Errors preserve existing profiles and do not return a fabricated fallback catalog.
+
+### CLI-only setup
 
 Copy `.env.example` to `.env`: use `Copy-Item .env.example .env` in Windows PowerShell or `cp .env.example .env` on Linux/macOS. Set:
 
 - `GATEWAY_API_KEY`: a random local access key you generate, at least 16 characters.
 - `VERTEX_PROJECT_ID`: your Google Cloud project ID. `VERTEX_LOCATION` defaults to `global`.
 - `GOOGLE_APPLICATION_CREDENTIALS`: the path to a service-account JSON file outside the repository. On Windows, `C:/keys/service-account.json` works.
-- To use a short-lived Google OAuth access token, remove the previous setting and set `VERTEX_ACCESS_TOKEN` instead. Choose exactly one authentication method.
+- Alternatively set `VERTEX_ACCESS_TOKEN`, or use `VERTEX_API_KEY` for Express mode (no project required). Choose exactly one authentication method.
+- `VERTEX_SERVICE_TIER`: `standard` (default), `flex` or `priority`. Set `ANTI_TRUNCATION=false` to disable wrapping.
 - `PORT`: defaults to `4781`.
 
 Generate a gateway key with this command, save it in `.env`, then start the service:
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
-npm start
+npm run gateway
 ```
 
 The service binds only to `127.0.0.1`. `GET /healthz` checks the process; every other endpoint requires `Authorization: Bearer <GATEWAY_API_KEY>`. The service-account private key signs a JWT locally. That JWT is sent to Google OAuth to obtain the short-lived access token used for model requests.
@@ -63,9 +92,9 @@ Under Chat Completion, select the custom OpenAI-compatible connection:
 | Setting | Value |
 | --- | --- |
 | API URL | `http://127.0.0.1:4781/v1` |
-| API Key | `GATEWAY_API_KEY` from `.env` |
-| Model | `gemini-3.7-flash-antitruncation` |
-| Streaming | Enabled |
+| API Key | The local gateway key from GUI setup or `GATEWAY_API_KEY` from `.env` |
+| Model | A saved alias from the refreshed list; default `gemini-3.7-flash-antitruncation` |
+| Streaming | Optional; buffered anti-truncation waits for the complete response |
 
 If your preset already uses a similar text-tool transport script, keep only one wrapper enabled.
 
@@ -73,13 +102,15 @@ The gateway accepts the Anthropic-style field `thinking: {type: "disabled"}` as 
 
 ## Scope and limits
 
-Streaming text requests use native function-argument streaming when their fields can be translated. Non-streaming requests use Vertex's OpenAI-compatible endpoint. Unsupported extension fields, media or extra message metadata retain their original values and fall back to that compatible endpoint, which may wait for the full reply. The response header `x-anti-truncation-transport` then reads `tool-transport-buffered-fields`.
+Streaming text requests use native function-argument streaming when their fields can be translated. In Standard service-account/OAuth mode, non-streaming requests use Vertex's OpenAI-compatible endpoint. Unsupported extension fields, media or extra message metadata retain their original values and fall back to that compatible endpoint, which may wait for the full reply. The response header `x-anti-truncation-transport` then reads `tool-transport-buffered-fields`.
+
+Express, Flex and Priority use native endpoints for both regular and streaming requests. Supported inputs include text, inline base64 images, function tools and history, JSON/Schema output, candidate counts, and common sampling/thinking settings. Remote image URLs, legacy `functions`, `parallel_tool_calls`, strict Schema, logprobs and unknown extensions return `400 unsupported_native_fields` when they cannot be preserved. The gateway does not silently discard those fields or switch tiers. Real tools and structured output bypass wrapping but still use native translation.
 
 Requests with existing tools/functions, explicit tool selection, tool history, JSON/Schema output or multiple candidates skip the wrapper. Genuine tools, usage, thinking metadata and finish reasons such as `length` or `content_filter` are preserved. Interrupted streams fail; the gateway does not continue or retry them automatically.
 
 “Anti-truncation” describes transporting and restoring text that has been received. It cannot recover text the model never generated or the network never delivered, guarantee complete replies, or bypass model limits.
 
-This package calls standard Vertex directly. It has no account scheduler, quota manager, database or GUI, and does not automatically upgrade requests to Flex/Priority.
+Tiers are selected explicitly and never automatically upgraded, downgraded or retried. Flex/Priority send Google's tier headers. The requested tier and actual `usage.traffic_type` are logged separately; missing upstream tier metadata remains unknown. Model/account availability, including Express tier support, requires real upstream verification. See the official [Express endpoint](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview), [Flex](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo) and [Priority](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo) documentation. This package has no multi-account scheduler or quota manager.
 
 ## Checking a request
 
@@ -105,5 +136,7 @@ npm run verify
 # Optional: with the server running, send two billable requests capped at 512 tokens each.
 npm run smoke -- --live
 ```
+
+The smoke command uses saved GUI settings, falling back to environment variables when no file exists. Add `--env` to explicitly target a CLI-only service configured through `.env`. It selects the first streaming anti-truncation profile by default; use `--model your-alias` to select another. The GUI test page supports normal and buffered profiles too.
 
 The default tests use local fixtures, require no real credentials and incur no inference charges. The live smoke test measures content-bearing reads and their time span, then matches response request IDs to the logs. See [docs/VALIDATION.en.md](docs/VALIDATION.en.md) for the validation scope.

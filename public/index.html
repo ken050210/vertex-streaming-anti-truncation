@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark"><title>Vertex Gateway · 本地控制台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主内容</a>
+  <section id="login-view" class="login-view">
+    <form id="login-form" class="login-card">
+      <div class="brand"><img src="/favicon.svg" width="40" height="40" alt=""><div><strong>Vertex Gateway</strong><span>GEMINI · LOCAL CONSOLE</span></div></div>
+      <div class="login-heading"><p class="eyebrow">LOCAL ACCESS</p><h1 id="login-title">进入本地控制台</h1><p id="login-description" class="muted">输入网关密钥，管理你的 Vertex 连接。</p></div>
+      <label for="login-key">本地访问密钥</label><input id="login-key" type="password" autocomplete="current-password" required autofocus>
+      <p id="login-error" class="field-error" role="alert"></p>
+      <button class="btn primary full" type="submit">进入控制台 <span aria-hidden="true">→</span></button>
+      <p class="small muted">仅在本机访问。密钥不会保存到浏览器存储。</p>
+    </form>
+  </section>
+
+  <div id="app-view" class="shell" hidden>
+    <aside class="rail">
+      <div class="brand"><img src="/favicon.svg" width="36" height="36" alt=""><div><strong>Vertex Gateway</strong><span>STREAMING CONSOLE</span></div></div>
+      <p class="nav-caption">工作空间</p>
+      <nav aria-label="主导航">
+        <button data-page="overview" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>总览</button>
+        <button data-page="connection"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0V8zm6 9v4"/></svg>连接配置</button>
+        <button data-page="models"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5zm-9 9 9 5 9-5M3 16l9 5 9-5"/></svg>模型与版本</button>
+        <button data-page="events"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h11v18H5V3h3m1 5h6m-6 4h6m-6 4h4"/></svg>请求日志</button>
+        <button data-page="test"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6m-5 0v7l-5 8a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-8V3M8 15h8"/></svg>连接测试</button>
+      </nav>
+      <div class="rail-note"><span class="eyebrow">MODEL LIBRARY</span><strong id="rail-models">正在读取模型</strong><span class="small muted">正常 · 非流式 · 流式抗截断</span></div>
+      <div class="rail-foot"><span id="rail-lamp" class="lamp idle"></span><div><strong id="rail-status">正在连接</strong><span class="small muted">仅限本机 · 127.0.0.1</span></div><span class="version">0.3</span></div>
+    </aside>
+    <div class="main-wrap">
+      <header class="topbar"><div><p class="eyebrow">GATEWAY OPERATIONS</p><h1 id="page-title">总览</h1></div>
+        <div class="actions"><span class="local-badge"><span class="lamp"></span>本地控制台</span><button id="theme-button" class="btn ghost" aria-label="切换深浅主题">切换主题</button><button id="refresh-button" class="btn ghost">刷新状态</button><button id="logout-button" class="btn ghost">退出</button></div>
+      </header>
+      <main id="main" tabindex="-1">
+        <div id="global-error" class="notice error" role="alert" hidden></div>
+        <section id="page-overview" class="page">
+          <div class="section-intro"><div><h2>每一段回复，都有迹可循。</h2><p class="muted">管理 Vertex 连接，查看流式传输与正文还原状态。</p></div><button class="btn" data-go="connection">管理连接 <span aria-hidden="true">↗</span></button></div>
+          <div class="status-banner"><div><div id="runtime-badge" class="badge hold">等待配置</div><h2 id="runtime-title">连接你的 Vertex 项目</h2><p id="runtime-description" class="muted">填写凭据并保存，即可向本地网关发送请求。</p></div><div class="actions"><button id="start-button" class="btn primary">启动网关</button><button id="stop-button" class="btn" hidden>停止网关</button><button class="btn primary" id="setup-button" data-go="connection">配置连接 <span aria-hidden="true">→</span></button></div></div>
+          <div class="metrics"><article><span>网关状态</span><strong id="metric-status">待配置</strong><small id="metric-active">尚未启动服务</small></article><article><span>近期请求</span><strong id="metric-requests">0</strong><small>当前进程 · 最近 200 条</small></article><article><span>已还原正文</span><strong id="metric-restored">0</strong><small>根据抗截断传输元数据</small></article><article><span>服务等级</span><strong id="metric-tier">Standard</strong><small id="metric-traffic">实际档位：尚无上游记录</small></article></div>
+          <div class="overview-grid"><section class="panel"><div class="panel-head"><h2>客户端接入</h2><span class="badge">OPENAI COMPATIBLE</span></div><p class="muted">将以下地址填入 SillyTavern 或其他兼容客户端。</p><div class="copy-row"><div><span class="field-caption">API BASE URL</span><code id="endpoint">http://127.0.0.1:4781/v1</code></div><button class="btn" data-copy="endpoint">复制</button></div><div class="copy-row"><div><label class="field-caption" for="client-model">MODEL ID</label><select id="client-model" class="mono"></select><code id="model-id" class="sr-only"></code></div><button class="btn" data-copy="model-id">复制</button></div><p class="hint">API Key 使用本地网关密钥。刷新客户端模型列表后，选择保存的版本。</p></section>
+          <section class="panel"><div class="panel-head"><h2>当前连接</h2><span class="small muted">已应用</span></div><dl class="details"><div><dt>鉴权方式</dt><dd id="overview-auth">未配置</dd></div><div><dt>项目 ID</dt><dd id="overview-project" class="mono">—</dd></div><div><dt>地区</dt><dd id="overview-location" class="mono">global</dd></div><div><dt>模型版本</dt><dd id="overview-anti">—</dd></div></dl><button class="text-button" data-go="test">检查连接与还原状态 <span aria-hidden="true">→</span></button></section></div>
+          <section class="panel"><div class="panel-head"><h2>最近请求</h2><button class="text-button" data-go="events">查看全部 <span aria-hidden="true">→</span></button></div><div id="recent-events"></div></section>
+        </section>
+
+        <section id="page-connection" class="page" hidden>
+          <div class="section-intro"><div><h2>配置你的连接</h2><p class="muted">选择鉴权方式与服务等级，保存后立即用于新的请求。</p></div><span id="saved-badge" class="badge">尚未保存</span></div>
+          <form id="settings-form" autocomplete="off">
+            <div class="settings-grid"><div class="settings-main">
+              <section class="panel"><div class="panel-head"><h2><span class="step">01</span> Google Cloud 鉴权</h2></div>
+                <fieldset class="option-group auth-options"><legend class="sr-only">鉴权方式</legend>
+                  <label class="option-card"><input type="radio" name="authMode" value="service-account" checked><span><strong>完整模式</strong><small>服务账号 JSON</small></span></label>
+                  <label class="option-card"><input type="radio" name="authMode" value="express"><span><strong>快速模式</strong><small>Express API Key</small></span></label>
+                  <label class="option-card"><input type="radio" name="authMode" value="access-token"><span><strong>临时令牌</strong><small>OAuth Access Token</small></span></label>
+                </fieldset>
+                <div class="form-grid"><div class="field"><label for="project-id">项目 ID <span id="project-optional" class="muted" hidden>（选填）</span></label><input id="project-id" name="projectId" placeholder="your-google-cloud-project" spellcheck="false" maxlength="128"><p id="project-help" class="hint">填写目标 Google Cloud 项目 ID，可与服务账号所属项目不同。</p></div><div class="field"><label for="location">地区</label><input id="location" name="location" list="locations" value="global" spellcheck="false"><datalist id="locations"><option value="global"><option value="us-central1"><option value="us-east5"><option value="europe-west4"><option value="asia-southeast1"></datalist><p class="hint">Express、Flex 和 Priority 使用 global。</p></div></div>
+                <div id="credential-service" class="field"><div class="label-line"><label for="service-account">完整服务账号 JSON</label><label class="btn small-button file-button">导入 JSON 文件<input id="service-file" type="file" accept=".json,application/json" class="sr-only"></label></div><textarea id="service-account" name="serviceAccountJson" rows="6" placeholder="粘贴完整的 service_account JSON，包含 project_id、client_email、private_key 和 token_uri。" spellcheck="false" aria-describedby="service-help"></textarea><p id="service-help" class="hint">私钥用于本机签名。已保存的凭据不回显，留空则保留。</p></div>
+                <div id="credential-express" class="field" hidden><label for="api-key">Vertex Express API Key</label><input id="api-key" name="apiKey" type="password" placeholder="输入快速模式的 API Key" autocomplete="new-password"><p class="hint">使用 Express 全局端点，项目 ID 仅作备注，不参与请求路由。已保存后留空保留。</p></div>
+                <div id="credential-token" class="field" hidden><label for="access-token">OAuth Access Token</label><input id="access-token" name="accessToken" type="password" placeholder="输入短期 Google OAuth 令牌" autocomplete="new-password"><p class="hint">令牌过期后需手动更新；长期使用建议选择服务账号。</p></div>
+              </section>
+              <section class="panel"><div class="panel-head"><h2><span class="step">02</span> 服务等级与传输</h2></div>
+                <fieldset class="option-group tier-options"><legend class="sr-only">服务等级</legend>
+                  <label class="option-card"><input type="radio" name="serviceTier" value="standard" checked><span><strong>Standard</strong><small>标准按量服务</small></span></label>
+                  <label class="option-card"><input type="radio" name="serviceTier" value="flex"><span><strong>Flex</strong><small>适合可等待的请求</small></span></label>
+                  <label class="option-card"><input type="radio" name="serviceTier" value="priority"><span><strong>Priority</strong><small>优先按量服务</small></span></label>
+                </fieldset><div id="tier-help" class="notice">使用标准档位，不自动升级服务等级。</div>
+                <button class="text-button" type="button" data-go="models">在“模型与版本”中分别设置正常、非流式和流式抗截断 →</button>
+                <p class="hint">已有工具调用或结构化输出会跳过包装。若预设也有同类脚本，只保留一处包装。</p>
+              </section>
+              <section class="panel"><div class="panel-head"><h2><span class="step">03</span> 本地网关</h2></div>
+                <div class="form-grid"><div class="field"><label for="port">API 端口</label><input id="port" name="port" type="number" min="1" max="65535" value="4781" required><p class="hint">仅监听 127.0.0.1，与控制台端口分开。</p></div><div class="field"><label for="timeout">上游超时（秒）</label><input id="timeout" type="number" min="1" max="1800" value="600" required><p class="hint">Flex 可能等待较久，默认 600 秒。</p></div></div>
+                <div class="field"><div class="label-line"><label for="gateway-key">本地网关密钥</label><button id="generate-key" class="text-button" type="button">生成随机密钥</button></div><div class="input-actions"><input id="gateway-key" name="gatewayKey" type="password" autocomplete="new-password" placeholder="至少 16 字符；已保存后留空保留"><button id="copy-key" class="btn" type="button">复制新密钥</button></div><p class="hint">用于客户端接入和下次登录。生成后请复制保存；已保存的密钥不回显。</p></div>
+              </section>
+            </div><aside class="settings-aside"><section class="panel preview-panel"><p class="eyebrow">CONNECTION PREVIEW</p><h2>待应用连接</h2><dl class="details"><div><dt>鉴权</dt><dd id="preview-auth">完整模式</dd></div><div><dt>服务等级</dt><dd id="preview-tier">Standard</dd></div><div><dt>地区</dt><dd id="preview-location" class="mono">global</dd></div><div><dt>本地端口</dt><dd id="preview-port" class="mono">4781</dd></div></dl><div class="divider"></div><p class="small muted">保存前会在本机校验配置。保存与启动不会发起模型推理。</p><p class="small muted">配置保存在用户目录，密钥和服务账号不会回传到页面。</p></section><section class="help-card"><h3>关于实际服务等级</h3><p>所选档位随请求发给 Google。是否可用由模型和账户决定，实际档位以响应中的 traffic_type 为准。</p><a href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo" target="_blank" rel="noreferrer">Flex 文档 ↗</a><a href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo" target="_blank" rel="noreferrer">Priority 文档 ↗</a></section></aside></div>
+            <div id="form-error" class="notice error" role="alert" hidden></div>
+            <div class="save-bar"><div><strong id="draft-label">配置已同步</strong><span class="small muted">新请求使用新配置，进行中的回复继续完成。</span></div><div class="actions"><button id="discard-button" class="btn ghost" type="button">放弃修改</button><button id="validate-button" class="btn" type="button">仅校验</button><button id="save-button" class="btn primary" type="submit">保存并应用 <span aria-hidden="true">→</span></button></div></div>
+          </form>
+        </section>
+
+        <section id="page-models" class="page" hidden>
+          <div class="section-intro"><div><h2>一个模型，多种使用方式。</h2><p class="muted">从 Google 目录添加模型，为每个版本保存独立的客户端名称。</p></div><span id="models-count" class="badge">0 个版本</span></div>
+          <section class="panel">
+            <div class="panel-head"><h2><span class="step">01</span> 选择上游模型</h2><button id="discover-button" class="btn">拉取 Model List <span aria-hidden="true">↓</span></button></div>
+            <div id="discovery-error" class="notice error" role="alert" hidden></div>
+            <p class="muted">使用“连接配置”中当前填写的凭据读取 Google 模型目录，不发送推理请求。</p>
+            <div class="catalog-grid">
+              <div><label for="catalog-search">搜索目录</label><input id="catalog-search" type="search" placeholder="搜索 Gemini 模型名称" autocomplete="off"><p id="catalog-status" class="hint" role="status">尚未拉取。也可以手动填写模型 ID。</p><div id="catalog-list" class="catalog-list"><div class="empty-state"><strong>你的模型目录</strong><p>填写连接凭据后，点击“拉取 Model List”。</p></div></div></div>
+              <div class="variant-builder"><fieldset class="variant-options"><legend>要添加的版本</legend>
+                <label class="variant-option"><input type="checkbox" name="newMode" value="normal" checked><span><strong>正常版本</strong><small>不加入抗截断包装，跟随客户端流式开关。</small></span></label>
+                <label class="variant-option"><input type="checkbox" name="newMode" value="buffered" checked><span><strong>非流式抗截断</strong><small>等待完整回复后还原；客户端开启流式时一次性交付正文。</small></span></label>
+                <label class="variant-option"><input type="checkbox" name="newMode" value="streaming" checked><span><strong>流式抗截断</strong><small>使用原生参数流逐段还原；客户端关闭流式时返回普通 JSON。</small></span></label>
+              </fieldset><button id="add-selected" class="btn primary full" disabled>添加所选模型的版本</button>
+              <div class="divider"></div><label for="manual-model">手动添加上游模型 ID</label><div class="input-actions"><input id="manual-model" placeholder="gemini-3.7-flash" spellcheck="false" maxlength="180"><button id="add-manual" class="btn">添加</button></div><p class="hint">支持 gemini-… 或 google/gemini-…；使用上方勾选的版本。</p></div>
+            </div>
+            <p class="hint">目录是 Google 发布的模型元数据，不代表项目、地区或 Flex / Priority 已获授权。Express 的目录接口可能不可用，可手动添加模型 ID 或使用服务账号拉取。</p>
+
+          </section>
+          <section class="panel"><div class="panel-head"><h2><span class="step">02</span> 保存的模型版本</h2><span class="small muted">客户端通过名称选择</span></div><p class="muted">可修改名称、上游模型和模式。保存后，客户端刷新模型列表即可选择。</p><div id="model-rows" class="model-rows"></div><p class="hint">已有工具调用、工具历史或结构化输出会跳过抗截断包装。流式参数支持取决于上游模型；失败时不会自动改换版本。</p></section>
+          <div id="models-error" class="notice error" role="alert" hidden></div>
+          <div class="save-bar"><div><strong id="models-draft-label">配置已同步</strong><span class="small muted">一起保存连接配置与模型列表。新请求立即生效。</span></div><div class="actions"><button id="models-discard" class="btn ghost">放弃修改</button><button id="models-save" class="btn primary">保存全部配置 →</button></div></div>
+        </section>
+
+        <section id="page-events" class="page" hidden><div class="section-intro"><div><h2>请求与还原记录</h2><p class="muted">仅记录状态元数据。最近 200 条，关闭控制台后清空。</p></div><label class="filter-label">筛选<select id="event-filter"><option value="all">全部请求</option><option value="failed">失败请求</option><option value="restored">已还原正文</option></select></label></div><section class="panel"><div id="all-events"></div></section></section>
+
+        <section id="page-test" class="page" hidden><div class="section-intro"><div><h2>检查连接与流式还原</h2><p class="muted">先确认配置，再按需发送一条短请求。</p></div></div><div class="test-grid"><section class="panel"><div class="panel-head"><h2>测试请求</h2><span class="badge">最多 512 TOKENS</span></div><div class="field"><label for="probe-model">选择已应用的模型版本</label><select id="probe-model"></select><p id="probe-model-help" class="hint"></p></div><p class="muted">固定提示词：写三行关于河流的短句。</p><label class="toggle-row"><span><strong>流式响应</strong><small>观察正文是否分段到达。</small></span><input id="probe-stream" type="checkbox" role="switch" checked></label><div class="notice">测试将使用已应用的凭据与服务等级发送一次真实请求，可能产生 Google Cloud 费用。</div><label class="consent"><input id="probe-consent" type="checkbox">我同意发送这一次真实测试请求</label><div class="actions"><button id="probe-button" class="btn primary" disabled>发送测试</button><button id="probe-cancel" class="btn" hidden>取消请求</button></div><p id="probe-error" class="field-error" role="alert"></p></section><section class="panel"><div class="panel-head"><h2>响应结果</h2><span id="probe-status" class="badge">尚未测试</span></div><pre id="probe-output" class="response-output">测试完成后，在这里查看回复。</pre><dl id="probe-meta" class="details"></dl></section></div></section>
+        <footer class="page-footer"><span>VERTEX GATEWAY <span class="footer-dot">/</span> LOCAL FIRST</span><span>抗截断传输恢复已收到的正文，不保证模型输出完整。</span></footer>
+      </main>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

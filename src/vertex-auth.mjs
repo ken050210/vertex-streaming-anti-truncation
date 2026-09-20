@@ -20,6 +20,7 @@ export function parseServiceAccount(raw) {
   ) {
     throw new Error("vertex service account secret must contain type, client_email, private_key and an HTTPS token_uri");
   }
+  if (parsed.token_uri !== "https://oauth2.googleapis.com/token") throw new Error("Only Google's OAuth token endpoint is allowed");
   return parsed;
 }
 

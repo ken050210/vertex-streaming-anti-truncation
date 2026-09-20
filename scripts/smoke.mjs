@@ -1,15 +1,23 @@
 import assert from "node:assert/strict";
-import { MODEL_ID } from "../src/config.mjs";
+import { settingsFromEnv } from "../src/config.mjs";
+import { modelProfiles } from "../src/model-profiles.mjs";
+import { createSettingsStore } from "../src/settings-store.mjs";
 if (!process.argv.includes("--live")) throw new Error("Pass --live to authorize two 512-token provider requests");
-const key = process.env.GATEWAY_API_KEY;
+const settings = process.argv.includes("--env") ? await settingsFromEnv() : (await createSettingsStore().load()).settings;
+const requested = process.argv.includes("--model") ? process.argv[process.argv.indexOf("--model") + 1] : null;
+if (process.argv.includes("--model") && (!requested || requested.startsWith("--"))) throw new Error("--model requires a saved streaming alias");
+const models = modelProfiles(settings.models, settings.antiTruncation);
+const model = requested ? models.find(m => m.id === requested) : models.find(m => m.mode === "streaming");
+if (!model || model.mode !== "streaming") throw new Error("Select a saved streaming anti-truncation profile with --model <alias>");
+const key = settings.gatewayKey;
 if (!key) throw new Error("Missing GATEWAY_API_KEY");
-const base = `http://127.0.0.1:${Number(process.env.PORT || 4781)}`;
+const base = `http://127.0.0.1:${settings.port}`;
 const request = (url, body) => fetch(base + url, { ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
-  headers: { authorization: "Bearer " + key, "content-type": "application/json" }, signal: AbortSignal.timeout(180000) });
+  headers: { authorization: "Bearer " + key, "content-type": "application/json" }, signal: AbortSignal.timeout(settings.timeoutMs) });
 const results = [];
 for (const stream of [false, true]) {
   const started = performance.now();
-  const response = await request("/v1/chat/completions", { model: MODEL_ID, stream, max_tokens: 512,
+  const response = await request("/v1/chat/completions", { model: model.id, stream, max_tokens: 512,
     ...(stream ? { thinking: { type: "disabled" } } : {}), messages: [{ role: "user", content: stream
       ? "Write exactly 16 numbered lines. Each line should be: <number>. The river flows quietly. No introduction or conclusion."
       : "Reply with exactly OK." }] });

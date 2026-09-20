@@ -23,7 +23,7 @@ for (const file of files) {
       /[A-Z]:[\\/]Users[\\/][A-Za-z0-9_-]+[\\/]/i.test(text)) {
     throw new Error("Potential credential/private path in " + path.relative(root, file));
   }
-  if (file.endsWith(".mjs")) {
+  if (/\.(mjs|js)$/.test(file)) {
     const result = spawnSync(process.execPath, ["--check", file], { encoding: "utf8" });
     if (result.status) throw new Error("Syntax check failed: " + path.relative(root, file));
   }

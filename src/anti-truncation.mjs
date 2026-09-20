@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { supportsNativeTextStream } from "./vertex-text-stream.mjs";
 
 const auditTransports = new Set(["disabled", "existing-tools", "tool-choice", "structured-output", "multiple-candidates",
-    "tool-history", "tool-transport", "tool-transport-buffered-fields", "tool-transport-native-streaming"]);
+    "tool-history", "tool-transport", "tool-transport-buffered", "tool-transport-buffered-fields", "tool-transport-native-streaming"]);
 const auditFinishReasons = new Set(["stop", "length", "content_filter", "tool_calls", "function_call"]);
 
 // Only fixed status metadata may reach logs/admin events. Unknown is distinct
@@ -352,6 +352,7 @@ export function wrapAntiTruncationStream(response, toolName, onMetadata = () => 
         let parsed;
         try { parsed = JSON.parse(data); }
         catch { throw failure("anti_truncation_invalid_sse_json"); }
+        if (parsed.usage?.traffic_type) onMetadata({ trafficType: parsed.usage.traffic_type });
         if (parsed.error || lines.some(line => /^event:\s*error\s*$/.test(line))) processor.failed = true;
         const result = processor.failed ? parsed : processor.process(parsed);
         if (!processor.failed) {
