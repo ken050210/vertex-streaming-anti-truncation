@@ -42,7 +42,7 @@ npm start
 
 打开终端显示的本地控制台链接，默认地址为 `http://127.0.0.1:4780/`。首次启动会显示带设置密钥的链接；打开它即可进入设置。Windows 也可以双击 `Start-GUI.cmd`，无需预先创建 `.env`。
 
-控制台参考本地 LLM 订阅路由器的灰绿/青绿色界面，支持深浅主题和窄屏布局：
+控制台支持深浅主题和窄屏布局：
 
 - **连接配置**：填写项目 ID，粘贴或导入完整服务账号 JSON；也可切换到 Express API Key 或短期 OAuth Token。服务账号 JSON 中的项目 ID 可自动填入，也可覆盖为另一个有权限访问的目标项目。
 - **服务等级**：显式选择 Standard、Flex 或 Priority。Express、Flex 和 Priority 使用 `global`。Express 的项目 ID 可选填，仅作备注，其请求端点不包含项目和地区。
