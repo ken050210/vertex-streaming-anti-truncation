@@ -1,0 +1,61 @@
+import assert from "node:assert/strict";
+import { MODEL_ID } from "../src/config.mjs";
+if (!process.argv.includes("--live")) throw new Error("Pass --live to authorize two 512-token provider requests");
+const key = process.env.GATEWAY_API_KEY;
+if (!key) throw new Error("Missing GATEWAY_API_KEY");
+const base = `http://127.0.0.1:${Number(process.env.PORT || 4781)}`;
+const request = (url, body) => fetch(base + url, { ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
+  headers: { authorization: "Bearer " + key, "content-type": "application/json" }, signal: AbortSignal.timeout(180000) });
+const results = [];
+for (const stream of [false, true]) {
+  const started = performance.now();
+  const response = await request("/v1/chat/completions", { model: MODEL_ID, stream, max_tokens: 512,
+    ...(stream ? { thinking: { type: "disabled" } } : {}), messages: [{ role: "user", content: stream
+      ? "Write exactly 16 numbered lines. Each line should be: <number>. The river flows quietly. No introduction or conclusion."
+      : "Reply with exactly OK." }] });
+  assert.equal(response.status, 200, "Provider request failed; inspect the status-only gateway log");
+  const result = { requestId: response.headers.get("x-request-id"), stream, restored: false, finishReason: null };
+  if (!stream) {
+    const body = await response.json();
+    result.restored = body.router_anti_truncation?.restored === true;
+    result.finishReason = body.choices?.[0]?.finish_reason;
+    assert.ok(body.choices?.[0]?.message?.content?.length);
+  } else {
+    assert.equal(response.headers.get("x-anti-truncation-transport"), "tool-transport-native-streaming");
+    let buffer = "", reads = 0, lastRead = -1, contentReads = 0, contentEvents = 0, first = null, last = null, done = false;
+    const decoder = new TextDecoder();
+    for await (const bytes of response.body) {
+      reads++;
+      buffer += decoder.decode(bytes, { stream: true });
+      const lines = buffer.split(/\r?\n/); buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const raw = line.slice(5).trim();
+        if (raw === "[DONE]") { done = true; continue; }
+        const body = JSON.parse(raw);
+        assert.equal(Boolean(body.error), false);
+        result.restored ||= body.router_anti_truncation?.restored === true;
+        const choice = body.choices?.[0];
+        assert.ok(!choice?.delta?.tool_calls?.length);
+        if (choice?.delta?.content?.length) {
+          contentEvents++; first ??= performance.now() - started; last = performance.now() - started;
+          if (lastRead !== reads) { contentReads++; lastRead = reads; }
+        }
+        if (choice?.finish_reason != null) result.finishReason = choice.finish_reason;
+      }
+    }
+    assert.ok(done && contentReads >= 2 && last - first >= 100, "No progressive content arrival demonstrated");
+    Object.assign(result, { contentEvents, contentReads, firstContentMs: Math.round(first), contentSpanMs: Math.round(last - first), streamDone: done });
+  }
+  assert.equal(result.restored, true);
+  assert.equal(result.finishReason, "stop");
+  results.push(result);
+}
+const { events } = await (await request("/admin/events")).json();
+for (const result of results) {
+  const event = events.find(event => event.requestId === result.requestId);
+  assert.equal(event?.antiTruncation?.restored, true);
+  assert.equal(event.antiTruncation.finishReason, "stop");
+  if (result.stream) assert.equal(event.antiTruncation.streamDone, true);
+}
+console.log(JSON.stringify({ passed: true, maxTokensPerRequest: 512, results }, null, 2));

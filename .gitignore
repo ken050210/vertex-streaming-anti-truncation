@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+*.pid
+*.pem
+*.key
+service-account*.json
+credentials*.json
+runtime/
+coverage/
+dist/
+*.zip
+*.tgz
+.DS_Store
+Thumbs.db
