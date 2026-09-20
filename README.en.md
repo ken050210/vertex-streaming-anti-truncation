@@ -10,6 +10,35 @@ Experimental release with configurable Gemini models. The existing Gemini 3.7 Fl
 
 The synthetic text-tool transport design comes from [Antigravity-gateway](https://github.com/Xeltra233/Antigravity-gateway) by [Xeltra233](https://github.com/Xeltra233).
 
+## Console preview
+
+These screenshots use demo configuration and a simulated upstream, showing the Chinese-language console in light and dark themes. The ports shown are demo ports; the defaults are `4780` for the console and `4781` for the API.
+
+**Overview**: gateway status, client connection details, saved model profiles and recent requests.
+
+![Light overview with gateway status, client connection details and recent requests](docs/screenshots/console-overview.jpg)
+
+<details>
+<summary>Connection settings: project ID, service account / Express API key, Standard / Flex / Priority</summary>
+
+![Connection settings with project ID, complete service-account JSON, authentication modes and service tiers](docs/screenshots/console-connection.jpg)
+
+</details>
+
+<details>
+<summary>Model library: discover models and save normal, buffered and streaming anti-truncation profiles</summary>
+
+![Dark model library with a demo catalog and three profiles for each of two models](docs/screenshots/console-models.jpg)
+
+</details>
+
+<details>
+<summary>Connection test: streaming output, restoration status and arrival statistics</summary>
+
+![Dark connection test with a simulated streaming reply, restoration result and arrival statistics](docs/screenshots/console-streaming-test.jpg)
+
+</details>
+
 ## How streaming works
 
 The original project already parses SSE incrementally. If Vertex's OpenAI-compatible endpoint waits for complete tool arguments before returning them, the client still receives the reply all at once. For supported text requests, this gateway uses Vertex's native function-argument stream and forwards each decoded fragment as it arrives.

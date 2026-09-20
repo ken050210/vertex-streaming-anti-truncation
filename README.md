@@ -10,6 +10,35 @@
 
 合成工具传输方案参考 [Xeltra233](https://github.com/Xeltra233) 的 [Antigravity-gateway](https://github.com/Xeltra233/Antigravity-gateway)。
 
+## 控制台预览
+
+以下截图使用演示配置与模拟上游数据，展示浅色和深色主题。截图中的端口为演示端口；默认控制台端口为 `4780`，API 端口为 `4781`。
+
+**总览**：查看网关状态、客户端接入地址、模型版本与最近请求。
+
+![浅色总览：网关状态、客户端接入和请求记录](docs/screenshots/console-overview.jpg)
+
+<details>
+<summary>连接配置：项目 ID、服务账号 / Express API Key、Standard / Flex / Priority</summary>
+
+![连接配置：项目 ID、完整服务账号 JSON、鉴权方式和服务等级](docs/screenshots/console-connection.jpg)
+
+</details>
+
+<details>
+<summary>模型与版本：拉取目录，同一模型保存正常、非流式抗截断和流式抗截断版本</summary>
+
+![深色模型管理：示例模型目录及两个模型各自的三种版本](docs/screenshots/console-models.jpg)
+
+</details>
+
+<details>
+<summary>连接测试：流式正文、还原状态与正文到达统计</summary>
+
+![深色连接测试：模拟流式回复、正文还原结果和到达统计](docs/screenshots/console-streaming-test.jpg)
+
+</details>
+
 ## 流式输出如何工作
 
 原项目已经有 SSE 增量解析。如果 Vertex 的 OpenAI 兼容接口等到工具参数完整后才返回，客户端仍会一次性收到正文。本项目对可翻译的文本请求使用 Vertex 原生函数参数流，收到一段就还原并发送一段。
