@@ -85,7 +85,7 @@ async function gateway(t, authMode = "express", mock) {
     const native = !url.endsWith("/chat/completions");
     const stream = native ? url.includes(":streamGenerateContent") : body.stream;
     const name = native ? body.tools?.[0]?.functionDeclarations?.[0]?.name : body.tools?.[0]?.function?.name;
-    const text = "完整正文：你好 🌊";
+    const text = body.generationConfig?.responseMimeType === "application/json" ? '{"ok":true}' : "完整正文：你好 🌊";
     if (!stream) return Response.json(native ? {
       candidates: [{ index: 0, content: { role: "model", parts: [name ? { functionCall: { name, args: { content: text } } } : { text }] }, finishReason: "MAX_TOKENS" }],
       usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 7, totalTokenCount: 12, trafficType: "ON_DEMAND" },

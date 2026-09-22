@@ -24,6 +24,10 @@ function errorMessage(message) {
     "Requests are still running; wait before stopping the gateway": "仍有请求进行中，请等回复完成后再停止网关。",
     "Express, Flex and Priority require the global location": "Express、Flex 和 Priority 需要使用 global 地区。",
     "Too many attempts; try again in a minute": "尝试次数过多，请在一分钟后重试。",
+    "unsupported_native_schema": "Schema 含无法保留的约束，请检查错误中的参数路径。",
+    "schema_validation_failed": "模型输出没有符合所需 Schema，请检查输出约束或重试。",
+    "empty_completion": "模型没有返回正文或工具调用。",
+    "missing_finish_reason": "上游回复缺少结束原因。",
     "upstream_http_error": "上游拒绝了请求，请检查凭据、模型权限、额度及所选档位。",
     "unsupported_native_fields": "此请求含原生接口无法保留的字段，请改用标准服务账号模式或移除不支持的字段。",
     "Invalid upstream Gemini model ID": "请输入有效的 Gemini 上游模型 ID，例如 gemini-3.7-flash。",
@@ -193,6 +197,12 @@ function addModels(upstreams) {
   state.models = next; renderModels(); if (added) updateDraft();
   toast(`已添加 ${added} 个版本${skipped ? `，跳过 ${skipped} 个已有版本` : ""}。保存后生效。`);
 }
+function integrityBadge(result) {
+  if (!result) return "";
+  const names = { complete: "完整结束", length: "达到长度上限", content_filter: "内容受限 / 拒绝", tool_calls: "工具调用完成",
+    incomplete: "响应未完整结束", empty: "没有有效输出", error: "响应失败", cancelled: "客户端已取消" };
+  return '<small>' + esc(names[result.outcome] || "尚未确认") + (result.hasReasoning && !result.hasContent && !result.hasToolCalls ? " · 仅思考无正文" : "") + '</small>';
+}
 function eventTable(events) {
   if (!events.length) return '<div class="empty-state"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 4h18v24H7zM11 10h10M11 15h10M11 20h6"/></svg><strong>暂无请求记录</strong><p>向网关发送请求后，传输与还原状态会显示在这里。</p></div>';
   return '<div class="table-wrap"><table><thead><tr><th>时间 / 请求</th><th>模型版本</th><th>状态</th><th>传输</th><th>正文还原</th><th>请求 / 实际档位</th><th>耗时</th></tr></thead><tbody>' + events.map(e => {
@@ -200,7 +210,7 @@ function eventTable(events) {
     const recovered = a.restored === true ? "已还原" : a.restored === false ? "未还原 / 跳过" : "未确认";
     const transport = a.transport === "tool-transport-native-streaming" ? "原生参数流" : a.transport === "tool-transport-buffered" ? "完整还原" : e.stream ? "SSE 流式" : "普通响应";
     const success = e.status >= 200 && e.status < 300;
-    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small></td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code">${esc(e.code)}</small>` : ""}</td><td>${transport}<small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td><td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
+    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small></td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code">${esc(e.code)}</small>` : ""}${integrityBadge(e.responseIntegrity)}</td><td>${transport}<small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td><td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
   }).join("") + "</tbody></table></div>";
 }
 function renderEvents() {

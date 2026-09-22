@@ -141,13 +141,21 @@ npm run gateway
 
 流式抗截断版本的纯文本流式请求优先使用原生函数参数分段。Standard 服务账号/OAuth 模式的非流式请求使用 Vertex OpenAI 兼容接口；无法翻译的扩展字段、媒体或额外消息元数据保留原参数并回退到兼容接口，此时可能仍需等待全文。响应头 `x-anti-truncation-transport` 会显示 `tool-transport-buffered-fields`。
 
-Express、Flex 和 Priority 的普通/流式请求均走原生接口。支持文本、内嵌 base64 图片、函数工具与工具历史、JSON/Schema、候选数量及常用采样/思考参数。不支持远程图片 URL、旧式 `functions`、`parallel_tool_calls`、严格 Schema、logprobs 或未知扩展字段，遇到无法保留的参数返回 `400 unsupported_native_fields`，不会静默丢弃或改走 Standard。已有工具或结构化输出仍会跳过抗截断包装，原生接口继续正常翻译请求。
+Express、Flex 和 Priority 的普通/流式请求均走原生接口。支持文本、内嵌 base64 图片、函数工具与工具历史、JSON/Schema、候选数量及常用采样/思考参数。不支持远程图片 URL、旧式 `functions`、`parallel_tool_calls`、logprobs 或未知扩展字段，遇到无法保留的参数返回 `400 unsupported_native_fields`，不会静默丢弃或改走 Standard。已有工具或结构化输出仍会跳过抗截断包装，原生接口继续正常翻译请求。
 
 已有 tools/functions、显式工具选择、工具历史、JSON/Schema 输出或多候选的请求会跳过包装，并继续遵循客户端的流式开关。真实工具、usage、思考元数据，以及 `length` / `content_filter` 等结束原因会保留。流中断会报错；网关不自动续写或重试。
 
 “抗截断”指通过工具参数传输并恢复已收到的文本。它不能恢复模型未生成或网络未收到的内容，也不能保证消除截断或绕过模型限制。
 
 网关不会自动升级、降级或重试所选服务等级。Flex/Priority 发送官方服务等级标头，实际使用的等级以响应 `usage.traffic_type` 及日志 `trafficType` 为准；缺失时显示“上游未报告”。模型、账户及 Express 对档位的实际支持须由真实请求验证。参见 [Express 端点](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview)、[Flex](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo) 和 [Priority](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo) 官方说明。独立包不含多账号调度或额度管理。
+
+## 响应与 Schema 校验
+
+所有模式均检查普通回复和 SSE 的有效输出、结束原因与 DONE。空回复、只思考却声称正常完成、错误事件、半截流和不完整工具参数会失败；长度上限、内容拦截与客户端取消分别记录。`responseIntegrity` 日志仅含固定状态，不含回复内容。
+
+原生结构化输出通过 `responseJsonSchema`、工具参数通过 `parametersJsonSchema` 保留约束；不会删除 `additionalProperties`，不会误删同名业务属性，也不会缩窄无 items 数组。支持范围内的 `strict: true` 输出在完成时接受本地 Schema 校验。`oneOf`（上游语义与 JSON Schema 不同）、`pattern` 等不支持的约束在鉴权/推理前返回 `400 unsupported_native_schema` 和参数路径。
+
+普通文字持续流式传递；仅显式结构化 JSON 与工具参数为校验使用有大小上限的临时缓冲。结构化流的最终校验失败会中断响应，不会自动补 JSON、续写或重试。Standard 兼容接口仍按原请求转发，其 Schema 约束由上游处理。
 
 ## 查看验收结果
 

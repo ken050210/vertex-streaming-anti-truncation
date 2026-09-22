@@ -1,3 +1,5 @@
+import { guardCompletionStream, inspectCompletion, integrityLogFields } from "./completion-integrity.mjs";
+import { assertStructuredOutput, structuredOutputExpectation } from "./vertex-schema.mjs";
 import http from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
@@ -43,10 +45,13 @@ async function readCompletion(response, limit, native = false, model) {
   let parsed;
   try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
   catch { throw new Problem(502, "invalid_upstream_json"); }
+  if (parsed?.error) throw new Problem(502, "upstream_error_object");
   if (native) parsed = translateNativeCompletion(parsed, model);
   if (!parsed || parsed.error || !Array.isArray(parsed.choices) || !parsed.choices.length) {
     throw new Problem(502, "invalid_upstream_completion");
   }
+  const inspected = inspectCompletion(parsed);
+  if (!inspected.valid) throw new Problem(502, inspected.reason);
   return parsed;
 }
 function validate(payload) {
@@ -74,7 +79,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     let pathname;
     try { pathname = new URL(request.url, "http://localhost").pathname; }
     catch { return send(response, 400, { error: { code: "invalid_path" } }); }
-    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.3.0" });
+    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.3.1" });
     if (!authorized(request, config.gatewayKey)) return send(response, 401, { error: { code: "unauthorized" } });
     if (request.method === "GET" && pathname === "/v1/models") return send(response, 200, {
       object: "list", data: models.map(model => ({ id: model.id, object: "model", owned_by: "vertex-streaming-anti-truncation" })),
@@ -90,7 +95,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     const onClose = () => { if (!response.writableEnded) client.abort(); };
     response.once("close", onClose);
     request.once("aborted", onClose);
-    let stream = false, audit = null, status = 500, code = null, route;
+    let stream = false, audit = null, integrity = null, status = 500, code = null, route;
     try {
       const payload = await readRequest(request, config.bodyLimitBytes);
       validate(payload);
@@ -106,12 +111,13 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       audit = { transport: transport.reason, restored: transport.toolName ? null : false,
         finishReason: null, streamDone: stream ? false : null };
       response.setHeader("x-anti-truncation-transport", transport.reason);
-      const credential = await config.accessToken();
       const url = native
         ? buildNativeUrl(config.baseUrl, route.upstreamModel, upstreamStream)
         : config.baseUrl + "/chat/completions";
       const body = transport.nativeStreaming ? buildNativeTextBody(transport.payload)
         : native ? nativeRequestBody(transport.payload) : { ...transport.payload, model: route.upstreamModel, stream: upstreamStream };
+      const expectation = native ? structuredOutputExpectation(payload) : null;
+      const credential = await config.accessToken();
       if (!upstreamStream) delete body.stream_options;
       const authentication = config.authMode === "express" ? { "x-goog-api-key": credential } : { authorization: "Bearer " + credential };
       let upstream = await fetchImpl(url, { method: "POST", redirect: "error", signal,
@@ -138,6 +144,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           upstream = aliasStream(upstream, route.id, metadata => Object.assign(audit, metadata));
           upstream = wrapAntiTruncationStream(upstream, transport.toolName, metadata => Object.assign(audit, metadata));
         }
+        upstream = guardCompletionStream(upstream, metadata => { integrity = metadata; }, expectation, config.bodyLimitBytes);
         if (!upstream.body) throw new Problem(502, "empty_upstream_stream");
         let received = false;
         for await (const bytes of upstream.body) {
@@ -158,13 +165,23 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         audit.trafficType = completion.usage?.traffic_type;
         if (transport.toolName) audit.restored = completion.router_anti_truncation.restored;
         audit.finishReason = completion.choices[0]?.finish_reason ?? null;
+        const inspected = inspectCompletion(completion);
+        integrity = inspected.integrity;
+        if (!inspected.valid) throw new Problem(502, inspected.reason);
+        for (const choice of completion.choices) {
+          if (choice.finish_reason === "stop" && !choice.message.refusal && !choice.message.tool_calls?.length) {
+            assertStructuredOutput(choice.message.content, expectation);
+          }
+        }
         send(response, status, completion);
       }
     } catch (error) {
-      status = client.signal.aborted ? 499 : deadline.aborted ? 504 : error instanceof Problem ? error.status : 502;
-      code = error instanceof Problem ? error.code : deadline.aborted ? "upstream_timeout" : client.signal.aborted ? "client_disconnected" : "upstream_protocol_error";
+      status = client.signal.aborted ? 499 : deadline.aborted ? 504 : (error instanceof Problem || error.status === 400) ? error.status : 502;
+      code = client.signal.aborted ? "client_disconnected" : deadline.aborted ? "upstream_timeout" :
+        (error instanceof Problem || error.protocolFailure || error.status === 400) ? error.code : "upstream_protocol_error";
+      integrity = { ...integrity, outcome: status === 499 ? "cancelled" : integrity?.outcome === "incomplete" ? "incomplete" : "error" };
       if (response.headersSent) response.destroy();
-      else send(response, status === 499 ? 502 : status, { error: { code, message: code, type: "gateway_error" } });
+      else send(response, status === 499 ? 502 : status, { error: { code, message: code, type: "gateway_error", requestId, ...(error.status === 400 && error.param ? { param: error.param } : {}) } });
     } finally {
       active--;
       response.off("close", onClose);
@@ -173,7 +190,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         model: route?.id || null, upstreamModel: route?.upstreamModel || null, mode: route?.mode || null, stream, status, latencyMs: Date.now() - started,
         serviceTier: config.serviceTier || "standard",
         trafficType: ["ON_DEMAND", "ON_DEMAND_FLEX", "ON_DEMAND_PRIORITY", "PROVISIONED_THROUGHPUT"].includes(audit?.trafficType) ? audit.trafficType : null,
-        ...antiTruncationLogFields(audit), ...(code ? { code } : {}) };
+        ...antiTruncationLogFields(audit), ...integrityLogFields(integrity), ...(code ? { code } : {}) };
       events.push(event);
       if (events.length > 200) events.shift();
       logger(event);

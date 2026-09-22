@@ -75,3 +75,34 @@ test("native JSON output and real tools bypass the wrapper; plain responses work
   assert.match(plainWire, /content/); assert.match(plainWire, /\[DONE\]/);
   assert.equal(plain.requests[0].body.tools, undefined);
 });
+
+test("strict native schemas preserve constraints, validate completed output and reject unsupported keywords before auth", async t => {
+  let output = '{"ok":true}', calls = 0, auth = 0;
+  const events = [];
+  const config = buildConfig({ ...DEFAULT_SETTINGS, authMode: "express", serviceTier: "standard",
+    gatewayKey: "synthetic-gateway-fixture-key", apiKey: "synthetic-express-key" });
+  config.accessToken = async () => { auth++; return "synthetic-express-key"; };
+  const server = createGatewayServer(config, { logger: row => events.push(row), fetchImpl: async (url, request) => {
+    calls++;
+    const body = JSON.parse(request.body);
+    assert.equal(body.generationConfig.responseJsonSchema.additionalProperties, false);
+    return Response.json({ candidates: [{ content: { parts: [{ text: output }] }, finishReason: "STOP" }] });
+  } });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
+  const post = schema => fetch("http://127.0.0.1:" + server.address().port + "/v1/chat/completions", { method: "POST",
+    headers: { authorization: "Bearer " + config.gatewayKey, "content-type": "application/json" },
+    body: JSON.stringify({ ...payload, response_format: { type: "json_schema", json_schema: { name: "fixture", strict: true, schema } } }) });
+  const invalid = await post({ type: "string", pattern: "x" });
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error.param, "/response_format/json_schema/schema/pattern");
+  assert.equal(calls, 0); assert.equal(auth, 0);
+  const schema = { type: "object", additionalProperties: false, required: ["ok"], properties: { ok: { type: "boolean" } } };
+  const good = await post(schema); assert.equal(good.status, 200); await good.text();
+  assert.equal(events.at(-1).responseIntegrity.outcome, "complete");
+  output = '{"ok":true,"extra":"private-schema-output"}';
+  const bad = await post(schema); assert.equal(bad.status, 502);
+  assert.equal((await bad.json()).error.code, "schema_validation_failed");
+  assert.equal(events.at(-1).responseIntegrity.outcome, "error");
+  assert.equal(JSON.stringify(events).includes("private-schema-output"), false);
+});

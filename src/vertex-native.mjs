@@ -1,3 +1,4 @@
+import { vertexJsonSchema } from "./vertex-schema.mjs";
 // Shared Vertex request/usage helpers. Native text streaming validates the
 // supported request fields before invoking these helpers.
 
@@ -27,22 +28,6 @@ export function buildNativeUrl(baseUrl, upstreamModel, stream) {
   const base = baseUrl.replace(/\/$/, "").replace(/\/endpoints\/openapi$/, "");
   const method = stream ? "streamGenerateContent?alt=sse" : "generateContent";
   return `${base}/publishers/google/models/${nativeModelId(upstreamModel)}:${method}`;
-}
-
-// Gemini's schema dialect rejects "items: missing field" on untyped arrays, while
-// {type:"null"} members and property-less objects are accepted as-is.
-const UNTYPED_ARRAY_ITEMS = { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }, { type: "object" }] };
-
-function stripUnsupportedSchemaKeys(schema) {
-  if (Array.isArray(schema)) return schema.map(stripUnsupportedSchemaKeys);
-  if (!schema || typeof schema !== "object") return schema;
-  const cleaned = {};
-  for (const [key, value] of Object.entries(schema)) {
-    if (key === "$schema" || key === "additionalProperties") continue;
-    cleaned[key] = stripUnsupportedSchemaKeys(value);
-  }
-  if (cleaned.type === "array" && cleaned.items === undefined) cleaned.items = structuredClone(UNTYPED_ARRAY_ITEMS);
-  return cleaned;
 }
 
 function contentParts(content) {
@@ -75,11 +60,12 @@ function functionResponsePart(message, callNames) {
 function assistantParts(message) {
   const parts = contentParts(message.content);
   for (const call of Array.isArray(message.tool_calls) ? message.tool_calls : []) {
-    let args = {};
+    let args;
     try {
-      args = JSON.parse(call.function?.arguments || "{}");
+      args = JSON.parse(call.function?.arguments);
+      if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error();
     } catch {
-      // Unparseable arguments degrade to an empty object rather than failing the turn.
+      throw Object.assign(new Error("invalid_tool_history"), { status: 400, code: "invalid_tool_history" });
     }
     const part = { functionCall: { name: call.function?.name || "tool", args } };
     if (typeof call.id === "string" && call.id.startsWith(SIGNATURE_ID_PREFIX)) {
@@ -148,9 +134,7 @@ export function buildNativeBody(payload) {
   } else if (responseFormat?.type === "json_schema") {
     generationConfig.responseMimeType = "application/json";
     const schema = responseFormat.json_schema?.schema ?? responseFormat.json_schema;
-    if (schema && typeof schema === "object") {
-      generationConfig.responseSchema = stripUnsupportedSchemaKeys(schema);
-    }
+    generationConfig.responseJsonSchema = vertexJsonSchema(schema);
   }
 
   const body = {
@@ -164,7 +148,7 @@ export function buildNativeBody(payload) {
     .map((tool) => ({
       name: tool.function.name,
       description: tool.function.description || "",
-      parameters: stripUnsupportedSchemaKeys(tool.function.parameters ?? { type: "object", properties: {} }),
+      parametersJsonSchema: vertexJsonSchema(tool.function.parameters ?? { type: "object", properties: {} }, "/tools/function/parameters"),
     }));
   if (declarations.length > 0) {
     body.tools = [{ functionDeclarations: declarations }];

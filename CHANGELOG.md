@@ -2,6 +2,13 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## 0.3.1 (experimental)
+
+- Validate ordinary, tool and restored completions, including every streaming candidate's finish reason and DONE. Empty replies, malformed tool arguments, upstream error events and interrupted streams fail without automatic replay; length limits and refusals remain visible.
+- Use native JSON Schema fields to preserve closed objects, property names, nullable values, local references and unconstrained arrays. Reject unsupported constraints locally with a parameter path, then validate completed native structured output without repairing it.
+- Add response-integrity metadata and console labels linked to request IDs. Logs still exclude prompts, replies, tool arguments and credentials.
+- Pass 53 local tests and three bounded live Gemini 3.8 requests: Standard normal, progressive anti-truncation, and Flex strict Schema. See [validation](docs/VALIDATION.en.md) for the scope and remaining limits.
+
 ## 0.3.0 (experimental)
 
 - Fetch and search Google's paginated Gemini publisher catalog using the selected credentials; explain access failures and support manual model IDs.
