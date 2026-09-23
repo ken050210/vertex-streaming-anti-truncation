@@ -13,8 +13,8 @@ const json = (res, status, body) => { res.writeHead(status, { "content-type": "a
 async function readJson(req) {
   if (!/^application\/json(?:;|$)/i.test(req.headers["content-type"] || "")) throw new SettingsError("JSON required", 415);
   const chunks = []; let size = 0;
-  for await (const chunk of req) { size += chunk.length; if (size <= 256 * 1024) chunks.push(chunk); }
-  if (size > 256 * 1024) throw new SettingsError("Configuration is too large", 413);
+  for await (const chunk of req) { size += chunk.length; if (size <= 2 * 1024 * 1024) chunks.push(chunk); }
+  if (size > 2 * 1024 * 1024) throw new SettingsError("Configuration is too large", 413);
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new SettingsError("Invalid JSON"); }
 }
 async function listen(server, port) {
@@ -40,8 +40,10 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
   function status() {
     return { running: Boolean(gateway?.listening), activeRequests: activeRequests(), error: runtimeError,
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), models: activeConfig?.models || [],
+      modelAvailability: gateway?.modelAvailability() || [],
       active: activeConfig ? { port: activeConfig.port, projectId: activeConfig.projectId, location: activeConfig.location, authMode: activeConfig.authMode,
-        serviceTier: activeConfig.serviceTier, antiTruncation: activeConfig.antiTruncation } : null,
+        serviceTier: activeConfig.serviceTier, antiTruncation: activeConfig.antiTruncation,
+        geminiPromptRetryEnabled: activeConfig.geminiPromptRetry.enabled } : null,
       requests: events.length, successes: events.filter(e => e.status >= 200 && e.status < 300).length,
       restored: events.filter(e => e.antiTruncation?.restored === true).length,
       lastTrafficType: events.find(e => e.trafficType)?.trafficType || null };

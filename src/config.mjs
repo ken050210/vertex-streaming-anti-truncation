@@ -2,11 +2,14 @@ import { readFile } from "node:fs/promises";
 import { createPrivateKey } from "node:crypto";
 import { parseServiceAccount, vertexAccessToken } from "./vertex-auth.mjs";
 import { modelProfiles, MODEL_ID, UPSTREAM_MODEL } from "./model-profiles.mjs";
+import { MAX_RETRY_TEXT_BYTES } from "./gemini-compat.mjs";
 
 export { MODEL_ID, UPSTREAM_MODEL };
 export const DEFAULT_SETTINGS = Object.freeze({
   projectId: "", location: "global", authMode: "service-account", serviceTier: "standard",
   port: 4781, timeoutMs: 600000, antiTruncation: true, models: null,
+  hideUnavailableModels: true, geminiPrefillToUser: true,
+  geminiPromptRetryEnabled: false, geminiPromptRetryText: "",
   gatewayKey: "", serviceAccountJson: "", apiKey: "", accessToken: "",
 });
 export const SECRET_FIELDS = ["gatewayKey", "serviceAccountJson", "apiKey", "accessToken"];
@@ -25,6 +28,16 @@ export async function settingsFromEnv(env = process.env) {
     try { serviceAccountJson = (await readFile(file, "utf8")).replace(/^\uFEFF/, ""); }
     catch { throw new Error("Unable to read the Google service-account file"); }
   }
+  let geminiPromptRetryText = "";
+  if (env.GEMINI_PROMPT_RETRY_TEXT_FILE) {
+    try { geminiPromptRetryText = (await readFile(env.GEMINI_PROMPT_RETRY_TEXT_FILE, "utf8")).replace(/^\uFEFF/, ""); }
+    catch { throw new Error("Unable to read the prompt retry text file"); }
+  }
+  const toggle = (name, fallback) => {
+    if (env[name] == null || env[name] === "") return fallback;
+    if (!["true", "false"].includes(env[name])) throw new Error("Invalid " + name);
+    return env[name] === "true";
+  };
   return {
     ...DEFAULT_SETTINGS, projectId: env.VERTEX_PROJECT_ID || "", location: env.VERTEX_LOCATION || "global",
     gatewayKey: env.GATEWAY_API_KEY || "", serviceAccountJson,
@@ -34,6 +47,9 @@ export async function settingsFromEnv(env = process.env) {
     port: integer(env.PORT, 4781, 1, 65535, "PORT"),
     timeoutMs: integer(env.UPSTREAM_TIMEOUT_MS, 600000, 1000, 1800000, "UPSTREAM_TIMEOUT_MS"),
     antiTruncation: env.ANTI_TRUNCATION !== "false",
+    hideUnavailableModels: toggle("HIDE_UNAVAILABLE_MODELS", true),
+    geminiPrefillToUser: toggle("GEMINI_PREFILL_TO_USER", true),
+    geminiPromptRetryEnabled: toggle("GEMINI_PROMPT_RETRY_ENABLED", false), geminiPromptRetryText,
   };
 }
 
@@ -78,9 +94,18 @@ export function buildConfig(settings) {
     throw new Error("Set GATEWAY_API_KEY to a random value of at least 16 characters");
   }
   if (typeof s.antiTruncation !== "boolean") throw new Error("Invalid anti-truncation setting");
+  for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiPromptRetryEnabled"]) {
+    if (typeof s[name] !== "boolean") throw new Error("Invalid compatibility toggle");
+  }
+  if (typeof s.geminiPromptRetryText !== "string" || Buffer.byteLength(s.geminiPromptRetryText) > MAX_RETRY_TEXT_BYTES) {
+    throw new Error("Prompt retry text must be at most 192000 UTF-8 bytes");
+  }
+  if (s.geminiPromptRetryEnabled && !s.geminiPromptRetryText.trim()) throw new Error("Enter custom text before enabling prompt retry");
   const models = modelProfiles(s.models, s.antiTruncation);
   return {
     ...buildConnectionConfig(s), gatewayKey: key, models,
+    hideUnavailableModels: s.hideUnavailableModels, geminiPrefillToUser: s.geminiPrefillToUser,
+    geminiPromptRetry: { enabled: s.geminiPromptRetryEnabled, text: s.geminiPromptRetryText },
     // Legacy fields remain available to CLI integrations; profiles own behavior.
     model: models[0]?.id || MODEL_ID, upstreamModel: models[0]?.upstreamModel || UPSTREAM_MODEL,
     antiTruncation: s.models == null ? s.antiTruncation : true,

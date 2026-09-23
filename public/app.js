@@ -34,6 +34,12 @@ function errorMessage(message) {
     "Invalid public model ID": "客户端模型名称限 160 字符，可用中文、字母、数字、点、短横线、下划线及 @；不能包含空格。",
     "Model IDs must be unique": "客户端模型名称重复，请给每个版本使用不同名称。",
     "Model list must contain at most 100 entries": "最多可保存 100 个模型版本。",
+    "Invalid model enabled setting": "模型的启用状态必须是开或关。",
+    "Invalid compatibility toggle": "兼容功能的开关必须是开或关。",
+    "Enter custom text before enabling prompt retry": "请先填写自定义文本，再开启提示词提交失败重试。",
+    "Prompt retry text must be at most 192000 UTF-8 bytes": "重试文本不能超过 192000 个 UTF-8 字节。",
+    "prompt_submission_failed": "上游仍未接受提示词（The prompt could not be submitted），请调整提示词后重试。",
+    "model_disabled": "该模型版本已停用，请先在模型与版本中启用并保存。",
     "Invalid model mode": "请选择有效的模型模式。",
     "Select a saved model before testing": "请先保存并选择一个模型版本。",
     "Model list authentication failed; check the selected credentials": "获取目录的鉴权失败，请检查当前所选凭据。",
@@ -84,7 +90,21 @@ function draft() {
     projectId: $("project-id").value.trim(), location: $("location").value.trim(),
     gatewayKey: $("gateway-key").value.trim(), serviceAccountJson: $("service-account").value.trim(),
     apiKey: $("api-key").value.trim(), accessToken: $("access-token").value.trim(),
-    port: Number($("port").value), timeoutMs: Number($("timeout").value) * 1000, antiTruncation: true, models: state.models.map(m => ({ ...m })) };
+    port: Number($("port").value), timeoutMs: Number($("timeout").value) * 1000, antiTruncation: true, models: state.models.map(m => ({ ...m })),
+    hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
+    geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value };
+}
+function updateRetryText() {
+  const text = $("prompt-retry-text").value, bytes = new TextEncoder().encode(text).length;
+  const chars = [...text], ascii = chars.filter(c => c.codePointAt(0) < 128).length;
+  const estimate = Math.ceil(ascii / 4 + (chars.length - ascii) * 1.5);
+  $("retry-text-count").textContent = chars.length.toLocaleString() + " 字符 · " + bytes.toLocaleString() + " / 192,000 UTF-8 字节 · 粗估 " + estimate.toLocaleString() + " tokens（非 Google 计数）";
+  const error = bytes > 192000 ? "文本超过 192000 字节，请缩短后保存。" :
+    $("prompt-retry-enabled").checked && !text.trim() ? "请填写自定义文本，或关闭重试。" : "";
+  $("retry-text-error").textContent = error;
+  $("prompt-retry-text").setCustomValidity(error);
+  $("prompt-retry-text").setAttribute("aria-invalid", String(Boolean(error)));
+  $("prompt-retry-enabled").disabled = !text.trim() && !$("prompt-retry-enabled").checked;
 }
 function updateDraft(dirty = true) {
   if (dirty) state.dirty = true;
@@ -108,6 +128,7 @@ function updateDraft(dirty = true) {
   $("models-count").textContent = state.models.length + " 个版本";
   $("discard-button").disabled = !state.dirty;
   $("models-discard").disabled = !state.dirty;
+  updateRetryText();
   updateSelection();
 }
 function fillConfig() {
@@ -115,6 +136,10 @@ function fillConfig() {
   for (const name of ["authMode", "serviceTier"]) document.querySelector(`[name="${name}"][value="${c[name]}"]`).checked = true;
   for (const [id, name] of [["project-id", "projectId"], ["location", "location"], ["port", "port"]]) $(id).value = c[name];
   $("timeout").value = c.timeoutMs / 1000;
+  $("hide-unavailable").checked = c.hideUnavailableModels !== false;
+  $("prefill-to-user").checked = c.geminiPrefillToUser !== false;
+  $("prompt-retry-enabled").checked = c.geminiPromptRetryEnabled === true;
+  $("prompt-retry-text").value = c.geminiPromptRetryText || "";
   state.models = c.models.map(m => ({ ...m })); renderModels();
   for (const [id, name] of [["gateway-key", "gatewayKey"], ["service-account", "serviceAccountJson"], ["api-key", "apiKey"], ["access-token", "accessToken"]]) {
     $(id).value = ""; $(id).placeholder = c[name + "Set"] ? "已保存 · 留空保留，输入则替换" : ({ gatewayKey: "至少 16 字符，或生成随机密钥", serviceAccountJson: "粘贴完整的服务账号 JSON，或导入文件", apiKey: "输入 Vertex Express API Key", accessToken: "输入短期 Google OAuth 令牌" })[name];
@@ -136,16 +161,20 @@ function renderStatus() {
   $("runtime-badge").className = "badge " + (s.running ? "go" : "hold");
   $("runtime-title").textContent = s.running ? "网关已就绪" : ready ? "网关已停止" : "连接你的 Vertex 项目";
   $("runtime-description").textContent = s.error ? errorMessage(s.error) : s.running ? "本地接口正在监听。上游凭据与模型可用性以实际请求结果为准。" : ready ? "配置已保存，启动后即可接收客户端请求。" : "填写凭据并保存，即可向本地网关发送请求。";
+  if (s.running && s.modelAvailability?.some(m => m.reason === "authentication_failed")) {
+    $("runtime-description").textContent = "上游返回 401，当前凭据无法调用模型。请在连接配置修正凭据并保存应用；临时错误不会隐藏模型。";
+  }
   $("start-button").hidden = s.running || !ready; $("stop-button").hidden = !s.running; $("stop-button").disabled = s.activeRequests > 0; $("setup-button").hidden = ready;
   $("endpoint").textContent = `http://127.0.0.1:${current?.port || c.port}/v1`;
   $("overview-auth").textContent = current ? authNames[current.authMode] : "未启动";
   $("overview-project").textContent = (current || c).authMode === "express" ? "Express · 由 API Key 确定" : (current || c).projectId || "—";
   $("overview-location").textContent = (current || c).location;
   const models = s.running ? s.models : c.models;
-  $("overview-anti").textContent = models.length + " 个独立版本";
+  const hidden = new Set((s.modelAvailability || []).filter(m => m.hidden).map(m => m.id));
+  $("overview-anti").textContent = models.length + " 个独立版本" + (s.running ? " · " + hidden.size + " 个已隐藏" : "");
   $("rail-models").textContent = models.length + " 个" + (s.running ? "已应用" : state.config.saved ? "已保存" : "默认") + "版本";
   for (const id of ["client-model", "probe-model"]) {
-    const select = $(id), rows = id === "probe-model" ? s.models : models;
+    const select = $(id), rows = (id === "probe-model" ? s.models.filter(m => m.enabled !== false) : models.filter(m => !hidden.has(m.id)));
     const options = rows.map(m => `<option value="${esc(m.id)}">${esc(m.id)} · ${modeNames[m.mode]}</option>`).join("") || '<option value="">尚无已应用的模型</option>';
     if (select.innerHTML !== options) { const value = select.value; select.innerHTML = options; if (rows.some(m => m.id === value)) select.value = value; }
   }
@@ -154,6 +183,11 @@ function renderStatus() {
 }
 function updateProbeModel() {
   const row = state.status?.models.find(m => m.id === $("probe-model").value);
+  const retry = state.status?.active?.geminiPromptRetryEnabled;
+  $("probe-cost-notice").textContent = retry
+    ? "重试功能已开启：此次测试最多发送 2 次上游请求，每次最多 512 个输出 tokens。重试会带上自定义文本，增加输入用量和费用。"
+    : "测试将使用已应用的凭据与服务等级发送一次真实请求，可能产生 Google Cloud 费用。";
+  $("probe-consent-label").textContent = retry ? "我同意此次真实测试及最多 1 次自动重试" : "我同意发送这一次真实测试请求";
   $("probe-model-help").textContent = row ? `${row.upstreamModel} · ${modeNames[row.mode]}` + (row.mode === "buffered" ? " · 完整回复到齐后交付正文。" : "") : "请先在模型与版本中保存配置。";
   $("probe-button").disabled = !row || !$("probe-consent").checked || Boolean(state.probe);
   $("probe-model").disabled = Boolean(state.probe);
@@ -164,7 +198,7 @@ function renderModels() {
     <label>客户端模型名称<input data-field="id" value="${esc(m.id)}" maxlength="160" spellcheck="false" aria-label="模型 ${i + 1} 的客户端名称"></label>
     <label>上游模型 ID<input data-field="upstreamModel" value="${esc(m.upstreamModel)}" maxlength="180" spellcheck="false" aria-label="模型 ${i + 1} 的上游 ID"></label>
     <label>传输模式<select data-field="mode" aria-label="模型 ${i + 1} 的传输模式">${Object.entries(modeNames).map(([v, label]) => `<option value="${v}"${v === m.mode ? " selected" : ""}>${label}</option>`).join("")}</select></label>
-    <button class="btn ghost remove-model" data-remove="${i}" aria-label="移除模型 ${i + 1}">移除</button></div>`).join("") : '<div class="empty-state"><strong>还没有模型版本</strong><p>从目录选择或手动添加。保存空列表后，客户端将没有可选模型。</p></div>';
+    <div class="model-actions"><label class="model-enabled"><input type="checkbox" data-field="enabled"${m.enabled !== false ? " checked" : ""} aria-label="启用模型 ${i + 1}">启用</label><button class="btn ghost remove-model" data-remove="${i}" aria-label="移除模型 ${i + 1}">移除</button></div></div>`).join("") : '<div class="empty-state"><strong>还没有模型版本</strong><p>从目录选择或手动添加。保存空列表后，客户端将没有可选模型。</p></div>';
 }
 function updateSelection() {
   $("add-selected").disabled = !state.selected.size;
@@ -203,6 +237,11 @@ function integrityBadge(result) {
     incomplete: "响应未完整结束", empty: "没有有效输出", error: "响应失败", cancelled: "客户端已取消" };
   return '<small>' + esc(names[result.outcome] || "尚未确认") + (result.hasReasoning && !result.hasContent && !result.hasToolCalls ? " · 仅思考无正文" : "") + '</small>';
 }
+function compatibilityBadge(result) {
+  if (!result) return "";
+  return (result.prefillConverted ? "<small>预填充已转 USER</small>" : "") +
+    (result.promptRetried ? "<small>已插入自定义文本重试 1 次</small>" : "");
+}
 function eventTable(events) {
   if (!events.length) return '<div class="empty-state"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 4h18v24H7zM11 10h10M11 15h10M11 20h6"/></svg><strong>暂无请求记录</strong><p>向网关发送请求后，传输与还原状态会显示在这里。</p></div>';
   return '<div class="table-wrap"><table><thead><tr><th>时间 / 请求</th><th>模型版本</th><th>状态</th><th>传输</th><th>正文还原</th><th>请求 / 实际档位</th><th>耗时</th></tr></thead><tbody>' + events.map(e => {
@@ -210,7 +249,7 @@ function eventTable(events) {
     const recovered = a.restored === true ? "已还原" : a.restored === false ? "未还原 / 跳过" : "未确认";
     const transport = a.transport === "tool-transport-native-streaming" ? "原生参数流" : a.transport === "tool-transport-buffered" ? "完整还原" : e.stream ? "SSE 流式" : "普通响应";
     const success = e.status >= 200 && e.status < 300;
-    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small></td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code">${esc(e.code)}</small>` : ""}${integrityBadge(e.responseIntegrity)}</td><td>${transport}<small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td><td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
+    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small></td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code">${esc(e.code)}</small>` : ""}${integrityBadge(e.responseIntegrity)}${compatibilityBadge(e.geminiCompatibility)}</td><td>${transport}<small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td><td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
   }).join("") + "</tbody></table></div>";
 }
 function renderEvents() {
@@ -266,13 +305,13 @@ $("manual-model").addEventListener("keydown", e => { if (e.key === "Enter") { e.
 $("model-rows").addEventListener("input", e => {
   const field = e.target.dataset.field, row = e.target.closest("[data-row]");
   if (!field || !row) return;
-  state.models[Number(row.dataset.row)][field] = e.target.value; updateDraft();
+  state.models[Number(row.dataset.row)][field] = field === "enabled" ? e.target.checked : e.target.value; updateDraft();
 });
 $("model-rows").addEventListener("click", e => {
   const button = e.target.closest("[data-remove]"); if (!button) return;
   const index = Number(button.dataset.remove), removed = state.models[index];
   state.models.splice(index, 1); renderModels(); updateDraft(); toast(`已从草稿移除 ${removed.id}，保存后生效。`);
-  $("model-rows").querySelectorAll("input")[Math.min(index, state.models.length - 1) * 2]?.focus();
+  $("model-rows").querySelectorAll('[data-field="id"]')[Math.min(index, state.models.length - 1)]?.focus();
 });
 $("client-model").addEventListener("change", () => { $("model-id").textContent = $("client-model").value; });
 $("probe-model").addEventListener("change", updateProbeModel);

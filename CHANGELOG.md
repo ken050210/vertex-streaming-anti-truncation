@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## 0.4.0 (experimental)
+
+- Add independently configurable model visibility, Gemini 3.7/3.8 Flash text-prefill conversion and one-time prompt submission recovery. Visibility and prefill conversion default on; recovery defaults off and requires custom text.
+- Preserve disabled profiles in the console while excluding them from client model lists. A known upstream 401 also hides the shared connection; transient failures remain visible.
+- Recover matching HTTP, HTTP-200 JSON and initial SSE errors before client output, using the same model, credentials and service tier. Insert user text after leading system/developer messages; never retry after content starts or loop on a second rejection.
+- Add a persistent text editor, approximate token/UTF-8 counts, validation, request-log indicators and explicit test cost limits. Custom text and credentials are excluded from logs.
+- Pass 74 local tests plus isolated console save/reload, hidden-model, retry-log and responsive theme checks. No paid inference was performed for this update. See [validation](docs/VALIDATION.en.md).
+
 ## 0.3.1 (experimental)
 
 - Validate ordinary, tool and restored completions, including every streaming candidate's finish reason and DONE. Empty replies, malformed tool arguments, upstream error events and interrupted streams fail without automatic replay; length limits and refusals remain visible.

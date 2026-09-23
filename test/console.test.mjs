@@ -50,6 +50,22 @@ test("console protects credentials and mutations with local Host, origin, sessio
   assert.equal(f.requests.length, 0);
 });
 
+test("console persists compatibility toggles and maximum escaped retry text without inference or logging text", async t => {
+  const f = await fixture(t);
+  const text = "Fixture context\n" + "\u0001".repeat(191984);
+  assert.equal(Buffer.byteLength(text), 192000);
+  const response = await f.api("/api/config", { revision: "new", settings: { ...f.settings,
+    hideUnavailableModels: false, geminiPrefillToUser: false, geminiPromptRetryEnabled: true, geminiPromptRetryText: text } });
+  assert.equal(response.status, 200);
+  const saved = await response.json();
+  assert.equal(saved.settings.geminiPromptRetryText, text);
+  assert.equal(saved.status.active.geminiPromptRetryEnabled, true);
+  assert.equal((await f.store.load()).settings.geminiPromptRetryText, text);
+  assert.equal((await (await f.api("/api/config")).json()).settings.geminiPrefillToUser, false);
+  assert.deepEqual((await (await f.api("/api/events")).json()).events, []);
+  assert.equal(f.requests.length, 0);
+});
+
 test("save/apply preserves write-only secrets, enforces revision checks and survives controller restart", async t => {
   const f = await fixture(t);
   const response = await f.api("/api/config", { revision: "new", settings: { ...f.settings, serviceTier: "flex" } });

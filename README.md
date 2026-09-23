@@ -137,17 +137,37 @@ npm run gateway
 
 网关兼容 `thinking: {type: "disabled"}` 这个 Anthropic 格式字段，但会按 Vertex 兼容接口的原行为忽略它；它不会关闭 Gemini 思考。Gemini 思考设置使用 `extra_body.google.thinking_config`。
 
+### 角色扮演兼容设置
+
+在 **连接配置 → SillyTavern 兼容与重试** 中单独控制以下功能。旧配置升级后也使用这些默认值。
+
+| 功能 | 默认 | 行为 |
+| --- | --- | --- |
+| 隐藏无可用路由的模型 | 开启 | `/v1/models` 隐藏停用版本及已知鉴权失败的连接；临时错误不影响显示 |
+| Gemini 3.7 / 3.8 Flash 预填充转 USER | 开启 | 在抗截断包装前，把末尾纯文本 `assistant` 消息改为 `user`，原文不变 |
+| 提示词提交失败重试 | 关闭 | 先在 GUI 填入自定义文本，启用后仅对指定提交错误追加一次请求 |
+
+独立网关共用一套上游连接。模型页面的“启用”开关可以停用版本并保留名称和配置；停用版本即使因关闭隐藏而显示，也不能调用。上游返回 HTTP 401 后，该连接的版本会被隐藏。修正凭据后保存应用、重启，或下一次直接调用成功，会清除这项观察。HTTP 403/404/429、超时和 5xx 不用于隐藏模型，也不会主动发起推理探测。目录不能保证 Google 项目拥有某个模型的调用权限。
+
+Google 的 [Gemini 3.7 Flash](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-7-flash#mandatory-api-rules-and-behavioral-conventions) 和 [3.8 Flash](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-8-flash#mandatory-api-rules-and-behavioral-conventions) 文档要求对话不能以 `model` 结束，并要求移除预填充。转为 USER 是本项目保留原文的兼容措施，改变了消息角色，不保证模型按原预填充续写。只处理文本字符串或全为文本的内容数组；带工具调用、思考或其他额外元数据的末条消息保持原样。
+
+重试使用正则 `/\bThe prompt could not be submitted\b/i`：忽略大小写，内部空格必须相同，允许前后附带说明。匹配 `error.message` / 字符串 `error`；HTTP 非成功响应和 SSE `event: error` 也接受顶层 `message` 或纯文本错误。检查 HTTP 错误、200 错误对象及开头的 SSE 错误，初始检查上限 64 KiB；正常回答引用该句不触发，遇到正文、思考或工具输出等有效事件即停止检查。
+
+自定义文本建议自行准备约 7000 tokens；页面计数只是粗估，未调用 Google tokenizer。文本最多 192000 UTF-8 字节，按原样插入到开头连续的 `system` / `developer` 消息之后、其余对话之前，不补齐、不重复、不截断。每个客户端请求最多重试一次，保持同一模型、凭据和服务等级；请求取消、超出大小限制或输出已开始时不会重试。第二次仍失败就结束。此功能可能增加输入费用、上下文占用和等待时间，不保证提交成功。
+
+日志仅增加 `geminiCompatibility.prefillConverted` / `promptRetried` 两个布尔值，GUI 显示转换和重试标记；不记录自定义文本。响应头为 `x-gemini-prefill-converted` / `x-gemini-prompt-retried`。仅命令行模式使用 `HIDE_UNAVAILABLE_MODELS`、`GEMINI_PREFILL_TO_USER`、`GEMINI_PROMPT_RETRY_ENABLED`，以及指向仓库之外 UTF-8 文本文件的 `GEMINI_PROMPT_RETRY_TEXT_FILE`。
+
 ## 适用范围与限制
 
 流式抗截断版本的纯文本流式请求优先使用原生函数参数分段。Standard 服务账号/OAuth 模式的非流式请求使用 Vertex OpenAI 兼容接口；无法翻译的扩展字段、媒体或额外消息元数据保留原参数并回退到兼容接口，此时可能仍需等待全文。响应头 `x-anti-truncation-transport` 会显示 `tool-transport-buffered-fields`。
 
 Express、Flex 和 Priority 的普通/流式请求均走原生接口。支持文本、内嵌 base64 图片、函数工具与工具历史、JSON/Schema、候选数量及常用采样/思考参数。不支持远程图片 URL、旧式 `functions`、`parallel_tool_calls`、logprobs 或未知扩展字段，遇到无法保留的参数返回 `400 unsupported_native_fields`，不会静默丢弃或改走 Standard。已有工具或结构化输出仍会跳过抗截断包装，原生接口继续正常翻译请求。
 
-已有 tools/functions、显式工具选择、工具历史、JSON/Schema 输出或多候选的请求会跳过包装，并继续遵循客户端的流式开关。真实工具、usage、思考元数据，以及 `length` / `content_filter` 等结束原因会保留。流中断会报错；网关不自动续写或重试。
+已有 tools/functions、显式工具选择、工具历史、JSON/Schema 输出或多候选的请求会跳过包装，并继续遵循客户端的流式开关。真实工具、usage、思考元数据，以及 `length` / `content_filter` 等结束原因会保留。流中断会报错；网关不自动续写或重试已经开始输出的回复。
 
 “抗截断”指通过工具参数传输并恢复已收到的文本。它不能恢复模型未生成或网络未收到的内容，也不能保证消除截断或绕过模型限制。
 
-网关不会自动升级、降级或重试所选服务等级。Flex/Priority 发送官方服务等级标头，实际使用的等级以响应 `usage.traffic_type` 及日志 `trafficType` 为准；缺失时显示“上游未报告”。模型、账户及 Express 对档位的实际支持须由真实请求验证。参见 [Express 端点](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview)、[Flex](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo) 和 [Priority](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo) 官方说明。独立包不含多账号调度或额度管理。
+网关不会自动升级、降级或切换所选服务等级。Flex/Priority 发送官方服务等级标头，实际使用的等级以响应 `usage.traffic_type` 及日志 `trafficType` 为准；缺失时显示“上游未报告”。模型、账户及 Express 对档位的实际支持须由真实请求验证。参见 [Express 端点](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview)、[Flex](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo) 和 [Priority](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo) 官方说明。独立包不含多账号调度或额度管理。
 
 ## 响应与 Schema 校验
 
@@ -178,7 +198,7 @@ JSON 日志记录请求 ID、状态、耗时和 `antiTruncation` 元数据，不
 
 ```sh
 npm run verify
-# 可选：服务启动后，显式发送两条收费的短请求（各最多 512 tokens）
+# 可选：发送两条短请求，每次最多 512 输出 tokens；开启重试时最多 4 次上游提交
 npm run smoke -- --live
 ```
 

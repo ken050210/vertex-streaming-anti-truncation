@@ -9,6 +9,7 @@ import { buildNativeTextBody, wrapNativeTextStream } from "./vertex-text-stream.
 import { supportsNativeRequest, nativeRequestBody, translateNativeCompletion, wrapNativeStream } from "./vertex-protocol.mjs";
 import { modelProfiles } from "./model-profiles.mjs";
 import { completionStream, aliasStream } from "./completion-stream.mjs";
+import { convertGeminiPrefill, fetchWithGeminiRecovery, compatibilityLogFields } from "./gemini-compat.mjs";
 
 class Problem extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -67,10 +68,18 @@ function validate(payload) {
 // credentials or the upstream model. The CLI always uses Google's fixed endpoint.
 export function createGatewayServer(configSource, { fetchImpl = fetch, logger = () => {} } = {}) {
   const events = [];
+  // Reapplying settings or restarting starts a fresh availability observation.
+  // Temporary errors (including 403/404/429) never remove models from the list.
+  const rejectedCredentials = new WeakSet();
+  const currentConfig = () => typeof configSource === "function" ? configSource() : configSource;
+  const availability = config => (config.models || modelProfiles(null, config.antiTruncation !== false)).map(model => {
+    const reason = model.enabled === false ? "disabled" : rejectedCredentials.has(config) ? "authentication_failed" : null;
+    return { id: model.id, available: reason === null, reason, hidden: config.hideUnavailableModels !== false && reason !== null };
+  });
   let active = 0;
   const server = http.createServer(async (request, response) => {
     // Snapshot once: saved settings apply to new requests without changing streams in flight.
-    const config = typeof configSource === "function" ? configSource() : configSource;
+    const config = currentConfig();
     const models = config.models || modelProfiles(null, config.antiTruncation !== false);
     response.setHeader("cache-control", "no-store");
     response.setHeader("x-content-type-options", "nosniff");
@@ -79,10 +88,10 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     let pathname;
     try { pathname = new URL(request.url, "http://localhost").pathname; }
     catch { return send(response, 400, { error: { code: "invalid_path" } }); }
-    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.3.1" });
+    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.4.0" });
     if (!authorized(request, config.gatewayKey)) return send(response, 401, { error: { code: "unauthorized" } });
     if (request.method === "GET" && pathname === "/v1/models") return send(response, 200, {
-      object: "list", data: models.map(model => ({ id: model.id, object: "model", owned_by: "vertex-streaming-anti-truncation" })),
+      object: "list", data: availability(config).filter(model => !model.hidden).map(model => ({ id: model.id, object: "model", owned_by: "vertex-streaming-anti-truncation" })),
     });
     if (request.method === "GET" && pathname === "/admin/events") return send(response, 200, { events: events.slice().reverse() });
     if (request.method !== "POST" || pathname !== "/v1/chat/completions") return send(response, 404, { error: { code: "not_found" } });
@@ -96,12 +105,17 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     response.once("close", onClose);
     request.once("aborted", onClose);
     let stream = false, audit = null, integrity = null, status = 500, code = null, route;
+    const compatibility = { prefillConverted: false, promptRetried: false };
     try {
-      const payload = await readRequest(request, config.bodyLimitBytes);
+      let payload = await readRequest(request, config.bodyLimitBytes);
       validate(payload);
       route = models.find(model => model.id === payload.model);
       if (!route) throw new Problem(400, "unsupported_model");
+      if (route.enabled === false) throw new Problem(503, "model_disabled");
       stream = payload.stream === true;
+      const prefill = convertGeminiPrefill(payload, route.upstreamModel, config.geminiPrefillToUser !== false);
+      payload = prefill.payload; compatibility.prefillConverted = prefill.converted;
+      response.setHeader("x-gemini-prefill-converted", String(prefill.converted));
       const transport = prepareAntiTruncation(payload, route.mode !== "normal" && config.antiTruncation !== false, route.mode === "streaming");
       const buffered = route.mode === "buffered" && Boolean(transport.toolName);
       const upstreamStream = stream && !buffered;
@@ -114,20 +128,31 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       const url = native
         ? buildNativeUrl(config.baseUrl, route.upstreamModel, upstreamStream)
         : config.baseUrl + "/chat/completions";
-      const body = transport.nativeStreaming ? buildNativeTextBody(transport.payload)
-        : native ? nativeRequestBody(transport.payload) : { ...transport.payload, model: route.upstreamModel, stream: upstreamStream };
       const expectation = native ? structuredOutputExpectation(payload) : null;
+      const requestBody = value => {
+        const body = transport.nativeStreaming ? buildNativeTextBody(value)
+          : native ? nativeRequestBody(value) : { ...value, model: route.upstreamModel, stream: upstreamStream };
+        if (!upstreamStream) delete body.stream_options;
+        return body;
+      };
+      // Preserve local field/schema rejection before authentication.
+      const upstreamPayload = { ...transport.payload, stream: upstreamStream };
+      const firstBody = requestBody(upstreamPayload);
       const credential = await config.accessToken();
-      if (!upstreamStream) delete body.stream_options;
       const authentication = config.authMode === "express" ? { "x-goog-api-key": credential } : { authorization: "Bearer " + credential };
-      let upstream = await fetchImpl(url, { method: "POST", redirect: "error", signal,
+      let upstream = await fetchWithGeminiRecovery(value => fetchImpl(url, { method: "POST", redirect: "error", signal,
         headers: { ...authentication, ...config.tierHeaders, "content-type": "application/json", accept: upstreamStream ? "text/event-stream" : "application/json" },
-        body: JSON.stringify(body) });
+        body: JSON.stringify(value === upstreamPayload ? firstBody : requestBody(value)) }), upstreamPayload, route.upstreamModel, {
+        settings: config.geminiPromptRetry, signal, bodyLimit: config.bodyLimitBytes,
+        onRetry: () => { compatibility.promptRetried = true; },
+      });
+      response.setHeader("x-gemini-prompt-retried", String(compatibility.promptRetried));
       if (!upstream.ok) {
+        if (upstream.status === 401) rejectedCredentials.add(config);
         const retryAfter = upstream.headers.get("retry-after");
         if (retryAfter && /^\d{1,6}$/.test(retryAfter)) response.setHeader("retry-after", retryAfter);
         await upstream.body?.cancel();
-        throw new Problem(upstream.status, "upstream_http_error");
+        throw new Problem(upstream.status, upstream.routerPromptSubmissionError ? "prompt_submission_failed" : "upstream_http_error");
       }
       status = upstream.status;
       if (stream) {
@@ -175,6 +200,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         }
         send(response, status, completion);
       }
+      rejectedCredentials.delete(config);
     } catch (error) {
       status = client.signal.aborted ? 499 : deadline.aborted ? 504 : (error instanceof Problem || error.status === 400) ? error.status : 502;
       code = client.signal.aborted ? "client_disconnected" : deadline.aborted ? "upstream_timeout" :
@@ -190,7 +216,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         model: route?.id || null, upstreamModel: route?.upstreamModel || null, mode: route?.mode || null, stream, status, latencyMs: Date.now() - started,
         serviceTier: config.serviceTier || "standard",
         trafficType: ["ON_DEMAND", "ON_DEMAND_FLEX", "ON_DEMAND_PRIORITY", "PROVISIONED_THROUGHPUT"].includes(audit?.trafficType) ? audit.trafficType : null,
-        ...antiTruncationLogFields(audit), ...integrityLogFields(integrity), ...(code ? { code } : {}) };
+        ...antiTruncationLogFields(audit), ...integrityLogFields(integrity), ...compatibilityLogFields(compatibility), ...(code ? { code } : {}) };
       events.push(event);
       if (events.length > 200) events.shift();
       logger(event);
@@ -199,5 +225,6 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
   server.requestTimeout = 120000;
   server.headersTimeout = 10000;
   server.gatewayStats = () => ({ active });
+  server.modelAvailability = () => availability(currentConfig());
   return server;
 }

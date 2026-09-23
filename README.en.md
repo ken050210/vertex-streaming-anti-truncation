@@ -129,6 +129,26 @@ If your preset already uses a similar text-tool transport script, keep only one 
 
 The gateway accepts the Anthropic-style field `thinking: {type: "disabled"}` as a no-op, matching Vertex's compatible endpoint. It does not disable Gemini thinking. Use `extra_body.google.thinking_config` for Gemini thinking settings.
 
+### Roleplay compatibility settings
+
+Use **Connection → SillyTavern compatibility and retry** to control each feature. Existing settings receive the same defaults on upgrade.
+
+| Feature | Default | Behavior |
+| --- | --- | --- |
+| Hide models without an available route | On | Filter disabled profiles and known authentication failures from `/v1/models`; temporary errors remain visible |
+| Gemini 3.7 / 3.8 Flash prefill to USER | On | Change the last plain-text `assistant` message to `user` before wrapping, preserving its text |
+| Prompt submission retry | Off | Enter your own text first; eligible errors can add one submission |
+
+The standalone gateway shares one upstream connection. Disable a saved profile with its Enable checkbox without deleting it. Disabled profiles cannot be called, even when the visibility filter is off. An upstream HTTP 401 hides profiles on the rejected connection until settings are reapplied, the gateway restarts, or a direct request succeeds. HTTP 403/404/429, timeouts and 5xx do not hide profiles. Listing models never probes inference and does not establish Google project access.
+
+Google's [3.7 Flash](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-7-flash#mandatory-api-rules-and-behavioral-conventions) and [3.8 Flash](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-8-flash#mandatory-api-rules-and-behavioral-conventions) guides disallow histories ending in a `model` turn and require removing prefills. Converting the role to USER is this project's workaround to retain the text; it changes the message semantics and does not guarantee prefix continuation. Only nonempty plain text or text-only arrays are converted. Tool, reasoning and other extra message metadata remain untouched.
+
+Recovery matches `/\bThe prompt could not be submitted\b/i` in error information: case-insensitive, literal internal spaces, with optional surrounding text. It reads `error.message` or string `error`; failed HTTP responses and SSE `event: error` also accept a top-level `message` or plain text. HTTP errors, HTTP-200 error envelopes and initial SSE errors are inspected with a 64 KiB prefix limit. Quoted normal output does not match, and inspection stops on the first substantive text, reasoning, tool or other event.
+
+Supply around 7000 tokens of your own text. The GUI estimate is approximate, not Google's token count. Text is limited to 192000 UTF-8 bytes and inserted unchanged after leading `system` / `developer` messages, before the remaining conversation. It is not padded, repeated or truncated. Each client request can add at most one submission using the same model, credentials and tier. Cancellation, oversized requests and output already in progress prevent replay. A second failure ends the request. Added input can increase cost, context use and latency; successful submission is not guaranteed.
+
+Logs add only `geminiCompatibility.prefillConverted` / `promptRetried` booleans and the console displays these outcomes; custom text is never logged. Response headers are `x-gemini-prefill-converted` / `x-gemini-prompt-retried`. CLI settings use `HIDE_UNAVAILABLE_MODELS`, `GEMINI_PREFILL_TO_USER`, `GEMINI_PROMPT_RETRY_ENABLED` and `GEMINI_PROMPT_RETRY_TEXT_FILE` pointing to an external UTF-8 file.
+
 ## Scope and limits
 
 Streaming text requests use native function-argument streaming when their fields can be translated. In Standard service-account/OAuth mode, non-streaming requests use Vertex's OpenAI-compatible endpoint. Unsupported extension fields, media or extra message metadata retain their original values and fall back to that compatible endpoint, which may wait for the full reply. The response header `x-anti-truncation-transport` then reads `tool-transport-buffered-fields`.
@@ -139,7 +159,7 @@ Requests with existing tools/functions, explicit tool selection, tool history, J
 
 “Anti-truncation” describes transporting and restoring text that has been received. It cannot recover text the model never generated or the network never delivered, guarantee complete replies, or bypass model limits.
 
-Tiers are selected explicitly and never automatically upgraded, downgraded or retried. Flex/Priority send Google's tier headers. The requested tier and actual `usage.traffic_type` are logged separately; missing upstream tier metadata remains unknown. Model/account availability, including Express tier support, requires real upstream verification. See the official [Express endpoint](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview), [Flex](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo) and [Priority](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo) documentation. This package has no multi-account scheduler or quota manager.
+Tiers are selected explicitly and never automatically upgraded, downgraded or switched. Flex/Priority send Google's tier headers. The requested tier and actual `usage.traffic_type` are logged separately; missing upstream tier metadata remains unknown. Model/account availability, including Express tier support, requires real upstream verification. See the official [Express endpoint](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview), [Flex](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo) and [Priority](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo) documentation. This package has no multi-account scheduler or quota manager.
 
 ## Response and Schema validation
 
@@ -172,7 +192,7 @@ A wrapped stream that finishes normally should have a successful request status 
 
 ```sh
 npm run verify
-# Optional: with the server running, send two billable requests capped at 512 tokens each.
+# Optional: two billable client requests, up to four submissions if recovery is on; 512 output tokens each.
 npm run smoke -- --live
 ```
 

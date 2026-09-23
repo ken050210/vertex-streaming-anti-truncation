@@ -6,6 +6,14 @@ Local fixtures, live standalone requests and historical router checks cover diff
 
 ## Standalone package
 
+### 0.4.0 roleplay compatibility (2026-09-23)
+
+`npm run verify` passed syntax/credential/private-path checks for 55 release files and all 74 local tests. Added coverage includes disabled profiles and upstream-401 visibility, transient failures, configuration recovery, protected 3.7/3.8 Flash prefills, JSON/SSE recovery in all three modes over compatible/native protocols, HTTP-200 error objects, fragmented SSE errors, bounded retry/cancellation/body limits, progressive output without late replay, and console persistence of 192000-byte text with JSON escape expansion.
+
+An isolated real console with a mocked upstream verified sign-in, default toggles, a 27625-character save and page reload, disabled-profile hiding, successful recovery and its log indicator. Empty enabled-retry text displayed a validation error. Layout checks at 1280 and 390 pixels and in both themes showed no horizontal overflow; the browser reported no console errors. All credentials and replies were fixtures.
+
+No live Google inference was performed and no daily credentials or runtime configuration were changed. Mock recovery does not establish that long custom text solves real upstream rejection or that prefill conversion preserves roleplay continuation behavior. The 0.3.x live results below are historical.
+
 `npm run verify` runs syntax, credential and local-path checks, followed by local tests covering:
 
 - Split JSON, escapes, Unicode, byte boundaries and parser bounds.
@@ -13,7 +21,7 @@ Local fixtures, live standalone requests and historical router checks cover diff
 - HTTP authentication, model listing, field validation, Google host restrictions and request limits.
 - HTTP delivery of text before the simulated upstream is allowed to finish.
 - Field-preserving fallback and wrapper bypass for existing tools or structured output.
-- Client cancellation, interrupted streams, upstream errors, length endings and the absence of automatic retries.
+- Client cancellation, interrupted streams, upstream errors, length endings and no retries after output starts.
 - Request-ID correlation and logs that exclude replies, prompts, random tool names and credentials.
 - Console session, Host/Origin/CSRF boundaries, write-only credentials, revision conflicts, occupied ports, persistence and key rotation.
 - Projectless Express endpoints, full service accounts with explicit target projects, Flex/Priority headers, native regular/streaming responses and actual tier logs.
@@ -51,7 +59,7 @@ After following the README and starting the service, run:
 npm run smoke -- --live
 ```
 
-This sends two billable requests, each capped at 512 output tokens. It checks restoration for the normal reply, then checks nonempty text, `stop`, `[DONE]` and restoration for the stream. It also requires at least two content-bearing reads spanning at least 100 ms. Finally, it matches the response's `x-request-id` to `/admin/events`.
+This sends two client requests, each capped at 512 output tokens. With prompt recovery enabled, this can make up to four upstream submissions, and retries include the custom input text. It checks restoration for the normal reply, then checks nonempty text, `stop`, `[DONE]` and restoration for the stream. It also requires at least two content-bearing reads spanning at least 100 ms. Finally, it matches the response's `x-request-id` to `/admin/events`.
 
 The receipt contains metadata only. Read counts and timing depend on the model, network and buffering; one run cannot guarantee the same delivery pattern for every reply.
 

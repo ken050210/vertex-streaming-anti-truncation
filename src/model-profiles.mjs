@@ -16,11 +16,13 @@ export function modelProfiles(value, legacyEnabled = true) {
   if (!Array.isArray(value) || value.length > 100) throw new Error("Model list must contain at most 100 entries");
   const ids = new Set();
   return value.map(row => {
-    if (!row || typeof row !== "object" || Array.isArray(row) || Object.keys(row).some(k => !["id", "upstreamModel", "mode"].includes(k))) throw new Error("Invalid model profile");
+    if (!row || typeof row !== "object" || Array.isArray(row) || Object.keys(row).some(k => !["id", "upstreamModel", "mode", "enabled"].includes(k))) throw new Error("Invalid model profile");
+    if (row.enabled !== undefined && typeof row.enabled !== "boolean") throw new Error("Invalid model enabled setting");
     if (typeof row.id !== "string" || !/^[\p{L}\p{N}][\p{L}\p{N}._@-]{0,159}$/u.test(row.id)) throw new Error("Invalid public model ID");
     if (ids.has(row.id)) throw new Error("Model IDs must be unique");
     ids.add(row.id);
     if (!MODEL_MODES.includes(row.mode)) throw new Error("Invalid model mode");
-    return { id: row.id, upstreamModel: normalizeUpstreamModel(row.upstreamModel), mode: row.mode };
+    return { id: row.id, upstreamModel: normalizeUpstreamModel(row.upstreamModel), mode: row.mode,
+      ...(row.enabled !== undefined ? { enabled: row.enabled } : {}) };
   });
 }
