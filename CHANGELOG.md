@@ -2,6 +2,13 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## 0.4.1 (experimental)
+
+- Distinguish missing messages, invalid message types and unexpected streaming chunks from invalid candidate objects. Preserve the failing candidate's known finish reason without accepting malformed output.
+- Keep non-streaming and buffered validation metadata when errors reach the gateway handler. Empty replies retain their classification; client errors and console events expose the same fixed diagnostics without recording private content.
+- Verify that enabled prompt recovery preserves unmatched response bytes, including fragmented Unicode and bodies beyond the inspection limit. These errors do not trigger text insertion or extra submissions.
+- Pass 77 local tests and 56 release-file checks. This update fixes diagnostics; it cannot recover an upstream response that contains no message.
+
 ## 0.4.0 (experimental)
 
 - Add independently configurable model visibility, Gemini 3.7/3.8 Flash text-prefill conversion and one-time prompt submission recovery. Visibility and prefill conversion default on; recovery defaults off and requires custom text.

@@ -70,6 +70,33 @@ test("integrity logging projects only fixed enums and booleans", () => {
   assert.deepEqual(integrityLogFields(null), {});
 });
 
+test("invalid choices distinguish missing messages and stream chunks without losing the failing choice's finish reason", () => {
+  const cases = [
+    [null, "invalid_choice", null],
+    [{ finish_reason: "stop" }, "missing_message", "stop"],
+    [{ message: null, finish_reason: "content_filter" }, "missing_message", "content_filter"],
+    [{ message: [], finish_reason: "length" }, "invalid_message", "length"],
+    [{ message: "private reply", finish_reason: "stop" }, "invalid_message", "stop"],
+    [{ delta: { content: "private delta" }, finish_reason: "stop" }, "unexpected_stream_chunk", "stop"],
+    [{ finish_reason: "private unknown reason" }, "missing_message", null],
+    [{ message: { tool_calls: [{ function: { name: "private tool", arguments: "{" } }] }, finish_reason: "tool_calls" },
+      "invalid_tool_arguments", "tool_calls"],
+  ];
+  for (const [choice, reason, finishReason] of cases) {
+    const value = { choices: [{ message: { content: "private valid reply" }, finish_reason: "stop" }, choice] };
+    const before = structuredClone(value);
+    const result = inspectCompletion(value);
+    assert.equal(result.valid, false);
+    assert.equal(result.reason, reason);
+    const logged = integrityLogFields(result.integrity);
+    assert.equal(logged.responseIntegrity.outcome, "error");
+    assert.equal(logged.responseIntegrity.finishReason, finishReason);
+    assert.equal(logged.responseIntegrity.hasContent, false);
+    assert.equal(JSON.stringify(logged).includes("private"), false);
+    assert.deepEqual(value, before);
+  }
+});
+
 test("JSON Schema preserves business property names, closed objects and unconstrained arrays", () => {
   const schema = { $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", additionalProperties: false,
     properties: { additionalProperties: { type: "string" }, $schema: { type: "string", enum: ["additionalProperties"] },

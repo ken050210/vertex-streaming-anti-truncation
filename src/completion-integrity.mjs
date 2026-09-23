@@ -44,22 +44,28 @@ function choiceProblem(state) {
   return null;
 }
 export function inspectCompletion(completion) {
-  const invalid = reason => ({ valid: false, reason, integrity: { outcome: reason === "empty_completion" ? "empty" : "error" } });
+  // Malformed replies still carry useful terminal metadata. Keep only the failing
+  // choice's flags/reason; neither a previous choice nor repair may imply success.
+  const invalid = (reason, state) => ({ valid: false, reason, integrity: {
+    ...(state ? summary([state]) : {}), outcome: reason === "empty_completion" ? "empty" : "error",
+  } });
   if (!object(completion) || completion.error) return invalid("error_object");
   if (!Array.isArray(completion.choices) || !completion.choices.length) return invalid("missing_choices");
   const states = [];
   for (const choice of completion.choices) {
-    if (!object(choice) || !object(choice.message)) return invalid("invalid_choice");
-    const state = { ...flags(choice.message), finishReason: choice.finish_reason };
+    if (!object(choice)) return invalid("invalid_choice");
+    const state = { ...flags(object(choice.message) ? choice.message : null), finishReason: choice.finish_reason };
+    if (choice.message == null) return invalid(object(choice.delta) ? "unexpected_stream_chunk" : "missing_message", state);
+    if (!object(choice.message)) return invalid("invalid_message", state);
     const problem = choiceProblem(state);
-    if (problem) return { ...invalid(problem), integrity: { ...summary([state]), outcome: problem === "empty_completion" ? "empty" : "error" } };
+    if (problem) return invalid(problem, state);
     if (state.hasToolCalls) {
       const calls = choice.message.tool_calls ?? [{ function: choice.message.function_call }];
       if (!Array.isArray(calls) || calls.some(call => !object(call?.function) || typeof call.function.name !== "string" ||
-          !call.function.name || typeof call.function.arguments !== "string")) return invalid("invalid_tool_call");
+          !call.function.name || typeof call.function.arguments !== "string")) return invalid("invalid_tool_call", state);
       if (!["length", "content_filter"].includes(state.finishReason)) {
-        try { if (calls.some(call => !object(JSON.parse(call.function.arguments)))) return invalid("invalid_tool_arguments"); }
-        catch { return invalid("invalid_tool_arguments"); }
+        try { if (calls.some(call => !object(JSON.parse(call.function.arguments)))) return invalid("invalid_tool_arguments", state); }
+        catch { return invalid("invalid_tool_arguments", state); }
       }
     }
     states.push(state);

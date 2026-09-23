@@ -173,6 +173,8 @@ Express、Flex 和 Priority 的普通/流式请求均走原生接口。支持文
 
 所有模式均检查普通回复和 SSE 的有效输出、结束原因与 DONE。空回复、只思考却声称正常完成、错误事件、半截流和不完整工具参数会失败；长度上限、内容拦截与客户端取消分别记录。`responseIntegrity` 日志仅含固定状态，不含回复内容。
 
+非流式异常区分 `invalid_choice`（候选项不是对象）、`missing_message`（消息缺失或为空）、`invalid_message`（消息类型错误）和 `unexpected_stream_chunk`（收到仅含 delta 的流式片段）。校验失败时仍保留已知结束原因与空回复状态，客户端错误中的 `responseIntegrity`、日志和 GUI 使用同一份固定字段。缺失消息仍是失败，不补造正文，也不会因此触发自定义文本重试；旧日志缺失的信息无法追补。
+
 原生结构化输出通过 `responseJsonSchema`、工具参数通过 `parametersJsonSchema` 保留约束；不会删除 `additionalProperties`，不会误删同名业务属性，也不会缩窄无 items 数组。支持范围内的 `strict: true` 输出在完成时接受本地 Schema 校验。`oneOf`（上游语义与 JSON Schema 不同）、`pattern` 等不支持的约束在鉴权/推理前返回 `400 unsupported_native_schema` 和参数路径。
 
 普通文字持续流式传递；仅显式结构化 JSON 与工具参数为校验使用有大小上限的临时缓冲。结构化流的最终校验失败会中断响应，不会自动补 JSON、续写或重试。Standard 兼容接口仍按原请求转发，其 Schema 约束由上游处理。

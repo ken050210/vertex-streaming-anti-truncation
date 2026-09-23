@@ -39,6 +39,34 @@ async function fixture(t, upstream, override = {}) {
   return { events, requests, base, get, post };
 }
 
+test("failed nonstream and buffered replies preserve terminal diagnostics without retry or private content", async t => {
+  for (const [choice, reason, finishReason, outcome] of [
+    [{ finish_reason: "stop" }, "missing_message", "stop", "error"],
+    [{ message: null, finish_reason: "content_filter" }, "missing_message", "content_filter", "error"],
+    [{ message: [], finish_reason: "length" }, "invalid_message", "length", "error"],
+    [{ delta: { content: "private delta marker" }, finish_reason: "stop" }, "unexpected_stream_chunk", "stop", "error"],
+    [{ message: { content: "", reasoning_content: "private thought marker" }, finish_reason: "stop" }, "empty_completion", "stop", "empty"],
+  ]) for (const mode of ["normal", "buffered"]) {
+    const f = await fixture(t, () => Response.json({ choices: [choice] }), {
+      models: [{ id: MODEL_ID, upstreamModel: UPSTREAM_MODEL, mode, enabled: true }],
+      geminiPromptRetry: { enabled: true, text: "private retry prefix marker" },
+    });
+    const response = await f.post({ ...payload, stream: mode === "buffered" });
+    assert.equal(response.status, 502);
+    const error = (await response.json()).error;
+    assert.equal(error.code, reason);
+    assert.equal(error.responseIntegrity.finishReason, finishReason);
+    assert.equal(error.responseIntegrity.outcome, outcome);
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.events[0].responseIntegrity.finishReason, finishReason);
+    assert.equal(f.events[0].responseIntegrity.outcome, outcome);
+    assert.notEqual(f.events[0].antiTruncation.restored, true);
+    assert.equal(f.events[0].geminiCompatibility.promptRetried, false);
+    assert.equal(JSON.stringify(f.requests).includes("retry prefix"), false);
+    assert.equal(JSON.stringify(f.events).includes("private"), false);
+  }
+});
+
 async function waitFor(predicate) {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await delay(10); }
   assert.fail("Timed out waiting for local fixture");

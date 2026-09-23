@@ -6,6 +6,12 @@ Local fixtures, live standalone requests and historical router checks cover diff
 
 ## Standalone package
 
+### 0.4.1 completion diagnostics (2026-09-23)
+
+All 77 local tests pass, with syntax/credential/private-path checks for 56 release files. Regression fixtures failed before the fix and now cover missing/null/wrong-type messages, delta-only non-streaming replies, the failing choice in a multi-candidate response, malformed tool arguments and unknown finish-reason redaction. Normal and buffered gateway requests preserve failure metadata in both client errors and events. Empty/reasoning-only completions retain their empty outcome. No malformed response is accepted as successful, restored or eligible for custom-text recovery.
+
+An independent fixture confirms byte-for-byte preservation of unmatched compatible replies with recovery enabled, including fragmented Unicode, a valid answer quoting the trigger phrase and a response larger than 64 KiB. Each case makes one simulated upstream submission. No live Google inference was performed in this standalone checkout and no daily configuration or credentials were changed. Historical raw failure bodies were not retained; this update does not establish the exact upstream cause of an old `invalid_choice` event or recover absent output.
+
 ### 0.4.0 roleplay compatibility (2026-09-23)
 
 `npm run verify` passed syntax/credential/private-path checks for 55 release files and all 74 local tests. Added coverage includes disabled profiles and upstream-401 visibility, transient failures, configuration recovery, protected 3.7/3.8 Flash prefills, JSON/SSE recovery in all three modes over compatible/native protocols, HTTP-200 error objects, fragmented SSE errors, bounded retry/cancellation/body limits, progressive output without late replay, and console persistence of 192000-byte text with JSON escape expansion.

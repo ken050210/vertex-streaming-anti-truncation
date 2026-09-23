@@ -52,7 +52,7 @@ async function readCompletion(response, limit, native = false, model) {
     throw new Problem(502, "invalid_upstream_completion");
   }
   const inspected = inspectCompletion(parsed);
-  if (!inspected.valid) throw new Problem(502, inspected.reason);
+  if (!inspected.valid) throw Object.assign(new Problem(502, inspected.reason), { integrity: inspected.integrity });
   return parsed;
 }
 function validate(payload) {
@@ -88,7 +88,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     let pathname;
     try { pathname = new URL(request.url, "http://localhost").pathname; }
     catch { return send(response, 400, { error: { code: "invalid_path" } }); }
-    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.4.0" });
+    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.4.1" });
     if (!authorized(request, config.gatewayKey)) return send(response, 401, { error: { code: "unauthorized" } });
     if (request.method === "GET" && pathname === "/v1/models") return send(response, 200, {
       object: "list", data: availability(config).filter(model => !model.hidden).map(model => ({ id: model.id, object: "model", owned_by: "vertex-streaming-anti-truncation" })),
@@ -205,9 +205,12 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       status = client.signal.aborted ? 499 : deadline.aborted ? 504 : (error instanceof Problem || error.status === 400) ? error.status : 502;
       code = client.signal.aborted ? "client_disconnected" : deadline.aborted ? "upstream_timeout" :
         (error instanceof Problem || error.protocolFailure || error.status === 400) ? error.code : "upstream_protocol_error";
-      integrity = { ...integrity, outcome: status === 499 ? "cancelled" : integrity?.outcome === "incomplete" ? "incomplete" : "error" };
+      if (error instanceof Problem && error.integrity) integrity = error.integrity;
+      integrity = { ...integrity, outcome: status === 499 ? "cancelled" :
+        ["empty", "incomplete"].includes(integrity?.outcome) ? integrity.outcome : "error" };
       if (response.headersSent) response.destroy();
-      else send(response, status === 499 ? 502 : status, { error: { code, message: code, type: "gateway_error", requestId, ...(error.status === 400 && error.param ? { param: error.param } : {}) } });
+      else send(response, status === 499 ? 502 : status, { error: { code, message: code, type: "gateway_error", requestId,
+        ...integrityLogFields(integrity), ...(error.status === 400 && error.param ? { param: error.param } : {}) } });
     } finally {
       active--;
       response.off("close", onClose);

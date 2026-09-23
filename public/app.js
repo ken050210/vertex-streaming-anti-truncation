@@ -235,7 +235,10 @@ function integrityBadge(result) {
   if (!result) return "";
   const names = { complete: "完整结束", length: "达到长度上限", content_filter: "内容受限 / 拒绝", tool_calls: "工具调用完成",
     incomplete: "响应未完整结束", empty: "没有有效输出", error: "响应失败", cancelled: "客户端已取消" };
-  return '<small>' + esc(names[result.outcome] || "尚未确认") + (result.hasReasoning && !result.hasContent && !result.hasToolCalls ? " · 仅思考无正文" : "") + '</small>';
+  const endings = { stop: "自然停止", length: "达到长度上限", content_filter: "内容受限", tool_calls: "工具调用", function_call: "函数调用" };
+  const ending = !["complete", "tool_calls"].includes(result.outcome) && endings[result.finishReason];
+  return '<small>' + esc(names[result.outcome] || "尚未确认") + (result.hasReasoning && !result.hasContent && !result.hasToolCalls ? " · 仅思考无正文" : "") + '</small>' +
+    (ending ? '<small>上游结束：' + esc(ending) + '</small>' : '');
 }
 function compatibilityBadge(result) {
   if (!result) return "";
