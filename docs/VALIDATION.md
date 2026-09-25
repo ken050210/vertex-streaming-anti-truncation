@@ -6,6 +6,12 @@
 
 ## 独立发布包
 
+### 0.5.1 Priority 走兼容接口（2026-09-25）
+
+`npm run verify` 通过 57 个发布文件的语法/凭据/本机路径检查及 84 项本地测试。新增用例覆盖完整模式 Priority：非流式抗截断和普通模式流式都发往兼容接口 `/chat/completions` 并带两个 Priority 请求头，“流式”模式的逐步输出仍发往原生 `streamGenerateContent`，日志从 `usage.extra_properties.google.traffic_type` 读出实际档位。在临时副本中撤回档位读取改动，新用例会失败。
+
+另经隔离的本机网关实例以 Priority 档发送 2 次 Gemini 3.7 Flash 真实请求（上限 512 tokens），凭据只在内存中使用：非流式抗截断返回 200、stop，正文还原成功；普通模式流式返回 200、stop 与 DONE。两次日志实际档位均为 `ON_DEMAND_PRIORITY`，响应完整性均为 `complete`。Express 下的 Priority 未做真实请求。
+
 ### 0.5.0 重试规则、不支持参数与超时（2026-09-25）
 
 `npm run verify` 通过 57 个发布文件的语法/凭据/本机路径检查及 83 项本地测试。新增覆盖：JSON 与 SSE 中的拒答触发重试、自定义规则取代默认规则、原生 `promptFeedback` 匹配、规则校验与环境变量解析、兼容与原生两种请求路径按文档去掉字段，以及用本地服务验证超时设置生效（100 毫秒会超时，5 秒可以等到回复）。在临时副本中逐项撤回改动，对应的新测试都会失败。

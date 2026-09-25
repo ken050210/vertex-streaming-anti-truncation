@@ -86,7 +86,9 @@ export function buildConnectionConfig(settings) {
   return {
     accessToken, authMode: s.authMode, serviceTier: s.serviceTier,
     projectId: s.projectId, location: s.location, baseUrl, tierHeaders,
-    nativeOnly: s.authMode === "express" || s.serviceTier !== "standard",
+    // Priority works on the OpenAI-compatible endpoint (verified 2026-09-25, traffic type
+    // ON_DEMAND_PRIORITY); Flex and Express do not, so only they require native requests.
+    nativeOnly: s.authMode === "express" || s.serviceTier === "flex",
   };
 }
 

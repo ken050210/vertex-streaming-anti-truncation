@@ -2,6 +2,12 @@
 
 中文 | [English](CHANGELOG.md)
 
+## 0.5.1（实验版）
+
+- 完整模式（服务账号或访问令牌）下的 Priority 改走 OpenAI 兼容接口，与 Standard 一致，不再因原生接口不支持的字段返回 `unsupported_native_fields`；“流式”模式仍用原生逐步输出，Express 和 Flex 仍只走原生接口。
+- 从兼容接口报告档位的位置 `usage.extra_properties.google.traffic_type` 读取实际档位，Priority 日志显示 `ON_DEMAND_PRIORITY`，不再显示“上游未报告”。
+- 通过 84 项本地测试、57 个发布文件检查和 2 次有上限的真实 Priority 请求，详见[验收说明](docs/VALIDATION.md)。
+
 ## 0.5.0（实验版）
 
 - 提示词提交失败重试的触发规则可自定义：控制台每行一条，命令行用 `GEMINI_PROMPT_RETRY_MATCHES` 以 `|` 分隔。规则为不区分大小写的包含匹配，默认只有 “The prompt could not be submitted”。现在还会检查 OpenAI 兼容接口的拒答 `refusal`（Vertex 兼容接口的流式回复就把这类拦截放在这里）和原生接口的 `promptFeedback` 拦截原因；仍不检查模型生成的正文。

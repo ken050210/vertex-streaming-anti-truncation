@@ -105,7 +105,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     let pathname;
     try { pathname = new URL(request.url, "http://localhost").pathname; }
     catch { return send(response, 400, { error: { code: "invalid_path" } }); }
-    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.5.0" });
+    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.5.1" });
     if (!authorized(request, config.gatewayKey)) return send(response, 401, { error: { code: "unauthorized" } });
     if (request.method === "GET" && pathname === "/v1/models") return send(response, 200, {
       object: "list", data: availability(config).filter(model => !model.hidden).map(model => ({ id: model.id, object: "model", owned_by: "vertex-streaming-anti-truncation" })),
@@ -183,7 +183,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         if (buffered) {
           const completion = restoreAntiTruncationCompletion(await readCompletion(upstream, config.bodyLimitBytes, native, route.id), transport.toolName);
           completion.model = route.id;
-          audit.trafficType = completion.usage?.traffic_type;
+          audit.trafficType = completion.usage?.traffic_type ?? completion.usage?.extra_properties?.google?.traffic_type;
           audit.restored = completion.router_anti_truncation.restored;
           audit.finishReason = completion.choices[0]?.finish_reason ?? null;
           upstream = completionStream(completion, payload.stream_options?.include_usage === true);
@@ -211,7 +211,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       } else {
         const completion = restoreAntiTruncationCompletion(await readCompletion(upstream, config.bodyLimitBytes, native, route.id), transport.toolName);
         completion.model = route.id;
-        audit.trafficType = completion.usage?.traffic_type;
+        audit.trafficType = completion.usage?.traffic_type ?? completion.usage?.extra_properties?.google?.traffic_type;
         if (transport.toolName) audit.restored = completion.router_anti_truncation.restored;
         audit.finishReason = completion.choices[0]?.finish_reason ?? null;
         const inspected = inspectCompletion(completion);

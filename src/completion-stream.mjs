@@ -27,7 +27,8 @@ export function aliasStream(response, model, onMetadata = () => {}) {
     const parsed = JSON.parse(data);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || parsed.error || lines.some(l => /^event:\s*error\s*$/.test(l))) throw new Error("Invalid upstream stream event");
     if (parsed.model != null) parsed.model = model;
-    if (parsed.usage?.traffic_type) onMetadata({ trafficType: parsed.usage.traffic_type });
+    const trafficType = parsed.usage?.traffic_type ?? parsed.usage?.extra_properties?.google?.traffic_type;
+    if (trafficType) onMetadata({ trafficType });
     const finishReason = parsed.choices?.find(c => c.index === 0)?.finish_reason;
     if (finishReason != null) onMetadata({ finishReason });
     return lines.filter(l => l !== "data" && !l.startsWith("data:")).join("\n") + "\ndata: " + JSON.stringify(parsed) + "\n\n";

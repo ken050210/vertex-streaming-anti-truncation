@@ -6,6 +6,12 @@ Local fixtures, live standalone requests and historical router checks cover diff
 
 ## Standalone package
 
+### 0.5.1 Priority on the compatible endpoint (2026-09-25)
+
+`npm run verify` passes syntax/credential/private-path checks for 57 release files and 84 local tests. A new fixture covers full-mode Priority: nonstream anti-truncation and normal-mode streams reach the compatible `/chat/completions` endpoint with both Priority headers, "streaming" mode's progressive output still reaches native `streamGenerateContent`, and the log reads the actual tier from `usage.extra_properties.google.traffic_type`. Reverting the tier-reading change in a scratch copy made the new fixture fail.
+
+Two live Gemini 3.7 Flash requests (512-token cap) ran at the Priority tier through an isolated loopback gateway with credentials held only in memory. Nonstream anti-truncation returned 200 with stop and restored text; a normal-mode stream returned 200 with stop and DONE. Both logs recorded `ON_DEMAND_PRIORITY` with integrity outcome `complete`. Express Priority was not exercised live.
+
 ### 0.5.0 retry rules, unsupported parameters and timeout (2026-09-25)
 
 `npm run verify` passes syntax/credential/private-path checks for 57 release files and 83 local tests. New fixtures cover refusal rejections in JSON and SSE, custom rules replacing the default, native `promptFeedback` matching, rule validation and environment parsing, documented field removal on both the compatible and native request paths, and a local server showing the dispatcher's header timeout follows its setting (100 ms fails, 5 s succeeds). Reverting each change in a scratch copy made its new tests fail.

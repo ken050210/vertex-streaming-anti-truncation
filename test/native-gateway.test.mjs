@@ -6,11 +6,22 @@ import { buildConfig, DEFAULT_SETTINGS, MODEL_ID } from "../src/config.mjs";
 
 const payload = { model: MODEL_ID, messages: [{ role: "user", content: "fixture prompt" }], max_tokens: 512 };
 const sse = value => "data: " + JSON.stringify(value) + "\n\n";
+// Vertex's compatible endpoint reports the actual tier under usage.extra_properties.google.
+function compatResponse(body, trafficType, stream) {
+  const usage = { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20, extra_properties: { google: { traffic_type: trafficType } } };
+  if (stream) return new Response(sse({ choices: [{ index: 0, delta: { role: "assistant", content: "fixture answer" }, finish_reason: null }] })
+    + sse({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) + sse({ choices: [], usage }) + "data: [DONE]\n\n");
+  const name = body.tools?.[0]?.function?.name;
+  const message = name ? { role: "assistant", content: null, tool_calls: [{ id: "call_fixture", type: "function", function: { name, arguments: JSON.stringify({ content: "fixture answer" }) } }] }
+    : { role: "assistant", content: "fixture answer" };
+  return Response.json({ choices: [{ index: 0, message, finish_reason: name ? "tool_calls" : "stop" }], usage });
+}
 async function fixture(t, authMode, serviceTier, stream = false, options = {}) {
   const events = [], requests = [];
   const config = buildConfig({ ...DEFAULT_SETTINGS, authMode, serviceTier, projectId: "example-project", gatewayKey: "synthetic-gateway-fixture-key", accessToken: "synthetic-token", apiKey: "synthetic-express-key", ...options });
   const server = createGatewayServer(config, { logger: e => events.push(e), fetchImpl: async (url, request) => {
     const body = JSON.parse(request.body); requests.push({ url, headers: request.headers, body });
+    if (url.endsWith("/chat/completions")) return compatResponse(body, "ON_DEMAND_" + serviceTier.toUpperCase(), stream);
     const name = body.tools?.[0]?.functionDeclarations?.[0]?.name;
     const part = name ? { functionCall: { name, args: { content: "fixture answer" } } } : { text: '{"ok":true}' };
     const native = { candidates: [{ content: { parts: [part] }, finishReason: "STOP" }], usageMetadata: { totalTokenCount: 20, trafficType: "ON_DEMAND_" + serviceTier.toUpperCase() } };
@@ -24,8 +35,8 @@ async function fixture(t, authMode, serviceTier, stream = false, options = {}) {
   return { post, requests, events };
 }
 
-test("Express and full-mode tiers reach the correct native URLs with correct auth, preserving restoration and actual tier", async t => {
-  for (const authMode of ["express", "access-token"]) for (const tier of ["flex", "priority"]) for (const stream of [false, true]) {
+test("Express tiers and full-mode Flex reach the correct native URLs with correct auth, preserving restoration and actual tier", async t => {
+  for (const [authMode, tier] of [["express", "flex"], ["express", "priority"], ["access-token", "flex"]]) for (const stream of [false, true]) {
     const f = await fixture(t, authMode, tier, stream);
     const response = await f.post({}); assert.equal(response.status, 200);
     const body = await response.text(); assert.match(body, /fixture answer/);
@@ -47,6 +58,25 @@ test("Express and full-mode tiers reach the correct native URLs with correct aut
     assert.equal(f.events[0].serviceTier, tier);
     assert.equal(f.events[0].trafficType, "ON_DEMAND_" + tier.toUpperCase());
     for (const secret of ["fixture prompt", "fixture answer", "synthetic-token", "synthetic-express-key"]) assert.equal(JSON.stringify(f.events).includes(secret), false);
+  }
+});
+
+test("full-mode Priority uses the compatible endpoint and its reported tier; experimental streaming stays native", async t => {
+  for (const [mode, stream] of [["streaming", false], ["normal", true], ["streaming", true]]) {
+    const f = await fixture(t, "access-token", "priority", stream, { models: [{ id: MODEL_ID, upstreamModel: "gemini-3.7-flash", mode }] });
+    const response = await f.post({});
+    assert.equal(response.status, 200);
+    const body = await response.text(); assert.match(body, /fixture answer/);
+    const request = f.requests[0], nativeStream = mode === "streaming" && stream;
+    assert.match(request.url, nativeStream ? /\/locations\/global\/publishers\/google\/models\/gemini-3\.7-flash:streamGenerateContent/
+      : /\/locations\/global\/endpoints\/openapi\/chat\/completions$/);
+    if (!nativeStream) assert.equal(request.body.model, "google/gemini-3.7-flash");
+    assert.equal(request.headers["x-vertex-ai-llm-shared-request-type"], "priority");
+    assert.equal(request.headers["x-vertex-ai-llm-request-type"], "shared");
+    if (stream) assert.match(body, /\[DONE\]/);
+    else assert.equal(JSON.parse(body).router_anti_truncation.restored, true);
+    assert.equal(f.events[0].serviceTier, "priority");
+    assert.equal(f.events[0].trafficType, "ON_DEMAND_PRIORITY");
   }
 });
 

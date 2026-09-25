@@ -353,7 +353,8 @@ export function wrapAntiTruncationStream(response, toolName, onMetadata = () => 
         let parsed;
         try { parsed = JSON.parse(data); }
         catch { throw failure("anti_truncation_invalid_sse_json"); }
-        if (parsed.usage?.traffic_type) onMetadata({ trafficType: parsed.usage.traffic_type });
+        const trafficType = parsed.usage?.traffic_type ?? parsed.usage?.extra_properties?.google?.traffic_type;
+        if (trafficType) onMetadata({ trafficType });
         if (parsed.error || lines.some(line => /^event:\s*error\s*$/.test(line))) processor.failed = true;
         const result = processor.failed ? parsed : processor.process(parsed);
         if (!processor.failed) {

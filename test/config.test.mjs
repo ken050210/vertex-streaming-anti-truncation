@@ -74,7 +74,7 @@ test("complete service accounts accept explicit target projects and reject inval
   for (const serviceTier of ["standard", "flex", "priority"]) {
     const config = buildConfig({ ...settings, serviceTier });
     assert.match(config.baseUrl, /projects\/target-project\/locations\/global/);
-    assert.equal(config.nativeOnly, serviceTier !== "standard");
+    assert.equal(config.nativeOnly, serviceTier === "flex");
   }
   assert.throws(() => buildConfig({ ...settings, serviceAccountJson: JSON.stringify({ ...sa, private_key: "not-a-key" }) }), /RSA private key/);
   assert.throws(() => buildConfig({ ...settings, location: "us-central1", serviceTier: "flex" }), /global/);

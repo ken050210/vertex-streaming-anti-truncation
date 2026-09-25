@@ -2,6 +2,12 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## 0.5.1 (experimental)
+
+- Priority with a service account or access token now uses the OpenAI-compatible endpoint, like Standard. Requests there no longer fail with `unsupported_native_fields`; "streaming" mode still uses native progressive output, and Express and Flex remain native-only.
+- Read the actual tier from `usage.extra_properties.google.traffic_type`, where the compatible endpoint reports it, so Priority logs show `ON_DEMAND_PRIORITY` instead of an unknown tier.
+- Pass 84 local tests, 57 release-file checks and two bounded live Priority requests. See [validation](docs/VALIDATION.en.md).
+
 ## 0.5.0 (experimental)
 
 - Make prompt-submission retry rules configurable: one rule per line in the console, or `GEMINI_PROMPT_RETRY_MATCHES` separated by `|`. Rules are case-insensitive substrings; the default is only "The prompt could not be submitted". Matching now also reads OpenAI-compatible `refusal` fields, where Vertex's compatible stream reports this block, and native `promptFeedback` block reasons. Generated text is still never scanned.
