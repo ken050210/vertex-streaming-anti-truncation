@@ -247,3 +247,43 @@ test("new defaults migrate old settings, reject unsafe input and persist exact c
   assert.equal(config.geminiPromptRetry.text, exact); assert.equal(config.hideUnavailableModels, false);
   assert.equal(config.geminiPrefillToUser, false);
 });
+
+// Vertex's OpenAI-compatible surface reports its prompt block as a refusal, not an error envelope.
+const refusal = "The prompt could not be submitted. The prompt contains sensitive words that violate Google's policy.";
+for (const stream of [false, true]) test("Vertex refusal rejections use the single retry: " + (stream ? "SSE" : "JSON"), async t => {
+  const f = await fixture(t, (call, count) => count > 1 ? success(call) : stream
+    ? sse({ choices: [{ index: 0, delta: { role: "assistant", refusal } }] }, { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })
+    : Response.json({ choices: [{ index: 0, message: { role: "assistant", content: null, refusal }, finish_reason: "stop" }] }),
+  { geminiPromptRetryEnabled: true, geminiPromptRetryText: context });
+  const response = await f.post({ ...payload(), stream });
+  assert.equal(response.status, 200);
+  const text = await response.text();
+  assert.match(text, /Fixture answer/); assert.equal(text.includes("sensitive words"), false);
+  assert.equal(response.headers.get("x-gemini-prompt-retried"), "true");
+  assert.equal(f.calls.length, 2);
+});
+
+test("custom retry rules replace the default, ignore case and can match native prompt blocks", async t => {
+  const custom = { error: { code: 400, message: "Unable to submit request because it has Prohibited Content." } };
+  const rules = { geminiPromptRetryEnabled: true, geminiPromptRetryText: context, geminiPromptRetryMatches: ["  prohibited content "] };
+  const f = await fixture(t, (call, count) => count === 1 ? Response.json(custom, { status: 400 }) : success(call), rules);
+  const matched = await f.post(); assert.equal(matched.status, 200); await matched.text(); assert.equal(f.calls.length, 2);
+  const g = await fixture(t, () => Response.json(errorBody, { status: 400 }), rules);
+  const unmatched = await g.post(); assert.equal(unmatched.status, 400); await unmatched.text(); assert.equal(g.calls.length, 1);
+  const n = await fixture(t, (call, count) => count === 1 ? Response.json({ promptFeedback: { blockReason: "PROHIBITED_CONTENT" } }) : success(call),
+    { ...rules, authMode: "express", geminiPromptRetryMatches: ["PROHIBITED_CONTENT"] });
+  const blocked = await n.post(); assert.equal(blocked.status, 200); await blocked.text(); assert.equal(n.calls.length, 2);
+});
+
+test("prompt retry rules are validated, default to the single rule and load from the environment", async () => {
+  assert.equal(buildConfig(credentials).geminiPromptRetry.errorMatches, undefined);
+  assert.deepEqual(buildConfig({ ...credentials, geminiPromptRetryMatches: ["A", "b"] }).geminiPromptRetry.errorMatches, ["A", "b"]);
+  for (const bad of [[], ["  "], "text", [7], Array(33).fill("x"), ["x".repeat(501)]]) {
+    assert.throws(() => buildConfig({ ...credentials, geminiPromptRetryMatches: bad }), /error matches/);
+  }
+  assert.deepEqual(mergeSettings(credentials, { geminiPromptRetryMatches: ["x"] }).geminiPromptRetryMatches, ["x"]);
+  const env = { GATEWAY_API_KEY: credentials.gatewayKey, VERTEX_PROJECT_ID: "example-project", VERTEX_ACCESS_TOKEN: "synthetic-token" };
+  assert.equal((await loadConfig(env)).geminiPromptRetry.errorMatches, undefined);
+  const loaded = await loadConfig({ ...env, GEMINI_PROMPT_RETRY_MATCHES: "The prompt could not be submitted | PROHIBITED_CONTENT |" });
+  assert.deepEqual(loaded.geminiPromptRetry.errorMatches, ["The prompt could not be submitted", "PROHIBITED_CONTENT"]);
+});

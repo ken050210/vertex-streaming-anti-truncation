@@ -2,6 +2,14 @@
 
 中文 | [English](CHANGELOG.md)
 
+## 0.5.0（实验版）
+
+- 提示词提交失败重试的触发规则可自定义：控制台每行一条，命令行用 `GEMINI_PROMPT_RETRY_MATCHES` 以 `|` 分隔。规则为不区分大小写的包含匹配，默认只有 “The prompt could not be submitted”。现在还会检查 OpenAI 兼容接口的拒答 `refusal`（Vertex 兼容接口的流式回复就把这类拦截放在这里）和原生接口的 `promptFeedback` 拦截原因；仍不检查模型生成的正文。
+- 发送前去掉 Google 文档明确写明不支持的字段，例如 Gemini 3.7/3.8 Flash 的惩罚参数、候选数和采样参数，不再先失败一次。响应头 `x-gemini-dropped-params` 和日志 `droppedParams` 列出去掉的字段名。
+- `UPSTREAM_TIMEOUT_MS` 现在同时限制等待响应头和正文分段的时间。此前 Node 内置 fetch 无论设置多少，都在 300 秒时放弃。
+- 抗截断还原失败时报告具体错误码，不再显示笼统的协议错误。
+- 通过 83 项本地测试、57 个发布文件检查和 1 次有上限的真实流式请求，详见[验收说明](docs/VALIDATION.md)。
+
 ## 0.4.1（实验版）
 
 - 区分消息缺失、消息类型错误、意外流式片段与候选项类型错误；即使校验失败，也保留失败候选项已知的结束原因。

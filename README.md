@@ -145,17 +145,33 @@ npm run gateway
 | --- | --- | --- |
 | 隐藏无可用路由的模型 | 开启 | `/v1/models` 隐藏停用版本及已知鉴权失败的连接；临时错误不影响显示 |
 | Gemini 3.7 / 3.8 Flash 预填充转 USER | 开启 | 在抗截断包装前，把末尾纯文本 `assistant` 消息改为 `user`，原文不变 |
-| 提示词提交失败重试 | 关闭 | 先在 GUI 填入自定义文本，启用后仅对指定提交错误追加一次请求 |
+| 提示词提交失败重试 | 关闭 | 先在 GUI 填入自定义文本，启用后仅对匹配规则（默认一条）的提交错误追加一次请求 |
 
 独立网关共用一套上游连接。模型页面的“启用”开关可以停用版本并保留名称和配置；停用版本即使因关闭隐藏而显示，也不能调用。上游返回 HTTP 401 后，该连接的版本会被隐藏。修正凭据后保存应用、重启，或下一次直接调用成功，会清除这项观察。HTTP 403/404/429、超时和 5xx 不用于隐藏模型，也不会主动发起推理探测。目录不能保证 Google 项目拥有某个模型的调用权限。
 
 Google 的 [Gemini 3.7 Flash](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-7-flash#mandatory-api-rules-and-behavioral-conventions) 和 [3.8 Flash](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-8-flash#mandatory-api-rules-and-behavioral-conventions) 文档要求对话不能以 `model` 结束，并要求移除预填充。转为 USER 是本项目保留原文的兼容措施，改变了消息角色，不保证模型按原预填充续写。只处理文本字符串或全为文本的内容数组；带工具调用、思考或其他额外元数据的末条消息保持原样。
 
-重试使用正则 `/\bThe prompt could not be submitted\b/i`：忽略大小写，内部空格必须相同，允许前后附带说明。匹配 `error.message` / 字符串 `error`；HTTP 非成功响应和 SSE `event: error` 也接受顶层 `message` 或纯文本错误。检查 HTTP 错误、200 错误对象及开头的 SSE 错误，初始检查上限 64 KiB；正常回答引用该句不触发，遇到正文、思考或工具输出等有效事件即停止检查。
+触发重试的规则可在 GUI 的“触发重试的上游错误（每行一条）”中自定义，留空时只有默认一条 `The prompt could not be submitted`。每条规则是不区分大小写的普通文字，包含即命中；最多 32 条，每条最多 500 字符。只检查上游的拒绝信息：`error.message` / 字符串 `error`（HTTP 非成功响应和 SSE `event: error` 也接受顶层 `message` 或纯文本错误）、OpenAI 兼容接口的拒答 `refusal`（Vertex 兼容接口的流式回复会把“The prompt could not be submitted. The prompt contains sensitive words…”放在 `delta.refusal` 中），以及原生接口的提示词拦截 `promptFeedback.blockReason` / `blockReasonMessage`（Express、Flex、Priority 与原生流式走原生接口，需要时可加入 `PROHIBITED_CONTENT` 这类原因码）。检查 HTTP 错误、200 错误对象、拒答及开头的 SSE 错误，初始检查上限 64 KiB；正常回答引用该句不触发，遇到正文、思考或工具输出等有效事件即停止检查。
 
 自定义文本建议自行准备约 7000 tokens；页面计数只是粗估，未调用 Google tokenizer。文本最多 192000 UTF-8 字节，按原样插入到开头连续的 `system` / `developer` 消息之后、其余对话之前，不补齐、不重复、不截断。每个客户端请求最多重试一次，保持同一模型、凭据和服务等级；请求取消、超出大小限制或输出已开始时不会重试。第二次仍失败就结束。此功能可能增加输入费用、上下文占用和等待时间，不保证提交成功。
 
-日志仅增加 `geminiCompatibility.prefillConverted` / `promptRetried` 两个布尔值，GUI 显示转换和重试标记；不记录自定义文本。响应头为 `x-gemini-prefill-converted` / `x-gemini-prompt-retried`。仅命令行模式使用 `HIDE_UNAVAILABLE_MODELS`、`GEMINI_PREFILL_TO_USER`、`GEMINI_PROMPT_RETRY_ENABLED`，以及指向仓库之外 UTF-8 文本文件的 `GEMINI_PROMPT_RETRY_TEXT_FILE`。
+日志仅增加 `geminiCompatibility.prefillConverted` / `promptRetried` 两个布尔值，GUI 显示转换和重试标记；不记录自定义文本。响应头为 `x-gemini-prefill-converted` / `x-gemini-prompt-retried`。仅命令行模式使用 `HIDE_UNAVAILABLE_MODELS`、`GEMINI_PREFILL_TO_USER`、`GEMINI_PROMPT_RETRY_ENABLED`、指向仓库之外 UTF-8 文本文件的 `GEMINI_PROMPT_RETRY_TEXT_FILE`，以及用 `|` 分隔多条规则的 `GEMINI_PROMPT_RETRY_MATCHES`。
+
+### 模型不支持的参数与上游超时
+
+发往以下上游模型的请求，会在发送前去掉 Google 文档明确写明不支持的字段，不需要先失败一次。响应头 `x-gemini-dropped-params` 和日志 `droppedParams` 列出实际去掉的字段名，不记录取值。
+
+| 上游模型 | 去掉的字段 | 文档依据 |
+| --- | --- | --- |
+| gemini-3.8-flash、gemini-3.7-flash | frequency_penalty、presence_penalty、n（即 candidate_count）、temperature、top_p、top_k | [3.7](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-7-flash) / [3.8](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-8-flash) 开发指南：“Remove the following unsupported parameters: frequency_penalty, presence_penalty, candidate_count, temperature, top_p, and top_k.” |
+| gemini-3.6-flash、gemini-3.5-flash-lite | frequency_penalty、presence_penalty、temperature、top_p、top_k | 模型页：“Custom values for parameters like temperature, top-K, and top-P aren't supported.” 以及惩罚参数 “aren't supported” |
+| gemini-3.5-flash | frequency_penalty、presence_penalty、top_k | 开发指南：惩罚参数会导致 “runtime errors”；模型页：topK “64 (fixed)” |
+| gemini-3-flash-preview、gemini-3.1-pro-preview、gemini-3.1-flash-lite、gemini-2.5-pro | top_k | 模型页：topK “64 (fixed)” |
+| 任意模型 | 同时提供 `reasoning_effort` 与 `extra_body.google.thinking_config` 时去掉 `reasoning_effort` | [OpenAI 兼容概览](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/migrate/openai/overview)：“only one of reasoning_effort or extra_body.google.thinking_config may be specified” |
+
+依据为 2026-09-24 更新的官方页面（2026-09-25 核对）。模型 ID 带 `@版本` 时按基础模型处理；未列出的模型保持原样。模型页仍给出可用范围的 temperature/top_p（例如 3.5 Flash）不会去掉。
+
+`UPSTREAM_TIMEOUT_MS`（默认 600000 毫秒）现在同时限制等待上游响应头和正文分段的时间。此前 Node 内置 fetch 自带 300 秒上限，非流式长回复等满 300 秒就以 `Headers Timeout Error` 失败，与设置无关。
 
 ## 适用范围与限制
 

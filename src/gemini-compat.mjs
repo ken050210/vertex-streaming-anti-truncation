@@ -1,6 +1,7 @@
 import { createSseParser } from "./completion-integrity.mjs";
 
 export const MAX_RETRY_TEXT_BYTES = 192_000;
+export const DEFAULT_RETRY_ERROR_MATCHES = ["The prompt could not be submitted"];
 const INSPECTION_BYTES = 64 * 1024;
 const geminiModel = model => /(?:^|\/)gemini-[a-z0-9._-]+(?:@[a-z0-9-]+)?$/i.test(model || "");
 
@@ -31,12 +32,27 @@ export function compatibilityLogFields(value) {
   return { geminiCompatibility: { prefillConverted: value.prefillConverted === true, promptRetried: value.promptRetried === true } };
 }
 
-function submissionError(value, allowMessage = false) {
+// Only provider rejection fields are matched: error envelopes, OpenAI-compatible
+// refusals (Vertex streams its prompt block as delta.refusal) and native prompt
+// blocks. Generated content never is. Returns the error body and matched rule.
+function submissionError(value, matches, allowMessage = false) {
   const root = Array.isArray(value) ? value[0] : value;
   const error = root?.error ?? (allowMessage ? root : null);
-  const message = typeof error === "string" ? error : error?.message;
-  return typeof message === "string" && /\bThe prompt could not be submitted\b/i.test(message)
-    ? { error: typeof error === "string" ? { message: error } : error } : null;
+  const found = [[typeof error === "string" ? error : error?.message, typeof error === "string" ? { message: error } : error]];
+  for (const choice of Array.isArray(root?.choices) ? root.choices : []) {
+    const refusal = (choice?.delta ?? choice?.message)?.refusal;
+    found.push([refusal, { message: refusal }]);
+  }
+  const feedback = root?.promptFeedback;
+  if (feedback?.blockReason && !root.candidates?.length) {
+    const text = [feedback.blockReason, feedback.blockReasonMessage].filter(Boolean).join(": ");
+    found.push([text, { message: text }]);
+  }
+  for (const [text, body] of found) {
+    const rule = typeof text === "string" && matches.find(match => text.toLowerCase().includes(match.toLowerCase()));
+    if (rule) return { error: body, rule };
+  }
+  return null;
 }
 
 function replay(response, held, reader, ended) {
@@ -53,7 +69,7 @@ function replay(response, held, reader, ended) {
 
 // Inspect only a bounded initial prefix. Stop at the first real stream delta,
 // then replay exact bytes; never collect an entire story or scan generated text.
-async function inspectSubmissionError(response, stream) {
+async function inspectSubmissionError(response, stream, matches) {
   if (!response.body) return { response, failure: false };
   const sse = response.ok && stream && /text\/event-stream/i.test(response.headers.get("content-type") || "");
   const reader = response.body.getReader();
@@ -63,11 +79,11 @@ async function inspectSubmissionError(response, stream) {
     if (decided) return;
     let parsed;
     try { parsed = JSON.parse(data); } catch {
-      if (event === "error") failure = submissionError(data, true);
+      if (event === "error") failure = submissionError(data, matches, true);
       decided = Boolean(data || event === "error");
       return;
     }
-    failure = submissionError(parsed, event === "error");
+    failure = submissionError(parsed, matches, event === "error");
     if (failure) { decided = true; return; }
     // Only known empty/role-only OpenAI chunks and empty native metadata can wait.
     const roleOnly = Array.isArray(parsed?.choices) && parsed.choices.every(choice =>
@@ -88,20 +104,21 @@ async function inspectSubmissionError(response, stream) {
     }
     if (!sse && ended) {
       const text = Buffer.concat(held).toString("utf8");
-      try { failure = submissionError(JSON.parse(text), !response.ok); }
-      catch { if (!response.ok) failure = submissionError(text, true); }
+      try { failure = submissionError(JSON.parse(text), matches, !response.ok); }
+      catch { if (!response.ok) failure = submissionError(text, matches, true); }
     }
     if (failure && response.ok) {
       await reader.cancel();
-      // HTTP-200 JSON/SSE error envelopes are failures, never successful content.
-      const errorResponse = new Response(JSON.stringify(failure), {
+      // Matched HTTP-200 error envelopes, refusals and prompt blocks become errors,
+      // never successful content, so the client sees the rejection message.
+      const errorResponse = new Response(JSON.stringify({ error: failure.error }), {
         status: 400, headers: { "content-type": "application/json; charset=utf-8" },
       });
-      errorResponse.routerPromptSubmissionError = true;
+      errorResponse.routerPromptSubmissionError = failure.rule;
       return { response: errorResponse, failure: true };
     }
     const forwarded = replay(response, held, reader, ended);
-    if (failure) forwarded.routerPromptSubmissionError = true;
+    if (failure) forwarded.routerPromptSubmissionError = failure.rule;
     return { response: forwarded, failure: Boolean(failure) };
   } catch (error) {
     await reader.cancel().catch(() => {});
@@ -112,7 +129,8 @@ async function inspectSubmissionError(response, stream) {
 export async function fetchWithGeminiRecovery(send, payload, upstreamModel, options = {}) {
   const { settings, state = { used: false }, signal, onRetry = () => {}, bodyLimit = Infinity } = options;
   if (!settings?.enabled || !settings.text?.trim() || !geminiModel(upstreamModel)) return send(payload);
-  let result = await inspectSubmissionError(await send(payload), payload.stream === true);
+  const matches = (settings.errorMatches ?? DEFAULT_RETRY_ERROR_MATCHES).map(text => text.trim()).filter(Boolean);
+  let result = await inspectSubmissionError(await send(payload), payload.stream === true, matches);
   if (!result.failure || state.used || signal?.aborted) return result.response;
   const retryPayload = prependRetryText(payload, settings.text);
   if (Buffer.byteLength(JSON.stringify(retryPayload)) > bodyLimit) return result.response;
@@ -120,6 +138,6 @@ export async function fetchWithGeminiRecovery(send, payload, upstreamModel, opti
   signal?.throwIfAborted();
   state.used = true; // One extra submission for the entire client request, across routes.
   onRetry();
-  result = await inspectSubmissionError(await send(retryPayload), payload.stream === true);
+  result = await inspectSubmissionError(await send(retryPayload), payload.stream === true, matches);
   return result.response;
 }

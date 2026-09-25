@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
-import { createGatewayServer } from "../src/gateway.mjs";
+import http from "node:http";
+import { createGatewayServer, upstreamDispatcher } from "../src/gateway.mjs";
 import { loadConfig, MODEL_ID, UPSTREAM_MODEL } from "../src/config.mjs";
 
 const key = "synthetic-local-key-for-tests";
@@ -215,4 +216,35 @@ test("failure after downstream bytes interrupts the stream and cannot become a s
   assert.equal(f.events[0].status, 502);
   assert.equal(f.events[0].antiTruncation.restored, null);
   assert.equal(f.events[0].antiTruncation.streamDone, false);
+});
+
+test("fields Google documents as unsupported are removed before the first submission", async t => {
+  const tuned = { ...payload, temperature: 0.9, top_p: 0.95, top_k: 40, presence_penalty: 0.3, frequency_penalty: 0.2, n: 1, seed: 7 };
+  const dropped = ["temperature", "top_p", "top_k", "presence_penalty", "frequency_penalty", "n"];
+  for (const nativeOnly of [false, true]) {
+    const f = await fixture(t, request => request.json.contents
+      ? Response.json({ candidates: [{ index: 0, content: { role: "model", parts: [{ text: "OK" }] }, finishReason: "STOP" }] })
+      : Response.json({ choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] }),
+    { nativeOnly, models: [{ id: MODEL_ID, upstreamModel: UPSTREAM_MODEL, mode: "normal" }] });
+    const response = await f.post(tuned);
+    assert.equal(response.status, 200); await response.text();
+    assert.equal(f.requests.length, 1, "no rejected round trip is needed");
+    assert.equal(response.headers.get("x-gemini-dropped-params"), dropped.join(","));
+    assert.deepEqual(f.events.at(-1).droppedParams, dropped);
+    if (nativeOnly) assert.deepEqual(f.requests[0].json.generationConfig, { maxOutputTokens: 512, seed: 7 });
+    else assert.deepEqual(Object.keys(f.requests[0].json).sort(), ["max_tokens", "messages", "model", "seed", "stream"]);
+    assert.equal(f.requests[0].dispatcher, await upstreamDispatcher(600000), "the configured timeout reaches fetch");
+  }
+});
+
+test("upstream calls use the configured timeout instead of fetch's fixed 300 s header limit", async t => {
+  const slow = http.createServer((request, response) => setTimeout(() => response.end("late"), 1500));
+  slow.listen(0, "127.0.0.1"); await once(slow, "listening");
+  t.after(() => new Promise(resolve => { slow.close(resolve); slow.closeAllConnections(); }));
+  const url = "http://127.0.0.1:" + slow.address().port + "/";
+  // undici checks header timers on a ~0.5 s tick, hence the wide margins.
+  const short = await upstreamDispatcher(100);
+  assert.ok(short, "the built-in fetch Agent must be reachable on this Node version");
+  await assert.rejects(fetch(url, { dispatcher: short }), error => error.cause?.code === "UND_ERR_HEADERS_TIMEOUT");
+  assert.equal(await (await fetch(url, { dispatcher: await upstreamDispatcher(5000) })).text(), "late");
 });

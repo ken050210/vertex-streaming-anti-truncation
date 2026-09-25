@@ -81,11 +81,14 @@
                 <label class="toggle-row"><span>隐藏无可用路由的模型<small>隐藏已停用的版本及上游返回 401 后的连接。429、超时和其他临时错误不隐藏。</small></span><input id="hide-unavailable" type="checkbox" checked></label>
                 <p class="hint">独立网关共用一套凭据。修正凭据后保存并应用，即可重新判断；模型列表不会触发推理探测。</p>
                 <label class="toggle-row"><span>Gemini 3.7 / 3.8 Flash 预填充转为 USER<small>将末尾纯文本 assistant 消息改为 user，保留原文；工具和思考历史保持原样。转换不保证模型会接着预填充续写。</small></span><input id="prefill-to-user" type="checkbox" checked></label>
-                <label class="toggle-row"><span>提示词提交失败后重试一次<small>匹配上游错误中的 “The prompt could not be submitted”。仅在输出开始前重试，使用相同模型与档位。</small></span><input id="prompt-retry-enabled" type="checkbox" aria-describedby="retry-text-help retry-text-error"></label>
+                <label class="toggle-row"><span>提示词提交失败后重试一次<small>匹配下方列出的上游错误（默认 “The prompt could not be submitted”）。仅在输出开始前重试，使用相同模型与档位。</small></span><input id="prompt-retry-enabled" type="checkbox" aria-describedby="retry-text-help retry-text-error"></label>
                 <div class="field retry-text-field"><label for="prompt-retry-text">重试时插入的 USER 文本</label><textarea id="prompt-retry-text" rows="8" spellcheck="false" aria-describedby="retry-text-help retry-text-count retry-text-error" placeholder="填写你准备的文本，建议约 7000 tokens。不会自动补齐、重复或截断。"></textarea>
                   <p id="retry-text-help" class="hint">先填写文本才能启用。文本插入在开头的 system / developer 消息之后、其余对话之前。仅重试时发送，会增加输入用量和等待时间；不会写入日志。</p>
                   <p id="retry-text-count" class="hint" role="status">0 字符 · 0 UTF-8 字节</p>
                   <p id="retry-text-error" class="field-error" role="alert"></p>
+                </div>
+                <div class="field retry-text-field"><label for="prompt-retry-matches">触发重试的上游错误（每行一条）</label><textarea id="prompt-retry-matches" rows="3" spellcheck="false" aria-describedby="retry-matches-help" placeholder="The prompt could not be submitted"></textarea>
+                  <p id="retry-matches-help" class="hint">留空使用默认规则。不区分大小写，包含这段文字即命中。只检查上游的拒绝信息：错误信息、兼容接口的拒答（refusal）和原生接口的提示词拦截原因（例如 PROHIBITED_CONTENT），不检查正常生成的正文。命中后只重试这一次，仍失败则返回错误。</p>
                 </div>
               </section>
             </div><aside class="settings-aside"><section class="panel preview-panel"><p class="eyebrow">CONNECTION PREVIEW</p><h2>待应用连接</h2><dl class="details"><div><dt>鉴权</dt><dd id="preview-auth">完整模式</dd></div><div><dt>服务等级</dt><dd id="preview-tier">Standard</dd></div><div><dt>地区</dt><dd id="preview-location" class="mono">global</dd></div><div><dt>本地端口</dt><dd id="preview-port" class="mono">4781</dd></div></dl><div class="divider"></div><p class="small muted">保存前会在本机校验配置。保存与启动不会发起模型推理。</p><p class="small muted">配置保存在用户目录，密钥和服务账号不会回传到页面。</p></section><section class="help-card"><h3>关于实际服务等级</h3><p>所选档位随请求发给 Google。是否可用由模型和账户决定，实际档位以响应中的 traffic_type 为准。</p><a href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo" target="_blank" rel="noreferrer">Flex 文档 ↗</a><a href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo" target="_blank" rel="noreferrer">Priority 文档 ↗</a></section></aside></div>

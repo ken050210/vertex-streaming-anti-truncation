@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { buildNativeBody, translateUsage, mapFinishReason } from "./vertex-native.mjs";
+import { protocolError } from "./completion-integrity.mjs";
 
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const requestFields = new Set(["model", "messages", "stream", "stream_options", "max_tokens", "max_completion_tokens",
@@ -62,7 +63,7 @@ export function applyNativeOptions(body, payload) {
   return body;
 }
 
-const fail = suffix => { throw new Error("anti_truncation_native_" + suffix); };
+const fail = suffix => { throw protocolError("anti_truncation_native_" + suffix); };
 
 // Convert the native partialArgs for our one owned string into valid, incremental
 // OpenAI tool JSON. The existing restorer then handles it just like a stable call.

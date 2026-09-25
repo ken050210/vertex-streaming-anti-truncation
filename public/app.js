@@ -92,7 +92,12 @@ function draft() {
     apiKey: $("api-key").value.trim(), accessToken: $("access-token").value.trim(),
     port: Number($("port").value), timeoutMs: Number($("timeout").value) * 1000, antiTruncation: true, models: state.models.map(m => ({ ...m })),
     hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
-    geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value };
+    geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
+    geminiPromptRetryMatches: retryMatches() };
+}
+function retryMatches() {
+  const lines = $("prompt-retry-matches").value.split("\n").map(line => line.trim()).filter(Boolean);
+  return lines.length ? lines : null;
 }
 function updateRetryText() {
   const text = $("prompt-retry-text").value, bytes = new TextEncoder().encode(text).length;
@@ -140,6 +145,7 @@ function fillConfig() {
   $("prefill-to-user").checked = c.geminiPrefillToUser !== false;
   $("prompt-retry-enabled").checked = c.geminiPromptRetryEnabled === true;
   $("prompt-retry-text").value = c.geminiPromptRetryText || "";
+  $("prompt-retry-matches").value = (c.geminiPromptRetryMatches || []).join("\n");
   state.models = c.models.map(m => ({ ...m })); renderModels();
   for (const [id, name] of [["gateway-key", "gatewayKey"], ["service-account", "serviceAccountJson"], ["api-key", "apiKey"], ["access-token", "accessToken"]]) {
     $(id).value = ""; $(id).placeholder = c[name + "Set"] ? "已保存 · 留空保留，输入则替换" : ({ gatewayKey: "至少 16 字符，或生成随机密钥", serviceAccountJson: "粘贴完整的服务账号 JSON，或导入文件", apiKey: "输入 Vertex Express API Key", accessToken: "输入短期 Google OAuth 令牌" })[name];

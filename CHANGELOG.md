@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## 0.5.0 (experimental)
+
+- Make prompt-submission retry rules configurable: one rule per line in the console, or `GEMINI_PROMPT_RETRY_MATCHES` separated by `|`. Rules are case-insensitive substrings; the default is only "The prompt could not be submitted". Matching now also reads OpenAI-compatible `refusal` fields, where Vertex's compatible stream reports this block, and native `promptFeedback` block reasons. Generated text is still never scanned.
+- Drop fields Google documents as unsupported before the first submission, for example penalties, candidate count and sampling on Gemini 3.7/3.8 Flash. The `x-gemini-dropped-params` header and `droppedParams` log field list the removed names.
+- `UPSTREAM_TIMEOUT_MS` now bounds waiting for response headers and between body chunks. Node's built-in fetch previously stopped after 300 s regardless of the setting.
+- Report specific anti-truncation restoration codes instead of a generic protocol error.
+- Pass 83 local tests, 57 release-file checks and one bounded live streaming request. See [validation](docs/VALIDATION.en.md).
+
 ## 0.4.1 (experimental)
 
 - Distinguish missing messages, invalid message types and unexpected streaming chunks from invalid candidate objects. Preserve the failing candidate's known finish reason without accepting malformed output.

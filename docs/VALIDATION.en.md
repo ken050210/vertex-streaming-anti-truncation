@@ -6,6 +6,12 @@ Local fixtures, live standalone requests and historical router checks cover diff
 
 ## Standalone package
 
+### 0.5.0 retry rules, unsupported parameters and timeout (2026-09-25)
+
+`npm run verify` passes syntax/credential/private-path checks for 57 release files and 83 local tests. New fixtures cover refusal rejections in JSON and SSE, custom rules replacing the default, native `promptFeedback` matching, rule validation and environment parsing, documented field removal on both the compatible and native request paths, and a local server showing the dispatcher's header timeout follows its setting (100 ms fails, 5 s succeeds). Reverting each change in a scratch copy made its new tests fail.
+
+One live Gemini 3.7 Flash streaming request (512-token cap) ran through an isolated loopback gateway with existing credentials held only in memory. It sent temperature, top_p, both penalties and SillyTavern's disabled-thinking field: the gateway removed the four documented fields up front, used native progressive streaming (7 reads), returned 200 with stop and DONE, restored the text and logged `ON_DEMAND`. No retry rule was exercised live, and no call longer than 300 s was attempted; those paths rely on the fixtures above.
+
 ### 0.4.1 completion diagnostics (2026-09-23)
 
 All 77 local tests pass, with syntax/credential/private-path checks for 56 release files. Regression fixtures failed before the fix and now cover missing/null/wrong-type messages, delta-only non-streaming replies, the failing choice in a multi-candidate response, malformed tool arguments and unknown finish-reason redaction. Normal and buffered gateway requests preserve failure metadata in both client errors and events. Empty/reasoning-only completions retain their empty outcome. No malformed response is accepted as successful, restored or eligible for custom-text recovery.

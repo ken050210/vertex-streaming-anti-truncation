@@ -10,6 +10,7 @@ import { supportsNativeRequest, nativeRequestBody, translateNativeCompletion, wr
 import { modelProfiles } from "./model-profiles.mjs";
 import { completionStream, aliasStream } from "./completion-stream.mjs";
 import { convertGeminiPrefill, fetchWithGeminiRecovery, compatibilityLogFields } from "./gemini-compat.mjs";
+import { documentedUnsupported, dropParams } from "./unsupported-params.mjs";
 
 class Problem extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -64,6 +65,22 @@ function validate(payload) {
   if (payload.stream != null && typeof payload.stream !== "boolean") throw new Problem(400, "invalid_stream");
 }
 
+// Node's built-in fetch (bundled undici) gives up after 300 s without response headers
+// or between body chunks, whatever timeoutMs says. Once fetch has loaded, undici's shared
+// global-dispatcher slot holds its Agent; build the same class with timeouts that follow
+// the setting (the AbortSignal still bounds the call). Otherwise keep the default.
+const nativeFetch = globalThis.fetch;
+const upstreamAgents = new Map();
+export function upstreamDispatcher(timeoutMs) {
+  if (!upstreamAgents.has(timeoutMs)) {
+    upstreamAgents.set(timeoutMs, nativeFetch("data:,").then(response => response.arrayBuffer()).then(() => {
+      const Agent = globalThis[Symbol.for("undici.globalDispatcher.1")]?.constructor;
+      return Agent?.name === "Agent" ? new Agent({ headersTimeout: timeoutMs, bodyTimeout: timeoutMs }) : undefined;
+    }));
+  }
+  return upstreamAgents.get(timeoutMs);
+}
+
 // fetchImpl exists for local protocol fixtures; HTTP clients cannot choose hosts,
 // credentials or the upstream model. The CLI always uses Google's fixed endpoint.
 export function createGatewayServer(configSource, { fetchImpl = fetch, logger = () => {} } = {}) {
@@ -88,7 +105,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     let pathname;
     try { pathname = new URL(request.url, "http://localhost").pathname; }
     catch { return send(response, 400, { error: { code: "invalid_path" } }); }
-    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.4.1" });
+    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.5.0" });
     if (!authorized(request, config.gatewayKey)) return send(response, 401, { error: { code: "unauthorized" } });
     if (request.method === "GET" && pathname === "/v1/models") return send(response, 200, {
       object: "list", data: availability(config).filter(model => !model.hidden).map(model => ({ id: model.id, object: "model", owned_by: "vertex-streaming-anti-truncation" })),
@@ -104,7 +121,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     const onClose = () => { if (!response.writableEnded) client.abort(); };
     response.once("close", onClose);
     request.once("aborted", onClose);
-    let stream = false, audit = null, integrity = null, status = 500, code = null, route;
+    let stream = false, audit = null, integrity = null, status = 500, code = null, route, droppedParams = [];
     const compatibility = { prefillConverted: false, promptRetried: false };
     try {
       let payload = await readRequest(request, config.bodyLimitBytes);
@@ -116,6 +133,12 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       const prefill = convertGeminiPrefill(payload, route.upstreamModel, config.geminiPrefillToUser !== false);
       payload = prefill.payload; compatibility.prefillConverted = prefill.converted;
       response.setHeader("x-gemini-prefill-converted", String(prefill.converted));
+      // Google documents these fields as unsupported for this model: drop them before
+      // anti-truncation, native translation and the first submission.
+      const unsupported = documentedUnsupported(route.upstreamModel, payload);
+      droppedParams = Object.keys(payload).filter(key => unsupported.has(key));
+      payload = dropParams(payload, unsupported);
+      if (droppedParams.length) response.setHeader("x-gemini-dropped-params", droppedParams.join(","));
       const transport = prepareAntiTruncation(payload, route.mode !== "normal" && config.antiTruncation !== false, route.mode === "streaming");
       const buffered = route.mode === "buffered" && Boolean(transport.toolName);
       const upstreamStream = stream && !buffered;
@@ -139,8 +162,9 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       const upstreamPayload = { ...transport.payload, stream: upstreamStream };
       const firstBody = requestBody(upstreamPayload);
       const credential = await config.accessToken();
+      const dispatcher = await upstreamDispatcher(config.timeoutMs);
       const authentication = config.authMode === "express" ? { "x-goog-api-key": credential } : { authorization: "Bearer " + credential };
-      let upstream = await fetchWithGeminiRecovery(value => fetchImpl(url, { method: "POST", redirect: "error", signal,
+      let upstream = await fetchWithGeminiRecovery(value => fetchImpl(url, { method: "POST", redirect: "error", signal, dispatcher,
         headers: { ...authentication, ...config.tierHeaders, "content-type": "application/json", accept: upstreamStream ? "text/event-stream" : "application/json" },
         body: JSON.stringify(value === upstreamPayload ? firstBody : requestBody(value)) }), upstreamPayload, route.upstreamModel, {
         settings: config.geminiPromptRetry, signal, bodyLimit: config.bodyLimitBytes,
@@ -219,7 +243,8 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         model: route?.id || null, upstreamModel: route?.upstreamModel || null, mode: route?.mode || null, stream, status, latencyMs: Date.now() - started,
         serviceTier: config.serviceTier || "standard",
         trafficType: ["ON_DEMAND", "ON_DEMAND_FLEX", "ON_DEMAND_PRIORITY", "PROVISIONED_THROUGHPUT"].includes(audit?.trafficType) ? audit.trafficType : null,
-        ...antiTruncationLogFields(audit), ...integrityLogFields(integrity), ...compatibilityLogFields(compatibility), ...(code ? { code } : {}) };
+        ...antiTruncationLogFields(audit), ...integrityLogFields(integrity), ...compatibilityLogFields(compatibility),
+        ...(droppedParams.length ? { droppedParams } : {}), ...(code ? { code } : {}) };
       events.push(event);
       if (events.length > 200) events.shift();
       logger(event);

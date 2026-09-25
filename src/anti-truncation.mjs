@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { supportsNativeTextStream } from "./vertex-text-stream.mjs";
+// Restoration failures describe one reply, not the connection, and keep their code.
+import { protocolError as failure } from "./completion-integrity.mjs";
 
 const auditTransports = new Set(["disabled", "existing-tools", "tool-choice", "structured-output", "multiple-candidates",
     "tool-history", "tool-transport", "tool-transport-buffered", "tool-transport-buffered-fields", "tool-transport-native-streaming"]);
@@ -198,7 +200,6 @@ class ContentDecoder {
     get valid() { return this.complete && this.found && this.closedContent && !this.invalid; }
 }
 
-const failure = code => Object.assign(new Error(code), { code });
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const cutShort = reason => reason === "length" || reason === "content_filter";
 
