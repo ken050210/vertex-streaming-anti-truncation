@@ -19,6 +19,7 @@ function errorMessage(message) {
     "Only Google's OAuth token endpoint is allowed": "服务账号的 token_uri 必须是 Google 官方 OAuth 地址。",
     "Set GATEWAY_API_KEY to a random value of at least 16 characters": "请设置至少 16 字符、不含空格的本地网关密钥。",
     "Configuration changed; reload before saving": "配置已被其他页面修改，请先放弃当前修改并重新加载。",
+    "Configuration is being edited by another process": "配置正在被另一个进程保存，请稍后重试。",
     "Port is unavailable; the running service has not been changed": "端口已被占用，当前服务保持原状，请更换端口。",
     "Gateway and console must use different ports": "API 端口不能与控制台端口相同。",
     "Requests are still running; wait before stopping the gateway": "仍有请求进行中，请等回复完成后再停止网关。",
@@ -382,7 +383,7 @@ $("probe-button").addEventListener("click", async () => {
     }
     $("probe-output").textContent = text || "上游未返回可显示正文。";
     $("probe-status").textContent = finish === "stop" && text ? "请求完成" : "检查结束原因";
-    const meta = { "请求 ID": response.headers.get("x-request-id"), "结束原因": finish || "未知", "正文还原": restored === true ? "已还原" : restored === false ? "未还原 / 跳过" : "未确认", "实际上游档位": usage?.traffic_type || "上游未报告", "耗时": ((performance.now() - started) / 1000).toFixed(2) + " s", ...(stream ? { "含正文读取次数": reads, "正文到达跨度": ((lastAt || 0) - (firstAt || 0)).toFixed(0) + " ms" } : {}) };
+    const meta = { "请求 ID": response.headers.get("x-request-id"), "结束原因": finish || "未知", "正文还原": restored === true ? "已还原" : restored === false ? "未还原 / 跳过" : "未确认", "实际上游档位": usage?.traffic_type || usage?.extra_properties?.google?.traffic_type || "上游未报告", "耗时": ((performance.now() - started) / 1000).toFixed(2) + " s", ...(stream ? { "含正文读取次数": reads, "正文到达跨度": ((lastAt || 0) - (firstAt || 0)).toFixed(0) + " ms" } : {}) };
     $("probe-meta").innerHTML = Object.entries(meta).map(([k,v]) => `<div><dt>${esc(k)}</dt><dd class="mono">${esc(v)}</dd></div>`).join("");
   } catch (error) { $("probe-status").textContent = error.name === "AbortError" ? "已取消" : "测试失败"; setError("probe-error", error.name === "AbortError" ? "请求已取消。" : error.message); }
   finally { state.probe = null; $("probe-cancel").hidden = true; $("probe-button").disabled = true; await refresh().catch(() => {}); }

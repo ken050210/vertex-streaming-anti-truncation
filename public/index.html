@@ -73,7 +73,7 @@
                 <p class="hint">已有工具调用或结构化输出会跳过包装。若预设也有同类脚本，只保留一处包装。</p>
               </section>
               <section class="panel"><div class="panel-head"><h2><span class="step">03</span> 本地网关</h2></div>
-                <div class="form-grid"><div class="field"><label for="port">API 端口</label><input id="port" name="port" type="number" min="1" max="65535" value="4781" required><p class="hint">仅监听 127.0.0.1，与控制台端口分开。</p></div><div class="field"><label for="timeout">上游超时（秒）</label><input id="timeout" type="number" min="1" max="1800" value="600" required><p class="hint">Flex 可能等待较久，默认 600 秒。</p></div></div>
+                <div class="form-grid"><div class="field"><label for="port">API 端口</label><input id="port" name="port" type="number" min="1" max="65535" value="4781" required><p class="hint">仅监听 127.0.0.1，与控制台端口分开。</p></div><div class="field"><label for="timeout">上游超时（秒）</label><input id="timeout" type="number" min="1" max="1800" value="600" required><p class="hint">单次请求从开始到回复结束的总时长上限（含流式输出），默认 600 秒；长回复或 Flex 可调高。</p></div></div>
                 <div class="field"><div class="label-line"><label for="gateway-key">本地网关密钥</label><button id="generate-key" class="text-button" type="button">生成随机密钥</button></div><div class="input-actions"><input id="gateway-key" name="gatewayKey" type="password" autocomplete="new-password" placeholder="至少 16 字符；已保存后留空保留"><button id="copy-key" class="btn" type="button">复制新密钥</button></div><p class="hint">用于客户端接入和下次登录。生成后请复制保存；已保存的密钥不回显。</p></div>
               </section>
               <section class="panel compatibility-panel">

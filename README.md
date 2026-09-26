@@ -171,7 +171,7 @@ Google 的 [Gemini 3.7 Flash](https://docs.cloud.google.com/gemini-enterprise-ag
 
 依据为 2026-09-24 更新的官方页面（2026-09-25 核对）。模型 ID 带 `@版本` 时按基础模型处理；未列出的模型保持原样。模型页仍给出可用范围的 temperature/top_p（例如 3.5 Flash）不会去掉。
 
-`UPSTREAM_TIMEOUT_MS`（默认 600000 毫秒）现在同时限制等待上游响应头和正文分段的时间。此前 Node 内置 fetch 自带 300 秒上限，非流式长回复等满 300 秒就以 `Headers Timeout Error` 失败，与设置无关。
+`UPSTREAM_TIMEOUT_MS`（默认 600000 毫秒）现在同时限制等待上游响应头和正文分段的时间。此前 Node 内置 fetch 自带 300 秒上限，非流式长回复等满 300 秒就以 `Headers Timeout Error` 失败，与设置无关。它同时是单个请求的总时长上限，从网关收到请求时开始计算：到时即使上游仍在输出也会中止，已经开始的流式回复会被切断，日志记录为 `504 upstream_timeout`。很长的回复或 Flex 请在 GUI 中调高上游超时，最多 1800 秒。
 
 ## 适用范围与限制
 

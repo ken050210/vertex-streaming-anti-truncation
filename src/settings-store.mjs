@@ -1,4 +1,4 @@
-import { readFile, mkdir, open, rename, unlink } from "node:fs/promises";
+import { readFile, mkdir, open, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
@@ -49,14 +49,21 @@ export function createSettingsStore({ directory = process.env.GATEWAY_STATE_DIR 
       return { settings, revision: revisionOf(raw), saved: true };
     } catch { throw new SettingsError("Saved configuration is invalid; the existing file was preserved", 500); }
   }
+  async function acquireLock() {
+    try { return await open(lock, "wx", 0o600); }
+    catch (error) { if (error.code !== "EEXIST") throw new SettingsError("Cannot lock configuration", 409); }
+    // A save holds the lock for milliseconds. An older lock was left by a process
+    // that exited mid-save and would otherwise block every later save.
+    const age = await stat(lock).then(info => Date.now() - info.mtimeMs, () => Infinity);
+    if (age < 60000) throw new SettingsError("Configuration is being edited by another process", 409);
+    await unlink(lock).catch(() => {});
+    try { return await open(lock, "wx", 0o600); }
+    catch { throw new SettingsError("Configuration is being edited by another process", 409); }
+  }
   async function save(settings, revision) {
     buildConfig(settings);
     await mkdir(directory, { recursive: true, mode: 0o700 });
-    let held;
-    try { held = await open(lock, "wx", 0o600); }
-    catch (error) {
-      throw new SettingsError(error.code === "EEXIST" ? "Configuration is being edited by another process" : "Cannot lock configuration", 409);
-    }
+    const held = await acquireLock();
     const temporary = file + "." + randomUUID() + ".tmp";
     try {
       if ((await load()).revision !== revision) throw new SettingsError("Configuration changed; reload before saving", 409);

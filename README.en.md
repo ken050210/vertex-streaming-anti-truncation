@@ -163,7 +163,7 @@ Requests to the following upstream models drop fields that Google documents as u
 
 Sources are the official pages updated 2026-09-24 and checked 2026-09-25. Model IDs with an `@version` suffix use their base model; unlisted models are unchanged. Temperature/top_p stay where a model page still lists ranges, for example 3.5 Flash.
 
-`UPSTREAM_TIMEOUT_MS` (default 600000) now also bounds waiting for response headers and between body chunks. Node's built-in fetch previously stopped after 300 s with `Headers Timeout Error` regardless of this setting.
+`UPSTREAM_TIMEOUT_MS` (default 600000) now also bounds waiting for response headers and between body chunks. Node's built-in fetch previously stopped after 300 s with `Headers Timeout Error` regardless of this setting. It is also the total limit for one request, counted from when the gateway receives it: generation still in progress is stopped, a stream that has already started is cut off, and the log records `504 upstream_timeout`. For very long replies or Flex, raise the upstream timeout in the console (up to 1800 s).
 
 ## Scope and limits
 

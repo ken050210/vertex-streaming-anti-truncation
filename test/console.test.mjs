@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, utimes, access } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import http from "node:http";
@@ -105,6 +105,20 @@ test("invalid credentials, occupied ports and stale disk revisions cannot replac
   const current = await f.store.load();
   await f.store.save({ ...current.settings, timeoutMs: 120000 }, current.revision);
   assert.equal((await f.api("/api/config", { revision: initial.revision, settings: { serviceTier: "flex" } })).status, 409);
+});
+
+test("a lock left by an interrupted save expires after a minute; a recent lock still blocks saving", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "vertex-console-lock-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = createSettingsStore({ directory, env: {} });
+  const settings = { ...(await store.load()).settings, authMode: "express", apiKey: "synthetic-express-credential", gatewayKey: "synthetic-local-console-key" };
+  const lock = join(directory, "settings.lock");
+  await writeFile(lock, "");
+  await assert.rejects(store.save(settings, "new"), { status: 409, message: /another process/ });
+  const expired = new Date(Date.now() - 120000);
+  await utimes(lock, expired, expired);
+  assert.equal((await store.save(settings, "new")).saved, true);
+  await assert.rejects(access(lock), { code: "ENOENT" });
 });
 
 test("port changes release the original listener and hot applies affect the replacement listener", async t => {

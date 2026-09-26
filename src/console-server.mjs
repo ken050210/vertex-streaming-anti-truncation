@@ -90,7 +90,9 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
     res.setHeader("content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
       const port = server.address()?.port;
-      if (!["127.0.0.1:" + port, "localhost:" + port].includes(req.headers.host)) throw new SettingsError("Invalid local host", 403);
+      // Browsers leave the default HTTP port out of Host.
+      const hosts = ["127.0.0.1", "localhost"].flatMap(name => port === 80 ? [name, name + ":80"] : [name + ":" + port]);
+      if (!hosts.includes(req.headers.host)) throw new SettingsError("Invalid local host", 403);
       const origin = req.headers.origin;
       if ((origin && origin !== "http://" + req.headers.host) || req.headers["sec-fetch-site"] === "cross-site") throw new SettingsError("Cross-origin access denied", 403);
       const path = new URL(req.url, "http://localhost").pathname;
