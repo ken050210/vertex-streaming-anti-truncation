@@ -2,6 +2,15 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## 0.5.2 (experimental)
+
+- A settings lock left behind by a process that exited mid-save no longer makes every later save fail: locks older than a minute are cleared. Saving while another process saves shows a Chinese message in the console.
+- The connection test shows the actual tier the compatible endpoint reports (for example `ON_DEMAND_PRIORITY`) instead of "not reported", matching the request log.
+- The console opens when `GUI_PORT` is 80 instead of answering every request with 403.
+- Document that `UPSTREAM_TIMEOUT_MS` is also the total limit for one request: a stream still running at that point is cut off and logged as `504 upstream_timeout`. The README and the console's timeout hint say so; behavior is unchanged.
+- Tidy the code: one shared SSE parser replaces five separate ones, native request translation now sits next to the checks that decide whether a request translates without loss, and unused code and exports are removed. Client-visible behavior is unchanged except that an SSE event over 2 MiB reports `sse_event_limit` everywhere and compatible streams no longer carry a stray blank line before each event.
+- Pass 85 local tests, 58 release-file checks, an old-vs-new comparison over 768 split streams and 12 bounded live requests. See [validation](docs/VALIDATION.en.md).
+
 ## 0.5.1 (experimental)
 
 - Priority with a service account or access token now uses the OpenAI-compatible endpoint, like Standard. Requests there no longer fail with `unsupported_native_fields`; "streaming" mode still uses native progressive output, and Express and Flex remain native-only.

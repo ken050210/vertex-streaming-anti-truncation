@@ -1,6 +1,6 @@
 {
   "name": "vertex-streaming-anti-truncation",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "description": "Experimental Vertex Gemini text-tool gateway with progressive native function-argument streaming.",
   "type": "module",
