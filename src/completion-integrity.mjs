@@ -1,9 +1,8 @@
 import { assertStructuredOutput } from "./vertex-schema.mjs";
+import { createSseParser, isObject, protocolError } from "./wire.mjs";
 // Protocol validation retains bounded SSE events and fixed metadata, never reply text for logs.
-const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const reasons = new Set(["stop", "length", "content_filter", "tool_calls", "function_call"]);
 const outcomes = new Set(["complete", "length", "content_filter", "tool_calls", "incomplete", "empty", "error", "cancelled"]);
-export const protocolError = code => Object.assign(new Error(code), { code, protocolFailure: true });
 
 export function integrityLogFields(value) {
   if (!value) return {};
@@ -21,7 +20,7 @@ const contentPresent = value => typeof value === "string" ? value.length > 0 :
   Array.isArray(value) && value.some(part => typeof part?.text === "string" && part.text.length > 0);
 function flags(message) {
   return {
-    hasContent: contentPresent(message?.content) || object(message?.audio),
+    hasContent: contentPresent(message?.content) || isObject(message?.audio),
     hasToolCalls: Boolean(message?.tool_calls?.length || message?.function_call),
     hasReasoning: contentPresent(message?.reasoning_content) || contentPresent(message?.reasoning) || Boolean(message?.reasoning_details?.length),
     hasRefusal: typeof message?.refusal === "string" && message.refusal.length > 0,
@@ -49,54 +48,28 @@ export function inspectCompletion(completion) {
   const invalid = (reason, state) => ({ valid: false, reason, integrity: {
     ...(state ? summary([state]) : {}), outcome: reason === "empty_completion" ? "empty" : "error",
   } });
-  if (!object(completion) || completion.error) return invalid("error_object");
+  if (!isObject(completion) || completion.error) return invalid("error_object");
   if (!Array.isArray(completion.choices) || !completion.choices.length) return invalid("missing_choices");
   const states = [];
   for (const choice of completion.choices) {
-    if (!object(choice)) return invalid("invalid_choice");
-    const state = { ...flags(object(choice.message) ? choice.message : null), finishReason: choice.finish_reason };
-    if (choice.message == null) return invalid(object(choice.delta) ? "unexpected_stream_chunk" : "missing_message", state);
-    if (!object(choice.message)) return invalid("invalid_message", state);
+    if (!isObject(choice)) return invalid("invalid_choice");
+    const state = { ...flags(isObject(choice.message) ? choice.message : null), finishReason: choice.finish_reason };
+    if (choice.message == null) return invalid(isObject(choice.delta) ? "unexpected_stream_chunk" : "missing_message", state);
+    if (!isObject(choice.message)) return invalid("invalid_message", state);
     const problem = choiceProblem(state);
     if (problem) return invalid(problem, state);
     if (state.hasToolCalls) {
       const calls = choice.message.tool_calls ?? [{ function: choice.message.function_call }];
-      if (!Array.isArray(calls) || calls.some(call => !object(call?.function) || typeof call.function.name !== "string" ||
+      if (!Array.isArray(calls) || calls.some(call => !isObject(call?.function) || typeof call.function.name !== "string" ||
           !call.function.name || typeof call.function.arguments !== "string")) return invalid("invalid_tool_call", state);
       if (!["length", "content_filter"].includes(state.finishReason)) {
-        try { if (calls.some(call => !object(JSON.parse(call.function.arguments)))) return invalid("invalid_tool_arguments", state); }
+        try { if (calls.some(call => !isObject(JSON.parse(call.function.arguments)))) return invalid("invalid_tool_arguments", state); }
         catch { return invalid("invalid_tool_arguments", state); }
       }
     }
     states.push(state);
   }
   return { valid: true, reason: null, integrity: summary(states) };
-}
-
-// SSE framing is shared by native translation and transparent completion validation.
-export function createSseParser(onEvent, maxChars = 2 * 1024 * 1024) {
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let buffer = "";
-  const parse = raw => {
-    const lines = raw.split(/\r\n|\r|\n/);
-    const data = lines.filter(line => line === "data" || line.startsWith("data:"))
-      .map(line => line.slice(5).replace(/^ /, "")).join("\n");
-    const event = lines.find(line => line.startsWith("event:"))?.slice(6).trim();
-    if (data || event === "error") onEvent(data, event);
-  };
-  const drain = () => {
-    let boundary;
-    while ((boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffer))) {
-      if (boundary.index > maxChars) throw protocolError("sse_event_limit");
-      parse(buffer.slice(0, boundary.index));
-      buffer = buffer.slice(boundary.index + boundary[0].length);
-    }
-    if (buffer.length > maxChars) throw protocolError("sse_event_limit");
-  };
-  return {
-    push(bytes) { buffer += decoder.decode(bytes, { stream: true }); drain(); },
-    finish() { buffer += decoder.decode(); drain(); if (buffer.trim()) parse(buffer); buffer = ""; },
-  };
 }
 
 export function guardCompletionStream(response, onMetadata = () => {}, expectation = null, maxStructuredBytes = 32 * 1024 * 1024) {
@@ -112,7 +85,7 @@ export function guardCompletionStream(response, onMetadata = () => {}, expectati
       code === "incomplete_stream" || code === "missing_finish_reason" ? "incomplete" : "error"));
     throw protocolError(code);
   };
-  const parser = createSseParser((data, event) => {
+  const parser = createSseParser(({ data, event }) => {
     if (event === "error") fail("upstream_stream_error");
     if (!data) return;
     if (done) fail("data_after_done");
@@ -126,7 +99,7 @@ export function guardCompletionStream(response, onMetadata = () => {}, expectati
         if (["length", "content_filter"].includes(states.get(index).finishReason)) continue;
         for (const call of calls.values()) {
           if (!call.name) fail("invalid_tool_call");
-          try { if (!object(JSON.parse(call.arguments))) fail("invalid_tool_arguments"); }
+          try { if (!isObject(JSON.parse(call.arguments))) fail("invalid_tool_arguments"); }
           catch (error) { if (error.protocolFailure) throw error; fail("invalid_tool_arguments"); }
         }
       }
@@ -144,24 +117,24 @@ export function guardCompletionStream(response, onMetadata = () => {}, expectati
     }
     let parsed;
     try { parsed = JSON.parse(data); } catch { fail("invalid_sse_json"); }
-    if (!object(parsed) || parsed.error) fail("upstream_stream_error");
+    if (!isObject(parsed) || parsed.error) fail("upstream_stream_error");
     if (parsed.choices != null && !Array.isArray(parsed.choices)) fail("invalid_stream_choices");
     for (const [position, choice] of (parsed.choices ?? []).entries()) {
-      if (!object(choice)) fail("invalid_stream_choice");
+      if (!isObject(choice)) fail("invalid_stream_choice");
       const index = choice.index ?? position;
       if (!Number.isInteger(index) || index < 0 || index >= 128) fail("invalid_choice_index");
       const state = states.get(index) ?? { ...flags({}), finishReason: null };
       const delta = choice.delta ?? choice.message ?? {};
-      if (!object(delta)) fail("invalid_stream_delta");
+      if (!isObject(delta)) fail("invalid_stream_delta");
       const incoming = flags(delta);
       const calls = delta.tool_calls ?? (delta.function_call ? [{ index: 0, function: delta.function_call }] : []);
       if (!Array.isArray(calls)) fail("invalid_tool_call");
       for (const [position, call] of calls.entries()) {
         const toolIndex = call?.index ?? position;
-        if (!object(call) || !Number.isInteger(toolIndex) || toolIndex < 0 || toolIndex >= 128) fail("invalid_tool_call");
+        if (!isObject(call) || !Number.isInteger(toolIndex) || toolIndex < 0 || toolIndex >= 128) fail("invalid_tool_call");
         const buffers = toolBuffers.get(index) ?? new Map();
         const buffered = buffers.get(toolIndex) ?? { name: "", arguments: "" };
-        if (call.function != null && !object(call.function)) fail("invalid_tool_call");
+        if (call.function != null && !isObject(call.function)) fail("invalid_tool_call");
         for (const key of ["name", "arguments"]) if (call.function?.[key] != null) {
           if (typeof call.function[key] !== "string") fail("invalid_tool_call");
           structuredBytes += new TextEncoder().encode(call.function[key]).length;

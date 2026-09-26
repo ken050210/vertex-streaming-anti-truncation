@@ -1,17 +1,17 @@
+import { isObject, protocolError } from "./wire.mjs";
 // Use Vertex's JSON Schema fields. Never weaken client constraints to fit responseSchema.
-const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const allowed = new Set(["$id", "$defs", "$ref", "$anchor", "type", "format", "title", "description", "enum",
   "items", "prefixItems", "minItems", "maxItems", "minimum", "maximum", "anyOf", "properties",
   "additionalProperties", "required", "propertyOrdering"]);
 const types = new Set(["null", "boolean", "object", "array", "number", "integer", "string"]);
 const pointer = key => String(key).replace(/~/g, "~0").replace(/\//g, "~1");
-export function schemaProblem(param) {
+function schemaProblem(param) {
   return Object.assign(new Error("unsupported_native_schema"), { status: 400, code: "unsupported_native_schema", param });
 }
 export function vertexJsonSchema(schema, rootPath = "/response_format/json_schema/schema") {
   let nodes = 0;
   const visit = (node, path, depth) => {
-    if (!object(node) || depth > 64 || ++nodes > 10000) throw schemaProblem(path);
+    if (!isObject(node) || depth > 64 || ++nodes > 10000) throw schemaProblem(path);
     const entries = [];
     for (const [key, value] of Object.entries(node)) {
       const at = path + "/" + pointer(key);
@@ -21,7 +21,7 @@ export function vertexJsonSchema(schema, rootPath = "/response_format/json_schem
       if (!allowed.has(key)) throw schemaProblem(at);
       let converted = structuredClone(value);
       if (key === "properties" || key === "$defs") {
-        if (!object(value)) throw schemaProblem(at);
+        if (!isObject(value)) throw schemaProblem(at);
         converted = Object.fromEntries(Object.entries(value).map(([name, child]) =>
           [name, visit(child, at + "/" + pointer(name), depth + 1)]));
       } else if (key === "anyOf" || key === "prefixItems") {
@@ -50,18 +50,18 @@ export function vertexJsonSchema(schema, rootPath = "/response_format/json_schem
   const converted = visit(schema, rootPath, 0);
   // Resolve local JSON pointers up front. No external schema fetching is permitted.
   const checkRefs = node => {
-    if (!object(node)) return;
+    if (!isObject(node)) return;
     if (node.$ref) {
       let target = converted;
       for (const part of node.$ref.slice(2).split("/").map(s => s.replace(/~1/g, "/").replace(/~0/g, "~"))) {
-        if (!object(target) || !Object.hasOwn(target, part)) throw schemaProblem(rootPath + "/$ref");
+        if (!isObject(target) || !Object.hasOwn(target, part)) throw schemaProblem(rootPath + "/$ref");
         target = target[part];
       }
-      if (!object(target)) throw schemaProblem(rootPath + "/$ref");
+      if (!isObject(target)) throw schemaProblem(rootPath + "/$ref");
     }
     for (const key of ["properties", "$defs"]) for (const child of Object.values(node[key] ?? {})) checkRefs(child);
     for (const key of ["anyOf", "prefixItems"]) for (const child of node[key] ?? []) checkRefs(child);
-    for (const key of ["items", "additionalProperties"]) if (object(node[key])) checkRefs(node[key]);
+    for (const key of ["items", "additionalProperties"]) if (isObject(node[key])) checkRefs(node[key]);
   };
   checkRefs(converted);
   return converted;
@@ -69,10 +69,10 @@ export function vertexJsonSchema(schema, rootPath = "/response_format/json_schem
 
 // Validate exactly the supported assertion subset. Formats remain annotations;
 // unsupported keywords are rejected by vertexJsonSchema before this is used.
-export function matchesVertexSchema(value, schema) {
+function matchesVertexSchema(value, schema) {
   let budget = 100000;
   const hasType = (item, type) => type === "null" ? item === null : type === "array" ? Array.isArray(item) :
-    type === "object" ? object(item) : type === "integer" ? Number.isInteger(item) :
+    type === "object" ? isObject(item) : type === "integer" ? Number.isInteger(item) :
     type === "number" ? Number.isFinite(item) : typeof item === type;
   const check = (item, node, depth = 0) => {
     if (--budget < 0 || depth > 128) return false;
@@ -92,13 +92,13 @@ export function matchesVertexSchema(value, schema) {
         if (constraint && !check(item[i], constraint, depth + 1)) return false;
       }
     }
-    if (object(item)) {
+    if (isObject(item)) {
       if (node.required?.some(key => !Object.hasOwn(item, key))) return false;
       for (const [key, child] of Object.entries(item)) {
         const declared = node.properties && Object.hasOwn(node.properties, key);
         if (!declared && node.additionalProperties === false) return false;
         const constraint = declared ? node.properties[key] : node.additionalProperties;
-        if (object(constraint) && !check(child, constraint, depth + 1)) return false;
+        if (isObject(constraint) && !check(child, constraint, depth + 1)) return false;
       }
     }
     return true;
@@ -116,10 +116,6 @@ export function structuredOutputExpectation(payload) {
 export function assertStructuredOutput(text, expectation) {
   if (!expectation) return;
   let value;
-  try { value = JSON.parse(text); } catch {
-    throw Object.assign(new Error("invalid_structured_json"), { code: "invalid_structured_json", protocolFailure: true });
-  }
-  if (expectation.schema && !matchesVertexSchema(value, expectation.schema)) {
-    throw Object.assign(new Error("schema_validation_failed"), { code: "schema_validation_failed", protocolFailure: true });
-  }
+  try { value = JSON.parse(text); } catch { throw protocolError("invalid_structured_json"); }
+  if (expectation.schema && !matchesVertexSchema(value, expectation.schema)) throw protocolError("schema_validation_failed");
 }

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { supportsNativeTextStream, buildNativeTextBody, wrapNativeTextStream } from "../src/vertex-text-stream.mjs";
+import { supportsNativeTextStream, buildNativeTextBody } from "../src/vertex-native.mjs";
+import { wrapNativeTextStream } from "../src/vertex-text-stream.mjs";
 import { prepareAntiTruncation, wrapAntiTruncationStream } from "../src/anti-truncation.mjs";
 
 const name = "router_emit_native_test";

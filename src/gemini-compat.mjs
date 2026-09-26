@@ -1,7 +1,7 @@
-import { createSseParser } from "./completion-integrity.mjs";
+import { createSseParser } from "./wire.mjs";
 
 export const MAX_RETRY_TEXT_BYTES = 192_000;
-export const DEFAULT_RETRY_ERROR_MATCHES = ["The prompt could not be submitted"];
+const DEFAULT_RETRY_ERROR_MATCHES = ["The prompt could not be submitted"];
 const INSPECTION_BYTES = 64 * 1024;
 const geminiModel = model => /(?:^|\/)gemini-[a-z0-9._-]+(?:@[a-z0-9-]+)?$/i.test(model || "");
 
@@ -20,7 +20,7 @@ export function convertGeminiPrefill(payload, upstreamModel, enabled) {
   return { payload: { ...payload, messages: [...payload.messages.slice(0, -1), { ...last, role: "user" }] }, converted: true };
 }
 
-export function prependRetryText(payload, text) {
+function prependRetryText(payload, text) {
   const messages = payload.messages;
   let index = 0;
   while (["system", "developer"].includes(messages[index]?.role)) index += 1;
@@ -75,8 +75,8 @@ async function inspectSubmissionError(response, stream, matches) {
   const reader = response.body.getReader();
   const held = [];
   let bytes = 0, ended = false, decided = false, failure = null;
-  const parser = sse && createSseParser((data, event) => {
-    if (decided) return;
+  const parser = sse && createSseParser(({ data, event }) => {
+    if (decided || (!data && event !== "error")) return;
     let parsed;
     try { parsed = JSON.parse(data); } catch {
       if (event === "error") failure = submissionError(data, matches, true);

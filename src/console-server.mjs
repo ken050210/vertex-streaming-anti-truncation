@@ -26,6 +26,13 @@ async function close(server) {
   if (!server?.listening) return;
   await new Promise(resolve => { server.close(resolve); server.closeIdleConnections(); });
 }
+// Runs work for one browser request and cancels it if the page closes the connection first.
+async function whileConnected(res, run) {
+  const client = new AbortController();
+  const abort = () => { if (!res.writableEnded) client.abort(); };
+  res.once("close", abort);
+  try { return await run(client.signal); } finally { res.off("close", abort); }
+}
 
 export async function createConsole({ store = createSettingsStore(), fetchImpl = fetch, logger = () => {}, autoStart = true } = {}) {
   let saved = await store.load();
@@ -137,33 +144,25 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
       const body = await readJson(req);
       if (path === "/api/models/discover") {
         const next = mergeSettings((await store.load()).settings, body.settings, { connectionOnly: true });
-        const client = new AbortController();
-        const abort = () => { if (!res.writableEnded) client.abort(); };
-        res.once("close", abort);
-        try { return json(res, 200, await discoverModels(buildConnectionConfig(next), { fetchImpl, signal: client.signal })); }
-        finally { res.off("close", abort); }
+        return json(res, 200, await whileConnected(res, signal => discoverModels(buildConnectionConfig(next), { fetchImpl, signal })));
       }
       if (path === "/api/probe") {
         if (body?.confirm !== true) throw new SettingsError("A paid test must be explicitly requested");
         if (!gateway?.listening) throw new SettingsError("Start the gateway first", 409);
         const model = body.model ?? activeConfig.models[0]?.id;
         if (!activeConfig.models.some(m => m.id === model)) throw new SettingsError("Select a saved model before testing");
-        const client = new AbortController();
-        const abort = () => { if (!res.writableEnded) client.abort(); };
-        res.once("close", abort);
-        try {
+        return await whileConnected(res, async signal => {
           const upstream = await fetch(`http://127.0.0.1:${activeConfig.port}/v1/chat/completions`, {
-            method: "POST", signal: client.signal,
+            method: "POST", signal,
             headers: { authorization: "Bearer " + activeConfig.gatewayKey, "content-type": "application/json" },
             body: JSON.stringify({ model, messages: [{ role: "user", content: "Write three short lines about a river." }], max_tokens: 512, stream: body.stream === true,
               ...(body.stream === true ? { stream_options: { include_usage: true } } : {}) }),
           });
           res.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type"),
             "x-request-id": upstream.headers.get("x-request-id"), "x-anti-truncation-transport": upstream.headers.get("x-anti-truncation-transport") || "unknown" });
-          for await (const bytes of upstream.body) if (!res.write(Buffer.from(bytes))) await once(res, "drain", { signal: client.signal });
+          for await (const bytes of upstream.body) if (!res.write(Buffer.from(bytes))) await once(res, "drain", { signal });
           res.end();
-        } finally { res.off("close", abort); }
-        return;
+        });
       }
       if (!["/api/config", "/api/validate", "/api/start", "/api/stop"].includes(path)) throw new SettingsError("Not found", 404);
       if (busy) throw new SettingsError("Another operation is in progress", 409);

@@ -1,6 +1,6 @@
 export const MODEL_ID = "gemini-3.7-flash-antitruncation";
 export const UPSTREAM_MODEL = "google/gemini-3.7-flash";
-export const MODEL_MODES = Object.freeze(["normal", "buffered", "streaming"]);
+const MODEL_MODES = Object.freeze(["normal", "buffered", "streaming"]);
 
 export function normalizeUpstreamModel(value) {
   if (typeof value !== "string") throw new Error("Invalid upstream Gemini model ID");

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { supportsNativeTextStream } from "./vertex-text-stream.mjs";
+import { supportsNativeTextStream } from "./vertex-native.mjs";
 // Restoration failures describe one reply, not the connection, and keep their code.
-import { protocolError as failure } from "./completion-integrity.mjs";
+import { isObject, protocolError as failure, sseData, trafficType, transformSse } from "./wire.mjs";
 
 const auditTransports = new Set(["disabled", "existing-tools", "tool-choice", "structured-output", "multiple-candidates",
     "tool-history", "tool-transport", "tool-transport-buffered", "tool-transport-buffered-fields", "tool-transport-native-streaming"]);
@@ -200,7 +200,6 @@ class ContentDecoder {
     get valid() { return this.complete && this.found && this.closedContent && !this.invalid; }
 }
 
-const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const cutShort = reason => reason === "length" || reason === "content_filter";
 
 export function restoreAntiTruncationCompletion(completion, toolName) {
@@ -332,37 +331,31 @@ class StreamRestorer {
 export function wrapAntiTruncationStream(response, toolName, onMetadata = () => {}) {
     if (!toolName || !response.ok || !response.body) return response;
     const processor = new StreamRestorer(toolName);
-    const decoder = new TextDecoder();
-    const encoder = new TextEncoder();
-    let buffer = "", done = false;
-    const emit = (controller, text) => controller.enqueue(encoder.encode(text));
-    const event = (controller, raw) => {
-        const lines = raw.split(/\r\n|\r|\n/);
-        const data = lines.filter(line => line === "data" || line.startsWith("data:"))
-            .map(line => line.slice(5).replace(/^ /, "")).join("\n");
-        if (!data) { emit(controller, raw + "\n\n"); return; }
+    let done = false;
+    return transformSse(response, ({ raw, lines, data, event }, emit) => {
+        if (!data) { emit(raw + "\n\n"); return; }
         if (done) throw failure("anti_truncation_data_after_done");
         if (data.trim() === "[DONE]") {
             if (!processor.failed) processor.done();
             onMetadata({ restored: processor.failed ? null : processor.restored, streamDone: true });
-            emit(controller, "data: " + JSON.stringify({ choices: [], router_anti_truncation: { restored: processor.restored } }) + "\n\n");
-            emit(controller, raw + "\n\n");
+            emit(sseData({ choices: [], router_anti_truncation: { restored: processor.restored } }));
+            emit(raw + "\n\n");
             done = true;
             return;
         }
         let parsed;
         try { parsed = JSON.parse(data); }
         catch { throw failure("anti_truncation_invalid_sse_json"); }
-        const trafficType = parsed.usage?.traffic_type ?? parsed.usage?.extra_properties?.google?.traffic_type;
-        if (trafficType) onMetadata({ trafficType });
-        if (parsed.error || lines.some(line => /^event:\s*error\s*$/.test(line))) processor.failed = true;
+        const tier = trafficType(parsed.usage);
+        if (tier) onMetadata({ trafficType: tier });
+        if (parsed.error || event === "error") processor.failed = true;
         const result = processor.failed ? parsed : processor.process(parsed);
         if (!processor.failed) {
             const choice = Array.isArray(result?.choices) ? result.choices.find(choice => (choice.index ?? 0) === 0) : null;
             if (choice?.finish_reason != null) onMetadata({ finishReason: choice.finish_reason });
         }
         let replaced = false;
-        emit(controller, lines.flatMap(line => {
+        emit(lines.flatMap(line => {
             if (line === "data" || line.startsWith("data:")) {
                 if (replaced) return [];
                 replaced = true;
@@ -370,30 +363,7 @@ export function wrapAntiTruncationStream(response, toolName, onMetadata = () => 
             }
             return [line];
         }).join("\n") + "\n\n");
-    };
-    const drain = controller => {
-        for (;;) {
-            const boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffer);
-            if (!boundary) break;
-            if (boundary.index > 2 * 1024 * 1024) throw failure("anti_truncation_event_limit");
-            const raw = buffer.slice(0, boundary.index);
-            buffer = buffer.slice(boundary.index + boundary[0].length);
-            event(controller, raw);
-        }
-        if (buffer.length > 2 * 1024 * 1024) throw failure("anti_truncation_event_limit");
-    };
-    const body = response.body.pipeThrough(new TransformStream({
-        transform(bytes, controller) { buffer += decoder.decode(bytes, { stream: true }); drain(controller); },
-        flush(controller) {
-            buffer += decoder.decode();
-            drain(controller);
-            if (buffer.trim()) event(controller, buffer);
-            if (!done && !processor.failed) throw failure("anti_truncation_stream_interrupted");
-        },
-    }));
-    const headers = new Headers(response.headers);
-    headers.delete("content-length");
-    headers.delete("content-encoding");
-    headers.set("content-type", "text/event-stream; charset=utf-8");
-    return new Response(body, { status: response.status, statusText: response.statusText, headers });
+    }, () => {
+        if (!done && !processor.failed) throw failure("anti_truncation_stream_interrupted");
+    });
 }

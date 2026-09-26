@@ -1,6 +1,6 @@
 import { normalizeUpstreamModel } from "./model-profiles.mjs";
 
-export class DiscoveryError extends Error {
+class DiscoveryError extends Error {
   constructor(message, status = 502) { super(message); this.status = status; }
 }
 

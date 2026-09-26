@@ -90,7 +90,3 @@ export function vertexAccessToken(serviceAccountJson, timeoutMs = 10_000) {
   tokenCache.set(serviceAccountJson, entry);
   return entry.pending;
 }
-
-export function clearVertexTokenCache() {
-  tokenCache.clear();
-}

@@ -4,13 +4,14 @@ import http from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
 import { prepareAntiTruncation, restoreAntiTruncationCompletion, wrapAntiTruncationStream, antiTruncationLogFields } from "./anti-truncation.mjs";
-import { buildNativeUrl } from "./vertex-native.mjs";
-import { buildNativeTextBody, wrapNativeTextStream } from "./vertex-text-stream.mjs";
-import { supportsNativeRequest, nativeRequestBody, translateNativeCompletion, wrapNativeStream } from "./vertex-protocol.mjs";
+import { buildNativeTextBody, buildNativeUrl, nativeRequestBody, supportsNativeRequest } from "./vertex-native.mjs";
+import { wrapNativeTextStream } from "./vertex-text-stream.mjs";
+import { translateNativeCompletion, wrapNativeStream } from "./vertex-protocol.mjs";
 import { modelProfiles } from "./model-profiles.mjs";
 import { completionStream, aliasStream } from "./completion-stream.mjs";
 import { convertGeminiPrefill, fetchWithGeminiRecovery, compatibilityLogFields } from "./gemini-compat.mjs";
 import { documentedUnsupported, dropParams } from "./unsupported-params.mjs";
+import { trafficType } from "./wire.mjs";
 
 class Problem extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -89,7 +90,8 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
   // Temporary errors (including 403/404/429) never remove models from the list.
   const rejectedCredentials = new WeakSet();
   const currentConfig = () => typeof configSource === "function" ? configSource() : configSource;
-  const availability = config => (config.models || modelProfiles(null, config.antiTruncation !== false)).map(model => {
+  const profiles = config => config.models || modelProfiles(null, config.antiTruncation !== false);
+  const availability = config => profiles(config).map(model => {
     const reason = model.enabled === false ? "disabled" : rejectedCredentials.has(config) ? "authentication_failed" : null;
     return { id: model.id, available: reason === null, reason, hidden: config.hideUnavailableModels !== false && reason !== null };
   });
@@ -97,7 +99,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
   const server = http.createServer(async (request, response) => {
     // Snapshot once: saved settings apply to new requests without changing streams in flight.
     const config = currentConfig();
-    const models = config.models || modelProfiles(null, config.antiTruncation !== false);
+    const models = profiles(config);
     response.setHeader("cache-control", "no-store");
     response.setHeader("x-content-type-options", "nosniff");
     const requestId = randomUUID();
@@ -179,14 +181,18 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         throw new Problem(upstream.status, upstream.routerPromptSubmissionError ? "prompt_submission_failed" : "upstream_http_error");
       }
       status = upstream.status;
+      // A complete upstream reply, restored and attributed to the selected alias.
+      const readReply = async reply => {
+        const completion = restoreAntiTruncationCompletion(await readCompletion(reply, config.bodyLimitBytes, native, route.id), transport.toolName);
+        completion.model = route.id;
+        audit.trafficType = trafficType(completion.usage);
+        if (transport.toolName) audit.restored = completion.router_anti_truncation.restored;
+        audit.finishReason = completion.choices[0]?.finish_reason ?? null;
+        return completion;
+      };
       if (stream) {
         if (buffered) {
-          const completion = restoreAntiTruncationCompletion(await readCompletion(upstream, config.bodyLimitBytes, native, route.id), transport.toolName);
-          completion.model = route.id;
-          audit.trafficType = completion.usage?.traffic_type ?? completion.usage?.extra_properties?.google?.traffic_type;
-          audit.restored = completion.router_anti_truncation.restored;
-          audit.finishReason = completion.choices[0]?.finish_reason ?? null;
-          upstream = completionStream(completion, payload.stream_options?.include_usage === true);
+          upstream = completionStream(await readReply(upstream), payload.stream_options?.include_usage === true);
         } else {
           if (transport.nativeStreaming) upstream = wrapNativeTextStream(upstream, transport.toolName, route.id);
           else if (native) upstream = wrapNativeStream(upstream, route.id, usage => { audit.trafficType = usage?.traffic_type; });
@@ -209,11 +215,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         response.end();
         if (buffered) audit.streamDone = true;
       } else {
-        const completion = restoreAntiTruncationCompletion(await readCompletion(upstream, config.bodyLimitBytes, native, route.id), transport.toolName);
-        completion.model = route.id;
-        audit.trafficType = completion.usage?.traffic_type ?? completion.usage?.extra_properties?.google?.traffic_type;
-        if (transport.toolName) audit.restored = completion.router_anti_truncation.restored;
-        audit.finishReason = completion.choices[0]?.finish_reason ?? null;
+        const completion = await readReply(upstream);
         const inspected = inspectCompletion(completion);
         integrity = inspected.integrity;
         if (!inspected.valid) throw new Problem(502, inspected.reason);
