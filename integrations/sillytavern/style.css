@@ -1,0 +1,19 @@
+#vertex_anti_truncation_settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--SmartThemeBorderColor);
+}
+#vertex_anti_truncation_settings small { line-height: 1.5; overflow-wrap: anywhere; }
+#vertex_anti_truncation_settings .menu_button {
+  align-self: flex-start;
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 36px;
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+#vertex_anti_truncation_settings select:focus-visible,
+#vertex_anti_truncation_settings button:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: 2px; }

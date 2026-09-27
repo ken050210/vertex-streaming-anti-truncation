@@ -1,5 +1,9 @@
 # Vertex Streaming Anti-Truncation
 
+A paired SillyTavern UI extension and server plugin can also add the transport selector directly to the existing Google Vertex AI connection panel. It reuses Tavern credentials and runs inside the Tavern process. Disabled by default; see the [installation and validation guide (Chinese)](docs/SILLYTAVERN.md).
+
+In Tavern's **Install extension** dialog, paste `https://github.com/ken050210/vertex-streaming-anti-truncation` and leave the branch blank. **The server companion is also required:** run `node plugins.js install https://github.com/ken050210/vertex-streaming-anti-truncation` from the SillyTavern root, enable `enableServerPlugins`, then restart Tavern. Installing the UI alone is insufficient. Do not install a second copy over an existing manual installation; follow the migration notes in the guide.
+
 [中文](README.md) | English
 
 A local gateway for Vertex AI / Gemini with a model library and optional text-tool transport. Save normal, buffered anti-truncation and streaming anti-truncation aliases for each upstream model, then select them from SillyTavern's custom OpenAI connection.

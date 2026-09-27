@@ -4,6 +4,7 @@
   "private": true,
   "description": "Experimental Vertex Gemini text-tool gateway with progressive native function-argument streaming.",
   "type": "module",
+  "main": "integrations/sillytavern/server.mjs",
   "license": "MIT",
   "author": "ken050210",
   "repository": {
@@ -20,7 +21,8 @@
     "check": "node scripts/check.mjs",
     "test": "node --test",
     "verify": "npm run check && npm test",
-    "smoke": "node --env-file-if-exists=.env scripts/smoke.mjs"
+    "smoke": "node --env-file-if-exists=.env scripts/smoke.mjs",
+    "package:sillytavern": "node scripts/package-sillytavern.mjs"
   },
   "exports": {
     ".": "./src/gateway.mjs",

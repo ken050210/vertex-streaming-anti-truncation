@@ -1,0 +1,11 @@
+{
+  "display_name": "Vertex AI 抗截断",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "js": "integrations/sillytavern/index.js",
+  "css": "integrations/sillytavern/style.css",
+  "author": "ken050210",
+  "version": "0.1.0",
+  "homePage": "https://github.com/ken050210/vertex-streaming-anti-truncation"
+}
