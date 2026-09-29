@@ -154,6 +154,44 @@ test("malformed, prematurely closed and empty native streams cannot report succe
   assert.ok(!events(text).some(event => event.candidates?.[0]?.finishReason === "STOP"));
 });
 
+test("both streaming modes preserve native reasoning usage and exact finish codes", async () => {
+  const usageMetadata = { promptTokenCount: 10, candidatesTokenCount: 5, thoughtsTokenCount: 7,
+    totalTokenCount: 22, cachedContentTokenCount: 3, trafficType: "ON_DEMAND_FLEX",
+    candidatesTokensDetails: [{ modality: "TEXT", tokenCount: 5 }] };
+  for (const mode of ["streaming", "buffered"]) {
+    const prepared = prepareSillyTavernRequest(request({ vertex_anti_truncation: mode }), adapters);
+    const raw = { candidates: [{ content: { parts: [{ text: "已有正文" }] }, finishReason: "RECITATION" }], usageMetadata };
+    const upstream = mode === "streaming" ? new Response(sseData(raw)) : Response.json(raw);
+    const restored = await restoreSillyTavernResponse(upstream, prepared);
+    const result = events(await restored.text());
+    assert.equal(contents(result.map(sseData).join("")), "已有正文");
+    assert.ok(result.some(event => event.candidates?.[0]?.finishReason === "RECITATION"));
+    const usage = result.find(event => event.usageMetadata);
+    assert.deepEqual(usage.usageMetadata, usageMetadata);
+    assert.equal(usage.usage.completion_tokens, 12);
+  }
+});
+
+test("a native parsing failure before output returns a JSON HTTP error", async t => {
+  const handler = createGenerateHandler(adapters, { fetchImpl: async () => new Response("data: malformed\n\n") });
+  const server = http.createServer(async (req, res) => {
+    req.body = structuredClone(body); req.user = { directories: {} };
+    res.status = value => { res.statusCode = value; return res; };
+    res.json = value => {
+      // Express preserves a Content-Type that was already set by the handler.
+      if (!res.hasHeader("content-type")) res.setHeader("content-type", "application/json; charset=utf-8");
+      res.end(JSON.stringify(value));
+    };
+    await handler(req, res);
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const response = await fetch(`http://127.0.0.1:${server.address().port}`);
+  assert.equal(response.status, 502);
+  assert.match(response.headers.get("content-type"), /^application\/json/);
+  assert.equal((await response.json()).error.code, "anti_truncation_native_invalid_sse");
+});
+
 test("server handler uses one mock upstream request and returns readable native SSE", async t => {
   let calls = 0;
   const handler = createGenerateHandler(adapters, { fetchImpl: async (url, init) => {

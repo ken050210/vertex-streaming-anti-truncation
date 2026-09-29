@@ -66,7 +66,7 @@ function nativeUsage(usage) {
 
 // Vertex's ST streaming reader expects native candidates[].content.parts, while
 // its non-streaming reader expects choices[] plus responseContent. Match both.
-export function toSillyTavernStream(response) {
+export function toSillyTavernStream(response, getNativeUsage = () => undefined) {
   return transformSse(response, ({ data }, emit) => {
     if (!data) return;
     if (data.trim() === "[DONE]") return emit(sseData("[DONE]"));
@@ -80,10 +80,10 @@ export function toSillyTavernStream(response) {
       if (delta.reasoning_content) parts.push({ thought: true, text: delta.reasoning_content });
       if (delta.content) parts.push({ text: delta.content });
       const candidate = { index: choice.index ?? 0, content: { role: "model", parts } };
-      if (choice.finish_reason != null) candidate.finishReason = finishReasons[choice.finish_reason] ?? "OTHER";
+      if (choice.finish_reason != null) candidate.finishReason = choice.native_finish_reason ?? finishReasons[choice.finish_reason] ?? "OTHER";
       output.candidates.push(candidate);
     }
-    if (parsed.usage) { output.usage = parsed.usage; output.usageMetadata = nativeUsage(parsed.usage); }
+    if (parsed.usage) { output.usage = parsed.usage; output.usageMetadata = getNativeUsage() ?? nativeUsage(parsed.usage); }
     if (parsed.router_anti_truncation) output.vertexAntiTruncation = parsed.router_anti_truncation;
     emit(sseData(output));
   });
@@ -108,9 +108,10 @@ export async function restoreSillyTavernResponse(upstream, prepared) {
   }
   if (prepared.upstreamStream) {
     if (!upstream.body) throw protocolError("empty_upstream_stream");
-    const translated = wrapNativeTextStream(upstream, prepared.toolName, prepared.model);
+    let usageMetadata;
+    const translated = wrapNativeTextStream(upstream, prepared.toolName, prepared.model, usage => { usageMetadata = usage; });
     const restored = wrapAntiTruncationStream(translated, prepared.toolName);
-    return toSillyTavernStream(guardCompletionStream(restored, () => {}, null, BODY_LIMIT));
+    return toSillyTavernStream(guardCompletionStream(restored, () => {}, null, BODY_LIMIT), () => usageMetadata);
   }
   const raw = await readJson(upstream);
   if (raw.candidates?.length > 1) throw protocolError("unexpected_candidates");
@@ -122,7 +123,7 @@ export async function restoreSillyTavernResponse(upstream, prepared) {
   if (!restored.valid) throw protocolError(restored.reason);
   const message = completion.choices[0].message;
   if (message.tool_calls?.length) throw protocolError("unexpected_restored_tool");
-  if (prepared.stream) return toSillyTavernStream(guardCompletionStream(completionStream(completion, true), () => {}, null, BODY_LIMIT));
+  if (prepared.stream) return toSillyTavernStream(guardCompletionStream(completionStream(completion, true), () => {}, null, BODY_LIMIT), () => raw.usageMetadata);
   const parts = [];
   if (message.reasoning_content) parts.push({ thought: true, text: message.reasoning_content });
   if (message.content) parts.push({ text: message.content });

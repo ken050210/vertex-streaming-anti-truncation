@@ -72,7 +72,10 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
         stage === "authentication" ? "Vertex 鉴权失败，请检查已保存的凭据。" : "Vertex 抗截断请求失败。";
       const payload = { error: { code, message: `${detail} (${code}, HTTP ${status})` } };
       if (response.headersSent) { response.write(sseData(payload)); response.end(); }
-      else response.status(status).json(payload);
+      else {
+        response.setHeader("content-type", "application/json; charset=utf-8");
+        response.status(status).json(payload);
+      }
     } finally { response.off("close", close); }
   };
 }

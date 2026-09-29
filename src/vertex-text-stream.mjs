@@ -6,7 +6,7 @@ const fail = suffix => { throw protocolError("anti_truncation_native_" + suffix)
 
 // Convert the native partialArgs for our one owned string into valid, incremental
 // OpenAI tool JSON. The existing restorer then handles it just like a stable call.
-export function wrapNativeTextStream(response, toolName, model) {
+export function wrapNativeTextStream(response, toolName, model, onNativeUsage = () => {}) {
   if (!response.ok || !response.body) return response;
   const id = "chatcmpl-" + randomUUID(), created = Math.floor(Date.now() / 1000);
   let started = false, stringStarted = false, stringClosed = false, callClosed = false;
@@ -47,7 +47,10 @@ export function wrapNativeTextStream(response, toolName, model) {
     try { parsed = JSON.parse(data); } catch { fail("invalid_sse"); }
     if (parsed.error) { failed = true; emit(sseData(parsed)); return; }
     if (failed) return;
-    if (parsed.usageMetadata) usage = translateUsage(parsed.usageMetadata);
+    if (parsed.usageMetadata) {
+      onNativeUsage(parsed.usageMetadata);
+      usage = translateUsage(parsed.usageMetadata);
+    }
     if (parsed.candidates?.length > 1) fail("multiple_candidates");
     const candidate = parsed.candidates?.[0];
     for (const part of candidate?.content?.parts ?? []) {
