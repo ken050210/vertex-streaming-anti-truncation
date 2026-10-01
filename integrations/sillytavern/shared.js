@@ -17,7 +17,8 @@ export function bypassReason(body, mode) {
   if (body.enable_web_search) return "web-search";
   if (body.request_images) return "image-generation";
   if (Array.isArray(body.messages) && body.messages.some(message => message?.role === "tool" || message?.role === "function" ||
-      message?.tool_calls?.length || message?.function_call)) return "tool-history";
+      message?.tool_calls?.length || message?.function_call || message?.tool_call_id ||
+      (Array.isArray(message?.content) && message.content.some(part => part?.type === "tool_calls" || part?.type === "tool_call_id")))) return "tool-history";
   return null;
 }
 

@@ -23,13 +23,14 @@ function candidateMessage(candidate) {
 export function translateNativeCompletion(native, model) {
   if (!isObject(native) || native.error) throw protocolError("invalid_native_completion");
   let candidates = native.candidates;
-  if (!candidates?.length && native.promptFeedback?.blockReason) candidates = [{ finishReason: "SAFETY" }];
+  const promptBlockReason = !candidates?.length && native.promptFeedback?.blockReason;
+  if (promptBlockReason) candidates = [{ finishReason: "SAFETY" }];
   if (!Array.isArray(candidates) || !candidates.length) throw protocolError("invalid_native_completion");
   return { id: "chatcmpl-" + randomUUID(), object: "chat.completion", created: Math.floor(Date.now() / 1000), model,
     choices: candidates.map((c, i) => {
       const message = candidateMessage(c);
       if (!c.finishReason) throw protocolError("incomplete_native_completion");
-      return { index: c.index ?? i, message, finish_reason: mapFinishReason(c.finishReason, Boolean(message.tool_calls)), native_finish_reason: c.finishReason };
+      return { index: c.index ?? i, message, finish_reason: mapFinishReason(c.finishReason, Boolean(message.tool_calls)), native_finish_reason: promptBlockReason || c.finishReason };
     }), usage: translateUsage(native.usageMetadata) };
 }
 
@@ -44,7 +45,8 @@ export function wrapNativeStream(response, model, onUsage = () => {}) {
     const parsed = JSON.parse(data);
     if (parsed.error) throw protocolError("native_stream_error");
     if (parsed.usageMetadata) { usage = translateUsage(parsed.usageMetadata); onUsage(usage); }
-    const candidates = parsed.candidates ?? (parsed.promptFeedback?.blockReason ? [{ finishReason: "SAFETY" }] : []);
+    const promptBlockReason = !parsed.candidates?.length && parsed.promptFeedback?.blockReason;
+    const candidates = promptBlockReason ? [{ finishReason: "SAFETY" }] : (parsed.candidates ?? []);
     for (const candidate of candidates) {
       const index = candidate.index ?? 0;
       const state = states.get(index) || { done: false, tools: 0 };
@@ -53,7 +55,8 @@ export function wrapNativeStream(response, model, onUsage = () => {}) {
       const delta = { ...message };
       if (message.tool_calls) delta.tool_calls = message.tool_calls.map(call => ({ ...call, index: state.tools++ }));
       const reason = candidate.finishReason ? mapFinishReason(candidate.finishReason, state.tools > 0) : null;
-      emit(sseData({ id, object: "chat.completion.chunk", created, model, choices: [{ index, delta, finish_reason: reason }] }));
+      emit(sseData({ id, object: "chat.completion.chunk", created, model, choices: [{ index, delta, finish_reason: reason,
+        ...(candidate.finishReason ? { native_finish_reason: promptBlockReason || candidate.finishReason } : {}) }] }));
       state.done = Boolean(reason); states.set(index, state);
     }
   }, emit => {

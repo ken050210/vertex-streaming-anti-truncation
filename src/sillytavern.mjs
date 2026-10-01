@@ -24,6 +24,10 @@ export function prepareSillyTavernRequest(request, adapters) {
   const bypass = bypassReason(body, mode);
   if (bypass) throw requestError("unsupported_request_" + bypass.replaceAll("-", "_"));
   let messages = structuredClone(body.messages);
+  // ST's Google converter only recognizes system/user/assistant roles. Keep
+  // developer instructions at the same priority instead of sending an invalid
+  // native `developer` role or letting prompt post-processing demote it.
+  for (const message of messages) if (message.role === "developer") message.role = "system";
   if (body.custom_prompt_post_processing) {
     messages = adapters.postProcessPrompt(messages, body.custom_prompt_post_processing, adapters.getPromptNames(request));
   }

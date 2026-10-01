@@ -5,6 +5,7 @@ import { parseServiceAccount } from "../../src/vertex-auth.mjs";
 import { upstreamDispatcher } from "../../src/gateway.mjs";
 import { prepareSillyTavernRequest, restoreSillyTavernResponse, requestError } from "../../src/sillytavern.mjs";
 import { sseData } from "../../src/wire.mjs";
+import { waitWithSignal } from "../../src/abort.mjs";
 import { PLUGIN_ID, PLUGIN_VERSION } from "./shared.js";
 
 export const info = { id: PLUGIN_ID, name: "Vertex AI Anti-Truncation", description: "Native Vertex text transport using SillyTavern's saved credentials." };
@@ -42,14 +43,16 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       stage = "configuration";
       const config = connectionForRequest(request, adapters);
       stage = "authentication";
-      const credential = await config.accessToken();
+      const credential = await waitWithSignal(() => config.accessToken(), signal);
       signal.throwIfAborted();
       const headers = { ...config.tierHeaders, "content-type": "application/json",
         ...(config.authMode === "express" ? { "x-goog-api-key": credential } : { authorization: `Bearer ${credential}` }) };
       stage = "upstream";
+      const dispatcher = await waitWithSignal(() => upstreamDispatcher(timeoutMs), signal);
+      signal.throwIfAborted();
       const upstream = await fetchImpl(buildNativeUrl(config.baseUrl, prepared.model, prepared.upstreamStream), {
         method: "POST", headers, body: JSON.stringify(prepared.body), signal, redirect: "error",
-        dispatcher: await upstreamDispatcher(timeoutMs),
+        dispatcher,
       });
       stage = "restoration";
       const restored = await restoreSillyTavernResponse(upstream, prepared);

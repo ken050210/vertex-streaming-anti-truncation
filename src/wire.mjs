@@ -18,9 +18,12 @@ export function createSseParser(onEvent, maxChars = 2 * 1024 * 1024) {
     const event = lines.find(line => line.startsWith("event:"))?.slice(6).trim();
     onEvent({ raw, lines, data, event });
   };
-  const drain = () => {
+  const drain = (final = false) => {
     let boundary;
-    while ((boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffer))) {
+    // Each line may end with CRLF, CR or LF, including mixed line endings.
+    // Never split a CRLF into two lines, even across incoming byte chunks.
+    while ((boundary = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/.exec(buffer))) {
+      if (!final && boundary[0].endsWith("\r") && boundary.index + boundary[0].length === buffer.length) break;
       if (boundary.index > maxChars) throw protocolError("sse_event_limit");
       parse(buffer.slice(0, boundary.index));
       buffer = buffer.slice(boundary.index + boundary[0].length);
@@ -29,7 +32,7 @@ export function createSseParser(onEvent, maxChars = 2 * 1024 * 1024) {
   };
   return {
     push(bytes) { buffer += decoder.decode(bytes, { stream: true }); drain(); },
-    finish() { buffer += decoder.decode(); drain(); if (buffer.trim()) parse(buffer); buffer = ""; },
+    finish() { buffer += decoder.decode(); drain(true); if (buffer.trim()) parse(buffer); buffer = ""; },
   };
 }
 

@@ -34,6 +34,7 @@ export function mergeSettings(current, patch, { connectionOnly = false } = {}) {
 export function createSettingsStore({ directory = process.env.GATEWAY_STATE_DIR || join(homedir(), ".vertex-streaming-anti-truncation"), env = process.env } = {}) {
   const file = join(directory, "settings.json");
   const lock = join(directory, "settings.lock");
+  const recoveryLock = lock + ".recovery";
   async function load() {
     let raw;
     try { raw = await readFile(file, "utf8"); }
@@ -54,11 +55,31 @@ export function createSettingsStore({ directory = process.env.GATEWAY_STATE_DIR 
     catch (error) { if (error.code !== "EEXIST") throw new SettingsError("Cannot lock configuration", 409); }
     // A save holds the lock for milliseconds. An older lock was left by a process
     // that exited mid-save and would otherwise block every later save.
-    const age = await stat(lock).then(info => Date.now() - info.mtimeMs, () => Infinity);
-    if (age < 60000) throw new SettingsError("Configuration is being edited by another process", 409);
-    await unlink(lock).catch(() => {});
-    try { return await open(lock, "wx", 0o600); }
+    // Serialize recovery itself: two readers of the same stale lock must not
+    // unlink a fresh lock created by the other recovery attempt. Recheck its age
+    // while owning the recovery marker, including when a normal save won first.
+    let recovery;
+    try { recovery = await open(recoveryLock, "wx", 0o600); }
     catch { throw new SettingsError("Configuration is being edited by another process", 409); }
+    try {
+      const age = await stat(lock).then(info => Date.now() - info.mtimeMs, error => {
+        if (error.code === "ENOENT") return null;
+        throw new SettingsError("Cannot lock configuration", 409);
+      });
+      if (age !== null) {
+        if (age < 60000) throw new SettingsError("Configuration is being edited by another process", 409);
+        await unlink(lock).catch(error => {
+          if (error.code !== "ENOENT") throw new SettingsError("Cannot lock configuration", 409);
+        });
+      }
+      try { return await open(lock, "wx", 0o600); }
+      catch { throw new SettingsError("Configuration is being edited by another process", 409); }
+    } finally {
+      // Never steal an existing recovery marker by age: doing so would recreate
+      // the same race. Interrupted recovery fails closed until its marker is removed.
+      await recovery.close();
+      await unlink(recoveryLock);
+    }
   }
   async function save(settings, revision) {
     buildConfig(settings);

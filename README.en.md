@@ -84,6 +84,8 @@ The console includes light/dark themes, responsive layout, overview, connection 
 
 Settings are stored as plaintext in `~/.vertex-streaming-anti-truncation/settings.json`, outside the repository. Keep this directory private. Override it with `GATEWAY_STATE_DIR`; change the console port with `GUI_PORT` (default `4780`). The API port defaults to `4781`. Saves use revision checks and atomic replacement. Restarting the console loads saved settings and starts the gateway. Saved GUI settings take precedence over `.env`; an existing `.env` can initialize an unsaved setup. Secrets are never stored in browser storage or returned by configuration APIs.
 
+If the process exits while recovering an expired configuration lock, a `settings.lock.recovery` marker may remain in the state directory and keep saves reporting another editor. Stop all console and configuration-writing processes, back up `settings.json`, then verify the filename and remove only `settings.lock.recovery` before restarting. Preserve the configuration file and the rest of the state directory.
+
 ### Model library and variants
 
 Enter credentials under **连接配置**, then open **模型与版本** and click **拉取 Model List**. Discovery uses the current connection form plus saved credentials, without starting inference or saving the draft. Search and select multiple models, check the variants to add, then click **保存全部配置** to save both connection and model drafts. Refresh the model list in your client afterwards.

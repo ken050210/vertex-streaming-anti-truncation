@@ -42,7 +42,11 @@ test("SillyTavern intercept is scoped, preserves CSRF/cancellation, and never re
   assert.strictEqual(calls[0][1].signal, controller.signal);
   assert.strictEqual(calls[0][1].headers, init.headers);
   for (const patch of [{ tools: [{}] }, { json_schema: { value: {} } }, { enable_web_search: true }, { request_images: true },
-    { messages: [{ role: "tool", content: "result" }] }, { n: 2 }, { reverse_proxy: "https://example.invalid" }, { chat_completion_source: "custom" }]) {
+    { messages: [{ role: "tool", content: "result" }] },
+    { messages: [{ role: "assistant", content: [{ type: "tool_calls", tool_calls: [{ function: { name: "lookup", arguments: "{}" } }] }] }] },
+    { messages: [{ role: "user", content: [{ type: "tool_call_id", tool_call_id: "call-1", content: "result" }] }] },
+    { messages: [{ role: "user", tool_call_id: "call-1", content: "result" }] },
+    { n: 2 }, { reverse_proxy: "https://example.invalid" }, { chat_completion_source: "custom" }]) {
     const input = { ...init, body: JSON.stringify({ ...body, ...patch }) };
     await wrapped(GENERATE_PATH, input);
     assert.equal(calls.at(-1)[0], GENERATE_PATH);
@@ -80,6 +84,45 @@ test("SillyTavern preserves prompt conversion and parameters without modifying t
     assert.equal(type, "strict"); processed = true; return messages;
   } });
   assert.ok(processed);
+});
+
+test("developer instructions remain system instructions through ST prompt processing", () => {
+  const input = request({ messages: [{ role: "developer", content: "Follow this instruction." }, { role: "user", content: "Hello" }],
+    custom_prompt_post_processing: "merge" });
+  const original = structuredClone(input);
+  let processed = false;
+  const prepared = prepareSillyTavernRequest(input, { ...adapters,
+    postProcessPrompt(messages) {
+      assert.equal(messages[0].role, "system");
+      processed = true;
+      return messages;
+    },
+    convertGooglePrompt(messages, model, useSystemPrompt) {
+      assert.ok(useSystemPrompt);
+      // Like ST, the Google converter only extracts a leading system role.
+      const instructions = [];
+      while (messages[0]?.role === "system") instructions.push({ text: messages.shift().content });
+      return { system_instruction: { parts: instructions }, contents: messages.map(message => ({
+        role: message.role === "assistant" ? "model" : message.role, parts: [{ text: message.content }],
+      })) };
+    },
+  });
+  assert.ok(processed);
+  assert.deepEqual(prepared.body.systemInstruction, { parts: [{ text: "Follow this instruction." }] });
+  assert.ok(prepared.body.contents.every(message => ["user", "model"].includes(message.role)));
+  assert.deepEqual(input, original);
+});
+
+test("embedded ST tool history is rejected before prompt conversion or transport injection", () => {
+  for (const messages of [
+    [{ role: "assistant", content: [{ type: "tool_calls", tool_calls: [{ function: { name: "lookup", arguments: "{}" } }] }] }],
+    [{ role: "user", content: [{ type: "tool_call_id", tool_call_id: "call-1", content: "result" }] }],
+    [{ role: "user", tool_call_id: "call-1", content: "result" }],
+  ]) {
+    assert.throws(() => prepareSillyTavernRequest(request({ messages }), { ...adapters,
+      convertGooglePrompt() { assert.fail("tool history must bypass conversion"); },
+    }), { code: "unsupported_request_tool_history", status: 400 });
+  }
 });
 
 test("SillyTavern credentials stay per-user and selected secret; destinations cannot be overridden", () => {

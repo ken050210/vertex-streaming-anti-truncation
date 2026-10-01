@@ -1,4 +1,5 @@
 import { normalizeUpstreamModel } from "./model-profiles.mjs";
+import { waitWithSignal } from "./abort.mjs";
 
 class DiscoveryError extends Error {
   constructor(message, status = 502) { super(message); this.status = status; }
@@ -12,14 +13,15 @@ export async function discoverModels(config, { fetchImpl = fetch, signal } = {})
   const host = config.location === "global" ? "aiplatform.googleapis.com" : `${config.location}-aiplatform.googleapis.com`;
   const base = `https://${host}/v1beta1/publishers/google/models`;
   let credential;
-  try { credential = await config.accessToken(); }
+  try { credential = await waitWithSignal(() => config.accessToken(), requestSignal); }
   // A provider authentication failure is not an expired local console session.
-  catch { throw new DiscoveryError("Model list authentication failed; check the selected credentials"); }
+  catch { throw new DiscoveryError(requestSignal.aborted ? "Model listing was cancelled or timed out" : "Model list authentication failed; check the selected credentials"); }
   const headers = config.authMode === "express" ? { "x-goog-api-key": credential } : { authorization: "Bearer " + credential };
   const models = new Map(), seenTokens = new Set();
   let pageToken = "";
   try {
     for (let page = 0; page < 20; page++) {
+      requestSignal.throwIfAborted();
       const url = new URL(base);
       url.searchParams.set("pageSize", "100");
       url.searchParams.set("listAllVersions", "true");
