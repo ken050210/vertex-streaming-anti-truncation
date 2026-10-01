@@ -7,6 +7,8 @@
   border-top: 1px solid var(--SmartThemeBorderColor);
 }
 #vertex_anti_truncation_settings small { line-height: 1.5; overflow-wrap: anywhere; }
+#vertex_anti_truncation_settings small[hidden],
+#vertexai_form .toggle-description:has(> [data-i18n="vertexai_service_tier_desc"]) { display: none; }
 #vertex_anti_truncation_settings .menu_button {
   align-self: flex-start;
   flex: 0 0 auto;
