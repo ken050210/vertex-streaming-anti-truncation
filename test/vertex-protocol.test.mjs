@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { translateNativeCompletion, wrapNativeStream } from "../src/vertex-protocol.mjs";
+import { wrapNativeTextStream } from "../src/vertex-text-stream.mjs";
 import { guardCompletionStream, inspectCompletion } from "../src/completion-integrity.mjs";
 
 const sse = value => "data: " + JSON.stringify(value) + "\n\n";
@@ -8,7 +9,7 @@ const records = wire => wire.split("\n").filter(line => line.startsWith("data:")
   .map(line => JSON.parse(line.slice(5)));
 
 test("native prompt blocks retain original codes without exposing rejection text", async () => {
-  for (const blockReason of ["BLOCKLIST", "PROHIBITED_CONTENT", "OTHER"]) {
+  for (const blockReason of ["BLOCKLIST", "PROHIBITED_CONTENT", "OTHER", "JAILBREAK"]) {
     for (const candidates of [undefined, []]) {
       const native = { candidates, promptFeedback: { blockReason, blockReasonMessage: "private provider detail" } };
       const completion = translateNativeCompletion(native, "fixture");
@@ -23,6 +24,12 @@ test("native prompt blocks retain original codes without exposing rejection text
       assert.equal(choice.native_finish_reason, blockReason);
       assert.match(wire, /\[DONE\]/);
       assert.equal(wire.includes("private provider detail"), false);
+
+      const text = await guardCompletionStream(wrapNativeTextStream(new Response(sse(native)), "router_emit_fixture", "fixture")).text();
+      const textChoice = records(text).flatMap(record => record.choices).find(item => item.finish_reason);
+      assert.equal(textChoice.finish_reason, "content_filter");
+      assert.equal(textChoice.native_finish_reason, blockReason);
+      assert.equal(text.includes("private provider detail"), false);
     }
   }
 });

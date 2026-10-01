@@ -58,12 +58,14 @@ export function wrapNativeTextStream(response, toolName, model, onNativeUsage = 
       if (part.functionCall) call(emit, part.functionCall);
       if (part.text) chunk(emit, part.thought === true ? { reasoning_content: part.text } : { content: part.text });
     }
-    const reason = candidate?.finishReason ?? parsed.promptFeedback?.blockReason;
+    // Any prompt block is a content filter, whatever its code (OTHER, JAILBREAK...).
+    const blockReason = !parsed.candidates?.length && parsed.promptFeedback?.blockReason;
+    const reason = candidate?.finishReason ?? blockReason;
     if (reason) {
       if (terminal) fail("duplicate_finish");
       if (reason === "STOP" && started && !callClosed) fail("incomplete_args");
       terminal = true;
-      chunk(emit, {}, mapFinishReason(reason, started), reason);
+      chunk(emit, {}, mapFinishReason(blockReason ? "SAFETY" : reason, started), reason);
     }
   }, emit => {
     if (failed) return;
