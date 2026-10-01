@@ -128,6 +128,9 @@ test("model discovery cancellation during authentication cannot fetch the catalo
 });
 
 test("SillyTavern authentication respects deadline and disconnect before starting inference", { timeout: 5000 }, async t => {
+  // AbortSignal.timeout does not keep the event loop alive; SillyTavern's HTTP server does.
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
   for (const disconnect of [false, true]) {
     const credential = deferred(), started = deferred();
     const serviceAccount = JSON.stringify({ type: "service_account", project_id: "example-project",
