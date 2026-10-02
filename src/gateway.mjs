@@ -1,3 +1,4 @@
+import { prepareUnicodeInput, unicodeInputLogFields } from "./unicode-input.mjs";
 import { guardCompletionStream, inspectCompletion, integrityLogFields } from "./completion-integrity.mjs";
 import { assertStructuredOutput, structuredOutputExpectation } from "./vertex-schema.mjs";
 import http from "node:http";
@@ -142,6 +143,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     const onClose = () => { if (!response.writableEnded) client.abort(); };
     response.once("close", onClose);
     request.once("aborted", onClose);
+    let unicode = null;
     let stream = false, audit = null, integrity = null, status = 500, code = null, route, droppedParams = [];
     const compatibility = { prefillConverted: false, promptRetried: false };
     try {
@@ -150,6 +152,14 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       route = models.find(model => model.id === payload.model);
       if (!route) throw new Problem(400, "unsupported_model");
       if (route.enabled === false) throw new Problem(503, "model_disabled");
+      try {
+        const prepared = prepareUnicodeInput(payload, config.unicodeInput === true, config.bodyLimitBytes);
+        payload = prepared.payload; unicode = prepared.metadata;
+      } catch (error) {
+        if (["unicode_floor_required", "unicode_input_too_large"].includes(error.code)) throw new Problem(error.status, error.code);
+        throw error;
+      }
+      response.setHeader("x-unicode-input", unicode?.reason || "disabled");
       stream = payload.stream === true;
       const prefill = convertGeminiPrefill(payload, route.upstreamModel, config.geminiPrefillToUser !== false);
       payload = prefill.payload; compatibility.prefillConverted = prefill.converted;
@@ -268,7 +278,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         model: route?.id || null, upstreamModel: route?.upstreamModel || null, mode: route?.mode || null, stream, status, latencyMs: Date.now() - started,
         serviceTier: config.serviceTier || "standard",
         trafficType: ["ON_DEMAND", "ON_DEMAND_FLEX", "ON_DEMAND_PRIORITY", "PROVISIONED_THROUGHPUT"].includes(audit?.trafficType) ? audit.trafficType : null,
-        ...antiTruncationLogFields(audit), ...integrityLogFields(integrity), ...compatibilityLogFields(compatibility),
+        ...unicodeInputLogFields(unicode), ...antiTruncationLogFields(audit), ...integrityLogFields(integrity), ...compatibilityLogFields(compatibility),
         ...(droppedParams.length ? { droppedParams } : {}), ...(code ? { code } : {}) };
       events.push(event);
       if (events.length > 200) events.shift();

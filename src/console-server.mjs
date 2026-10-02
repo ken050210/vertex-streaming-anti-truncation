@@ -49,7 +49,7 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), models: activeConfig?.models || [],
       modelAvailability: gateway?.modelAvailability() || [],
       active: activeConfig ? { port: activeConfig.port, projectId: activeConfig.projectId, location: activeConfig.location, authMode: activeConfig.authMode,
-        serviceTier: activeConfig.serviceTier, antiTruncation: activeConfig.antiTruncation,
+        unicodeInput: activeConfig.unicodeInput, serviceTier: activeConfig.serviceTier, antiTruncation: activeConfig.antiTruncation,
         geminiPromptRetryEnabled: activeConfig.geminiPromptRetry.enabled } : null,
       requests: events.length, successes: events.filter(e => e.status >= 200 && e.status < 300).length,
       restored: events.filter(e => e.antiTruncation?.restored === true).length,
@@ -155,7 +155,7 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
           const upstream = await fetch(`http://127.0.0.1:${activeConfig.port}/v1/chat/completions`, {
             method: "POST", signal,
             headers: { authorization: "Bearer " + activeConfig.gatewayKey, "content-type": "application/json" },
-            body: JSON.stringify({ model, messages: [{ role: "user", content: "Write three short lines about a river." }], max_tokens: 512, stream: body.stream === true,
+            body: JSON.stringify({ model, router_unicode_input: { user_floor: "Write three short lines about a river." }, messages: [{ role: "user", content: "Write three short lines about a river." }], max_tokens: 512, stream: body.stream === true,
               ...(body.stream === true ? { stream_options: { include_usage: true } } : {}) }),
           });
           res.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type"),

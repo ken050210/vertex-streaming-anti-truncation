@@ -229,3 +229,23 @@ npm run smoke -- --live
 烟测默认使用已保存的 GUI 配置，没有保存配置时使用环境变量；仅命令行服务可加 `--env` 强制使用 `.env`。默认测试第一个流式抗截断版本，也可加 `--model 你的模型名称` 指定；正常和非流式版本可在 GUI 测试页验证。
 
 默认测试使用本地模拟数据，不需要真实凭据，也不产生推理费用。烟测会统计正文到达次数和时间跨度，并用响应请求 ID 核对日志。验证范围见 [docs/VALIDATION.md](docs/VALIDATION.md)。
+
+## Unicode 输入转码（本地新增）
+
+网关设置中的 **Unicode 输入转码（所有模型）** 是独立总开关，默认关闭；保存并应用后作用于所有模型的后续请求，包括普通、非流式抗截断和流式抗截断。CLI 环境变量为 `UNICODE_INPUT=false|true`。它不改变模型列表或各模型的抗截断模式。
+
+启用时客户端必须提供最新真实用户楼层原文：
+
+```json
+{"router_unicode_input":{"user_floor":"最新真实用户楼层原文"}}
+```
+
+只对消息文本中的原文、去除首尾空白、归一换行版本做匹配（不依赖 role）。汉字与 ASCII 字母编码为 `⟦U:…⟧`，保留标签、已有编码块、数字、标点和 emoji；不保护 `{{user}}` 内的字母。未匹配就保持原文，绝不扫描整个 JSON 改写工具名、Schema、模型名或图片地址。工具／Schema 只影响输出抗截断旁路，不关闭输入转码。不追加解码指令。
+
+缺少有效原文返回本地 `400 unicode_floor_required`；编码后超过请求体限制返回 `413 unicode_input_too_large`。本地 `router_unicode_input` 字段在关闭状态下也会被剥离，不转发上游。响应头 `x-unicode-input` 报告 disabled、encoded 或跳过原因；日志仅保存固定状态与计数，不保存楼层原文或编码内容。
+
+酒馆以自定义 API 连接本网关时，可导入并启用 [楼层传递脚本](integrations/sillytavern-unicode-floor.json)；[可读源码](integrations/sillytavern-unicode-floor.js) 默认仅匹配 localhost/127.0.0.1/[::1]:4781/v1。更换端口后，在脚本内调整 `gatewayPort`。脚本只提供原文，不决定是否转码；总开关仍在网关。它保留现有 custom body 配置，需要酒馆 `/lib.js` YAML 解析器。停用脚本或刷新即可解除。
+
+使用原生 Vertex 面板插件时，请使用插件自己的独立转码开关，无需这个桥接脚本，详见 [插件说明](docs/SILLYTAVERN.md)。两种连接方式分别由各自开关控制；不是跨进程同步设置。关闭预设中的重复转码，以免原文无法匹配。
+
+转码不是加密，不保证模型理解或改善生成结果，可能增加 token 用量和延迟。本次本地迁入不代表 GitHub 已发布、酒馆已安装或真实模型效果已验证。

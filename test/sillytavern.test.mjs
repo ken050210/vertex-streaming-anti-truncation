@@ -258,3 +258,56 @@ test("server handler uses one mock upstream request and returns readable native 
   assert.equal(contents(await response.text()), "正文😀");
   assert.equal(calls, 1);
 });
+
+test("Unicode transforms before off/tools/schema bypass and retains Request metadata", async () => {
+  const calls = [], statuses = [];
+  let enabled = true, floor = "你好", mode = "off";
+  const original = async (...args) => { calls.push(args); return new Response("OK"); };
+  const wrapped = createFetchInterceptor(original, { origin: "http://localhost", getMode: () => mode,
+    getUnicodeInput: () => enabled, getUserFloor: () => floor, onStatus: s => statuses.push(s) });
+  for (mode of ["off", "buffered", "streaming"]) for (const extra of [{}, { tools: [{ function: { name: floor } }] },
+    { json_schema: { properties: { [floor]: { type: "string" } } } }, { enable_web_search: true }]) {
+    const data = { ...structuredClone(body), ...extra };
+    const controller = new AbortController();
+    const req = new Request("http://localhost" + GENERATE_PATH, { method: "POST", headers: { "x-csrf-token": "fixture" },
+      credentials: "include", signal: controller.signal, body: JSON.stringify(data) });
+    const before = calls.length;
+    await wrapped(req);
+    assert.equal(calls.length, before + 1);
+    assert.equal(req.bodyUsed, false);
+    const posted = calls.at(-1)[0], decoded = await posted.clone().json();
+    assert.equal(posted.url, "http://localhost" + (mode === "off" || Object.keys(extra).length ? GENERATE_PATH : PLUGIN_PATH + "/generate"));
+    assert.equal(decoded.messages[1].content, "⟦U:4F60 597D⟧");
+    assert.deepEqual(data.messages, body.messages);
+    assert.equal(decoded.router_unicode_input, undefined);
+    for (const [key, value] of Object.entries(extra)) assert.deepEqual(decoded[key], value);
+    assert.equal(posted.headers.get("x-csrf-token"), "fixture");
+    assert.equal(posted.credentials, "include");
+    controller.abort(); assert.equal(posted.signal.aborted, true);
+  }
+  mode = "off"; enabled = false;
+  const init = { method: "POST", body: JSON.stringify(body) };
+  await wrapped(GENERATE_PATH, init);
+  assert.equal(calls.at(-1)[1], init);
+  enabled = true; floor = "missing";
+  await wrapped(GENERATE_PATH, init);
+  assert.equal(statuses.at(-1).unicode.reason, "floor-not-found");
+  assert.deepEqual(JSON.parse(calls.at(-1)[1].body), body);
+  const count = calls.length; floor = "";
+  await assert.rejects(wrapped(GENERATE_PATH, init), { code: "unicode_floor_required" });
+  assert.equal(calls.length, count);
+  assert.equal(statuses.at(-1).error, "unicode_floor_required");
+  floor = "A".repeat(3000000);
+  await assert.rejects(wrapped(GENERATE_PATH, { ...init, body: JSON.stringify({ ...body, messages: [{ role: "user", content: floor }] }) }), { code: "unicode_input_too_large" });
+  assert.equal(calls.length, count);
+  await wrapped(GENERATE_PATH, { ...init, body: JSON.stringify({ ...body, chat_completion_source: "custom" }) });
+  assert.equal(calls.length, count + 1);
+});
+
+test("Unicode floor comes from the latest real user, including empty-floor failure", async () => {
+  const { latestUserFloor } = await import("../integrations/sillytavern/shared.js");
+  assert.equal(latestUserFloor([{ is_user: true, mes: "old" }, { is_user: true, mes: "latest" },
+    { is_system: true, is_user: true, mes: "system" }, { is_user: false, mes: "assistant" }]), "latest");
+  assert.equal(latestUserFloor([{ is_user: true, mes: "old" }, { is_user: true, mes: "" }]), "");
+  assert.equal(latestUserFloor(undefined), "");
+});
