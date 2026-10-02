@@ -257,24 +257,3 @@ test("console probes the selected saved profile and rejects unknown aliases befo
   assert.equal(calls.length, 1); assert.match(calls[0].url, /gemini-fixture-b:generateContent$/);
   assert.equal(calls[0].body.generationConfig.maxOutputTokens, 512);
 });
-
-test("Unicode save/apply persists and affects new requests independently of transport", async t => {
-  const f = await fixture(t);
-  let result = await (await f.api("/api/config", { revision: "new", settings: { ...f.settings, unicodeInput: true } })).json();
-  assert.equal(result.settings.unicodeInput, true);
-  assert.equal(f.app.status().active.unicodeInput, true);
-  assert.equal((await f.store.load()).settings.unicodeInput, true);
-  const before = f.requests.length;
-  const response = await fetch(`http://127.0.0.1:${f.settings.port}/v1/chat/completions`, {
-    method: "POST", headers: { authorization: "Bearer " + f.settings.gatewayKey, "content-type": "application/json" },
-    body: JSON.stringify({ model: result.settings.models[0].id, messages: [{ role: "user", content: "missing floor" }] }),
-  });
-  assert.equal(response.status, 400);
-  assert.equal((await response.json()).error.code, "unicode_floor_required");
-  assert.equal(f.requests.length, before);
-  result = await (await f.api("/api/config", { revision: result.revision, settings: { unicodeInput: false } })).json();
-  assert.equal(f.app.status().active.unicodeInput, false);
-  assert.equal((await f.store.load()).settings.unicodeInput, false);
-  await f.api("/api/stop", {}); await f.api("/api/start", {});
-  assert.equal(f.app.status().active.unicodeInput, false);
-});

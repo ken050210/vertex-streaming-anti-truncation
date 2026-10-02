@@ -92,7 +92,7 @@ function draft() {
     gatewayKey: $("gateway-key").value.trim(), serviceAccountJson: $("service-account").value.trim(),
     apiKey: $("api-key").value.trim(), accessToken: $("access-token").value.trim(),
     port: Number($("port").value), timeoutMs: Number($("timeout").value) * 1000, antiTruncation: true, models: state.models.map(m => ({ ...m })),
-    unicodeInput: $("unicode-input").checked, hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
+    hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
     geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
     geminiPromptRetryMatches: retryMatches() };
 }
@@ -142,7 +142,6 @@ function fillConfig() {
   for (const name of ["authMode", "serviceTier"]) document.querySelector(`[name="${name}"][value="${c[name]}"]`).checked = true;
   for (const [id, name] of [["project-id", "projectId"], ["location", "location"], ["port", "port"]]) $(id).value = c[name];
   $("timeout").value = c.timeoutMs / 1000;
-  $("unicode-input").checked = c.unicodeInput === true;
   $("hide-unavailable").checked = c.hideUnavailableModels !== false;
   $("prefill-to-user").checked = c.geminiPrefillToUser !== false;
   $("prompt-retry-enabled").checked = c.geminiPromptRetryEnabled === true;

@@ -83,11 +83,3 @@ test("complete service accounts accept explicit target projects and reject inval
   assert.equal(visible.gatewayKeySet, true);
   for (const secret of [settings.gatewayKey, sa.private_key, sa.client_email]) assert.equal(JSON.stringify(visible).includes(secret), false);
 });
-
-test("Unicode setting defaults off and validates a strict global boolean", async () => {
-  assert.equal((await loadConfig(env)).unicodeInput, false);
-  assert.equal((await loadConfig({ ...env, UNICODE_INPUT: "true" })).unicodeInput, true);
-  await assert.rejects(loadConfig({ ...env, UNICODE_INPUT: "1" }));
-  assert.throws(() => buildConfig({ ...DEFAULT_SETTINGS, unicodeInput: "true", authMode: "access-token", projectId: env.VERTEX_PROJECT_ID,
-    gatewayKey: env.GATEWAY_API_KEY, accessToken: env.VERTEX_ACCESS_TOKEN }), /toggle/);
-});

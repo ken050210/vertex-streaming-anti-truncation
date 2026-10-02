@@ -8,7 +8,7 @@ export { MODEL_ID, UPSTREAM_MODEL };
 export const DEFAULT_SETTINGS = Object.freeze({
   projectId: "", location: "global", authMode: "service-account", serviceTier: "standard",
   port: 4781, timeoutMs: 600000, antiTruncation: true, models: null,
-  hideUnavailableModels: true, geminiPrefillToUser: true, unicodeInput: false,
+  hideUnavailableModels: true, geminiPrefillToUser: true,
   geminiPromptRetryEnabled: false, geminiPromptRetryText: "", geminiPromptRetryMatches: null,
   gatewayKey: "", serviceAccountJson: "", apiKey: "", accessToken: "",
 });
@@ -49,7 +49,6 @@ export async function settingsFromEnv(env = process.env) {
     port: integer(env.PORT, 4781, 1, 65535, "PORT"),
     timeoutMs: integer(env.UPSTREAM_TIMEOUT_MS, 600000, 1000, 1800000, "UPSTREAM_TIMEOUT_MS"),
     antiTruncation: env.ANTI_TRUNCATION !== "false",
-    unicodeInput: toggle("UNICODE_INPUT", false),
     hideUnavailableModels: toggle("HIDE_UNAVAILABLE_MODELS", true),
     geminiPrefillToUser: toggle("GEMINI_PREFILL_TO_USER", true),
     geminiPromptRetryEnabled: toggle("GEMINI_PROMPT_RETRY_ENABLED", false), geminiPromptRetryText,
@@ -100,7 +99,7 @@ export function buildConfig(settings) {
     throw new Error("Set GATEWAY_API_KEY to a random value of at least 16 characters");
   }
   if (typeof s.antiTruncation !== "boolean") throw new Error("Invalid anti-truncation setting");
-  for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiPromptRetryEnabled", "unicodeInput"]) {
+  for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiPromptRetryEnabled"]) {
     if (typeof s[name] !== "boolean") throw new Error("Invalid compatibility toggle");
   }
   if (typeof s.geminiPromptRetryText !== "string" || Buffer.byteLength(s.geminiPromptRetryText) > MAX_RETRY_TEXT_BYTES) {
@@ -115,7 +114,7 @@ export function buildConfig(settings) {
   const models = modelProfiles(s.models, s.antiTruncation);
   return {
     ...buildConnectionConfig(s), gatewayKey: key, models,
-    hideUnavailableModels: s.hideUnavailableModels, geminiPrefillToUser: s.geminiPrefillToUser, unicodeInput: s.unicodeInput,
+    hideUnavailableModels: s.hideUnavailableModels, geminiPrefillToUser: s.geminiPrefillToUser,
     geminiPromptRetry: { enabled: s.geminiPromptRetryEnabled, text: s.geminiPromptRetryText, ...(matches ? { errorMatches: matches } : {}) },
     // Legacy fields remain available to CLI integrations; profiles own behavior.
     model: models[0]?.id || MODEL_ID, upstreamModel: models[0]?.upstreamModel || UPSTREAM_MODEL,

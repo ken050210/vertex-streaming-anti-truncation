@@ -1,19 +1,8 @@
-import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.2.0";
+export const PLUGIN_VERSION = "0.1.0";
 export const MODES = ["off", "buffered", "streaming"];
 export const GENERATE_PATH = "/api/backends/chat-completions/generate";
 export const PLUGIN_PATH = `/api/plugins/${PLUGIN_ID}`;
-
-export function latestUserFloor(chat) {
-  if (!Array.isArray(chat)) return "";
-  for (let index = chat.length - 1; index >= 0; index--) {
-    const floor = chat[index];
-    if (!floor || floor.is_system === true || floor.is_user !== true) continue;
-    return typeof floor.mes === "string" ? floor.mes : "";
-  }
-  return "";
-}
 
 // Shared by both sides: unsupported requests keep SillyTavern's original route.
 export function bypassReason(body, mode) {
@@ -35,15 +24,14 @@ export function bypassReason(body, mode) {
 
 // ST 1.19 exposes a settings event, but not a generation-URL override. Intercept
 // only its same-origin Vertex POST; preserve the original fetch for everything else.
-export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getUserFloor = () => "", onStatus = () => {} }) {
+export function createFetchInterceptor(originalFetch, { origin, getMode, onStatus = () => {} }) {
   return async function vertexFetch(input, init) {
     let url;
     try { url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, origin); }
     catch { return originalFetch(input, init); }
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     const mode = getMode();
-    const unicodeEnabled = getUnicodeInput() === true;
-    if ((mode === "off" && !unicodeEnabled) || url.origin !== origin || url.pathname !== GENERATE_PATH || method.toUpperCase() !== "POST") {
+    if (mode === "off" || url.origin !== origin || url.pathname !== GENERATE_PATH || method.toUpperCase() !== "POST") {
       return originalFetch(input, init);
     }
     let body;
@@ -52,30 +40,22 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
         : init?.body == null && input instanceof Request ? await input.clone().json() : null;
     } catch { return originalFetch(input, init); }
     if (!body || body.chat_completion_source !== "vertexai") return originalFetch(input, init);
-    let unicode;
-    if (unicodeEnabled) {
-      try {
-        const prepared = prepareUnicodeInput({ ...body, router_unicode_input: { user_floor: getUserFloor() } }, true, 8 * 1024 * 1024);
-        body = prepared.payload; unicode = prepared.metadata;
-      } catch (error) { onStatus({ error: error.code || "unicode_input_failed" }); throw error; }
-    }
     const reason = bypassReason(body, mode);
-    if (reason && !unicodeEnabled) { onStatus({ bypass: reason }); return originalFetch(input, init); }
-    onStatus({ mode, bypass: reason, unicode });
-    const target = reason ? url.href : new URL(`${PLUGIN_PATH}/generate`, origin).href;
-    const payload = JSON.stringify(reason ? body : { ...body, vertex_anti_truncation: mode });
+    if (reason) { onStatus({ bypass: reason }); return originalFetch(input, init); }
+    onStatus({ mode });
+    const payload = JSON.stringify({ ...body, vertex_anti_truncation: mode });
     let response;
     try {
       if (input instanceof Request) {
         const source = new Request(input.clone(), init);
-        const redirected = new Request(target, {
+        const redirected = new Request(new URL(`${PLUGIN_PATH}/generate`, origin), {
           method: "POST", headers: source.headers, body: payload, signal: source.signal,
           credentials: source.credentials, cache: source.cache, redirect: source.redirect,
           referrer: source.referrer, referrerPolicy: source.referrerPolicy, mode: source.mode,
         });
         response = await originalFetch(redirected);
       } else {
-        response = await originalFetch(reason ? input : `${PLUGIN_PATH}/generate`, { ...init, body: payload });
+        response = await originalFetch(`${PLUGIN_PATH}/generate`, { ...init, body: payload });
       }
     } catch (error) { onStatus({ error: "network" }); throw error; }
     if (!response.ok) onStatus({ error: response.status });
