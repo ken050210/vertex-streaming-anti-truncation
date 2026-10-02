@@ -7,7 +7,7 @@ const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const distribution = path.join(root, "dist");
 const output = path.join(distribution, "sillytavern");
 const name = "vertex-anti-truncation";
-const frontend = ["manifest.json", "integrations/sillytavern/index.js", "integrations/sillytavern/shared.js", "integrations/sillytavern/style.css"];
+const frontend = ["src/unicode-input.mjs", "manifest.json", "integrations/sillytavern/index.js", "integrations/sillytavern/shared.js", "integrations/sillytavern/style.css"];
 const backend = ["package.json", "integrations/sillytavern/server.mjs", "integrations/sillytavern/shared.js",
   ...(await readdir(path.join(root, "src"))).filter(file => file.endsWith(".mjs")).map(file => `src/${file}`)];
 const notices = ["LICENSE", "NOTICE.md", "LICENSES/Antigravity-gateway-MIT.txt", "docs/SILLYTAVERN.md"];

@@ -20,7 +20,7 @@ async function fixture(t) {
     await rm(temporary, { recursive: true, force: true });
   });
   const files = ["manifest.json", "package.json", "integrations/sillytavern/index.js", "integrations/sillytavern/shared.js",
-    "integrations/sillytavern/style.css", "integrations/sillytavern/server.mjs", "src/current.mjs", "LICENSE", "NOTICE.md",
+    "integrations/sillytavern/style.css", "integrations/sillytavern/server.mjs", "src/current.mjs", "src/unicode-input.mjs", "LICENSE", "NOTICE.md",
     "LICENSES/Antigravity-gateway-MIT.txt", "docs/SILLYTAVERN.md"];
   for (const file of files) {
     await mkdir(path.dirname(path.join(root, file)), { recursive: true });

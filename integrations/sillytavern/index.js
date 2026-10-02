@@ -1,4 +1,4 @@
-import { PLUGIN_ID, PLUGIN_PATH, PLUGIN_VERSION, MODES, createFetchInterceptor } from "./shared.js";
+import { PLUGIN_ID, PLUGIN_PATH, PLUGIN_VERSION, MODES, createFetchInterceptor, latestUserFloor } from "./shared.js";
 
 const context = SillyTavern.getContext();
 const events = context.eventTypes ?? context.event_types;
@@ -6,7 +6,7 @@ const labels = { off: "关闭（普通 Vertex）", buffered: "非流式抗截断
 let status, select;
 function settings() {
   const store = SillyTavern.getContext().extensionSettings;
-  store[PLUGIN_ID] ??= { mode: "off" };
+  store[PLUGIN_ID] ??= { mode: "off", unicodeInput: false };
   return store[PLUGIN_ID];
 }
 function mode() { return MODES.includes(settings().mode) ? settings().mode : "off"; }
@@ -16,7 +16,10 @@ function showStatus(text = "") {
   status.hidden = !text;
 }
 function updateStatus(result) {
-  showStatus(result.error ? `请求失败（${result.error}）。请查看酒馆错误提示；未自动重试。` : "");
+  const errors = { unicode_floor_required: "找不到真实用户楼层，已停止发送。请先输入消息，或关闭 Unicode 转码。",
+    unicode_input_too_large: "转码后的请求超过大小限制，已停止发送。请缩短输入或关闭 Unicode 转码。" };
+  showStatus(result.error ? errors[result.error] || `请求失败（${result.error}）。请查看酒馆错误提示；未自动重试。`
+    : result.unicode ? ({ encoded: "已对当前用户楼层的匹配文本转码。", "floor-not-found": "未匹配到用户楼层原文，按原文发送。", "no-encodable-text": "当前楼层没有需要转码的字符。" }[result.unicode.reason] || "") : "");
 }
 
 async function checkBackend(silent = false) {
@@ -61,13 +64,31 @@ function mount() {
   check.textContent = "检查插件连接";
   check.title = "只检查酒馆服务端插件，不调用模型";
   check.addEventListener("click", () => checkBackend());
-  panel.append(label, select, status, check);
+  const unicodeLabel = document.createElement("label");
+  unicodeLabel.className = "checkbox_label";
+  const unicode = document.createElement("input");
+  unicode.type = "checkbox";
+  unicode.id = "vertex_unicode_input";
+  unicode.checked = settings().unicodeInput === true;
+  unicode.addEventListener("change", () => {
+    settings().unicodeInput = unicode.checked;
+    context.saveSettingsDebounced();
+    showStatus();
+  });
+  unicodeLabel.append(unicode, document.createTextNode("Unicode 输入转码（所有 Vertex 模式）"));
+  const unicodeHint = document.createElement("small");
+  unicodeHint.id = "vertex_unicode_hint";
+  unicodeHint.textContent = "独立于抗截断；仅编码最新真实用户楼层的匹配文本，默认关闭。可能增加 token 用量；请关闭预设中的重复转码。";
+  unicode.setAttribute("aria-describedby", unicodeHint.id);
+  panel.append(label, select, unicodeLabel, unicodeHint, status, check);
   parent.append(panel);
   // Install once and chain any previously installed fetch wrapper.
   const key = Symbol.for("vertex-anti-truncation.fetch");
   if (!window[key]) {
     window[key] = true;
-    window.fetch = createFetchInterceptor(window.fetch.bind(window), { origin: location.origin, getMode: mode, onStatus: updateStatus });
+    window.fetch = createFetchInterceptor(window.fetch.bind(window), { origin: location.origin, getMode: mode,
+      getUnicodeInput: () => settings().unicodeInput === true,
+      getUserFloor: () => latestUserFloor(SillyTavern.getContext().chat), onStatus: updateStatus });
   }
   void checkBackend(true);
 }
