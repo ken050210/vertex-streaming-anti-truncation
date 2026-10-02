@@ -92,7 +92,7 @@ Express、Flex、Priority 需要将地区设为 `global`。完整服务账号的
 
 接口参考：[UI Extensions](https://docs.sillytavern.app/for-contributors/writing-extensions/)、[Server Plugins](https://docs.sillytavern.app/for-contributors/server-plugins/)。
 
-## 独立 Unicode 输入开关（本地 v0.2.0）
+## 独立 Unicode 输入开关（v0.2.0）
 
 Vertex 面板新增 **Unicode 输入转码（所有 Vertex 模式）**，默认关闭，与“抗截断传输”分别保存。前端从当前聊天读取最新真实用户楼层，只转换请求消息中匹配的文本，不修改聊天、预设、工具定义、Schema 或图片地址。开关开启时，即使抗截断关闭，或因工具／Schema／搜索等原因走酒馆原路由，输入转码仍会执行；非 Vertex 请求不处理。
 
@@ -100,4 +100,4 @@ Vertex 面板新增 **Unicode 输入转码（所有 Vertex 模式）**，默认�
 
 转码在浏览器中、抗截断分流之前执行；普通／旁路请求仍由酒馆原后端处理。服务端插件继续只处理原有的纯文本抗截断路径。启用或关闭立即影响之后的请求，已发出的请求不变。
 
-本地配套包为 v0.2.0，应同时更新前后端以保持版本检查一致；本文上方 v0.1.0 标签／Release 链接仅提供旧版，不包含本次新增功能。本次未发布新标签，也未改动运行中的酒馆安装。
+当前源码配套包为 v0.2.0，应同时更新前后端以保持版本检查一致；本文上方 v0.1.0 标签／Release 链接仅提供旧版，不包含本次新增功能。本次未发布新标签；已在本机同时更新前后端并重启，完成开关持久化及三种模式的短请求验收。验收后恢复关闭状态，详见 [验收记录](UNICODE-INPUT-AUDIT.md)。
