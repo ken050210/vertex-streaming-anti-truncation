@@ -8,7 +8,7 @@ In Tavern's **Install extension** dialog, paste `https://github.com/ken050210/ve
 
 A local gateway for Vertex AI / Gemini with a model library and optional text-tool transport. Save normal, buffered anti-truncation and streaming anti-truncation aliases for each upstream model, then select them from SillyTavern's custom OpenAI connection.
 
-Experimental release with configurable Gemini models. The existing Gemini 3.7 Flash alias remains the default. Model and function-argument streaming availability depend on Google. Requires Node.js 22.9+ and has no third-party runtime dependencies.
+Experimental release with configurable Gemini models. The existing Gemini 3.7 Flash alias remains the default. Model and function-argument streaming availability depend on Google. Requires Node.js 22.9+ and uses @napi-rs/canvas plus the bundled OFL-licensed Noto CJK font for optional text-to-image input.
 
 ## Credits
 
@@ -231,3 +231,7 @@ The gateway's **Unicode input (all models)** setting is a separate, default-off 
 Only matching message text is encoded; unmatched input remains unchanged. There is no serialized-JSON fallback: model IDs, tool names, schemas and media URLs remain intact. Tools/schema bypass does not disable input encoding. Response header `x-unicode-input` and fixed metadata/counts describe the result without logging prompt text.
 
 For SillyTavern custom API connections, import and enable `integrations/sillytavern-unicode-floor.json` (default endpoint loopback port 4781; adjust `gatewayPort` in the script if needed). For native Vertex connections, use the paired extension's separate Unicode checkbox instead. Disable duplicate preset encoders. Encoding can increase tokens/latency and does not guarantee model comprehension. Paired Tavern installation, toggle persistence and short live requests across all three transport modes passed; long-context quality and truncation reduction remain untested. See the [acceptance record](docs/UNICODE-INPUT-AUDIT.md).
+
+## Text-to-image input
+
+Set IMAGE_INPUT to off (default), current-turn, or all, or use the console selector. Mutually exclusive with Unicode. Current-turn starts after the last assistant; all converts ordinary user/assistant text. System/developer instructions, tool contracts and original media remain unchanged. Uses 1024px PNG pages (36 lines), with 100-page, 150000 UTF-16-unit, 12 MiB image and existing request-body limits. Overflow fails with 413; unsupported emoji/control characters fail with 400; missing renderer/font fails with 503. Tabs become four spaces and line endings normalize. OCR is not lossless. Never silently falls back to plaintext. Image requests use buffered anti-truncation fallback; progressive delivery and reduced filtering are not promised. Logs contain only fixed metadata. Run npm ci --ignore-scripts after updates; include assets/fonts and the platform canvas binary in offline distributions.

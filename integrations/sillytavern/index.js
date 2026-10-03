@@ -72,6 +72,7 @@ function mount() {
   unicode.checked = settings().unicodeInput === true;
   unicode.addEventListener("change", () => {
     settings().unicodeInput = unicode.checked;
+    if (unicode.checked) { settings().imageInput = "off"; image.value = "off"; }
     context.saveSettingsDebounced();
     showStatus();
   });
@@ -80,13 +81,24 @@ function mount() {
   unicodeHint.id = "vertex_unicode_hint";
   unicodeHint.textContent = "独立于抗截断；仅编码最新真实用户楼层的匹配文本，默认关闭。可能增加 token 用量；请关闭预设中的重复转码。";
   unicode.setAttribute("aria-describedby", unicodeHint.id);
-  panel.append(label, select, unicodeLabel, unicodeHint, status, check);
+  const imageLabel = document.createElement("label");
+  imageLabel.textContent = "图片输入（与 Unicode 互斥）";
+  const image = document.createElement("select");
+  image.id = "vertex_image_input"; imageLabel.htmlFor = image.id;
+  for (const [value,text] of [["off","关闭"],["current-turn","当前轮转图"],["all","全部会话转图"]]) image.add(new Option(text,value));
+  image.value = settings().imageInput || "off";
+  image.addEventListener("change", () => { settings().imageInput = image.value; if (image.value !== "off") { settings().unicodeInput = false; unicode.checked = false; } context.saveSettingsDebounced(); });
+  const imageHint = document.createElement("small");
+  imageHint.id="vertex_image_hint"; imageHint.textContent="独立于抗截断开关；保留系统指令。图片使用缓冲输出，可能增加用量；工具、Schema 等不兼容请求会报错，不会悄悄改回明文。";
+  image.setAttribute("aria-describedby",imageHint.id);
+  panel.append(label, select, unicodeLabel, unicodeHint, imageLabel, image, imageHint, status, check);
   parent.append(panel);
   // Install once and chain any previously installed fetch wrapper.
   const key = Symbol.for("vertex-anti-truncation.fetch");
   if (!window[key]) {
     window[key] = true;
     window.fetch = createFetchInterceptor(window.fetch.bind(window), { origin: location.origin, getMode: mode,
+      getImageInput: () => settings().imageInput || "off",
       getUnicodeInput: () => settings().unicodeInput === true,
       getUserFloor: () => latestUserFloor(SillyTavern.getContext().chat), onStatus: updateStatus });
   }

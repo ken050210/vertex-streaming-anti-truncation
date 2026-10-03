@@ -311,3 +311,29 @@ test("Unicode floor comes from the latest real user, including empty-floor failu
   assert.equal(latestUserFloor([{ is_user: true, mes: "old" }, { is_user: true, mes: "" }]), "");
   assert.equal(latestUserFloor(undefined), "");
 });
+
+test("image option forwards only eligible plugin requests and forces buffered image transport",async()=>{
+ const calls=[];
+ const intercept=createFetchInterceptor(async(...args)=>{calls.push(args);return new Response('OK');},{origin:'http://localhost',getMode:()=> 'streaming',getImageInput:()=> 'current-turn'});
+ await intercept(GENERATE_PATH,{method:'POST',body:JSON.stringify(body)});
+ assert.equal(JSON.parse(calls[0][1].body).vertex_image_input,'current-turn');
+ const {prepareImageInput}=await import('../src/image-input.mjs');
+ const converted=await prepareImageInput(body,'current-turn');
+ const prepared=prepareSillyTavernRequest(request({...converted.payload,vertex_image_input:'current-turn'}),adapters);
+ assert.equal(prepared.upstreamStream,false);
+ await assert.rejects(intercept(GENERATE_PATH,{method:'POST',body:JSON.stringify({...body,tools:[{type:'function'}]})}),/image_input_requires/);
+ assert.equal(calls.length,1);
+});
+
+test("image-only plugin mode is independent from anti-truncation and restores native text",async()=>{
+ const {prepareImageInput}=await import('../src/image-input.mjs');
+ const converted=await prepareImageInput({...body,vertex_image_input:'current-turn',vertex_anti_truncation:'off'},'current-turn');
+ const prepared=prepareSillyTavernRequest(request(converted.payload),adapters);
+ assert.equal(Boolean(prepared.toolName),false);assert.equal(prepared.upstreamStream,false);
+ const response=await restoreSillyTavernResponse(Response.json({candidates:[{content:{parts:[{text:'OK'}]},finishReason:'STOP'}]}),prepared);
+ assert.equal(contents(await response.text()),'OK');
+ const calls=[];
+ const intercept=createFetchInterceptor(async(...args)=>{calls.push(args);return new Response('OK');},{origin:'http://localhost',getMode:()=> 'off',getImageInput:()=> 'current-turn'});
+ await intercept(GENERATE_PATH,{method:'POST',body:JSON.stringify(body)});
+ assert.equal(calls[0][0],PLUGIN_PATH+'/generate');assert.equal(JSON.parse(calls[0][1].body).vertex_anti_truncation,'off');
+});

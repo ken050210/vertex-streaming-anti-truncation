@@ -19,7 +19,7 @@ async function fixture(t) {
     assert.equal((await lstat(temporary)).isSymbolicLink(), false);
     await rm(temporary, { recursive: true, force: true });
   });
-  const files = ["manifest.json", "package.json", "integrations/sillytavern/index.js", "integrations/sillytavern/shared.js",
+  const files = ["package-lock.json", "assets/fonts/NotoSansCJKsc-Regular.otf", "assets/fonts/OFL.txt", "manifest.json", "package.json", "integrations/sillytavern/index.js", "integrations/sillytavern/shared.js",
     "integrations/sillytavern/style.css", "integrations/sillytavern/server.mjs", "src/current.mjs", "src/unicode-input.mjs", "LICENSE", "NOTICE.md",
     "LICENSES/Antigravity-gateway-MIT.txt", "docs/SILLYTAVERN.md"];
   for (const file of files) {

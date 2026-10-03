@@ -76,3 +76,9 @@ The first standalone release extracts the Gemini 3.7 Flash text-tool transport f
 - [Xeltra233 / Antigravity-gateway](https://github.com/Xeltra233/Antigravity-gateway) is credited for the transport design, with its MIT license preserved.
 
 The default checks use simulated upstream responses. See [validation](docs/VALIDATION.en.md) for what has and has not been tested.
+
+## 0.6.0 / SillyTavern UI 0.3.0
+
+- Add opt-in current-turn/all-conversation text-to-PNG input, mutually exclusive with Unicode; preserve system instructions and tool contracts.
+- Bundle Noto CJK font and canvas runtime dependency; package dependency lock and font license.
+- Bound rendering and fail explicitly on unsupported input; keep fixed-field diagnostics.

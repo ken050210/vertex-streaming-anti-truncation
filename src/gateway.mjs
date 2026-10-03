@@ -1,3 +1,4 @@
+import { prepareImageInput, imageInputLogFields } from "./image-input.mjs";
 import { prepareUnicodeInput, unicodeInputLogFields } from "./unicode-input.mjs";
 import { guardCompletionStream, inspectCompletion, integrityLogFields } from "./completion-integrity.mjs";
 import { assertStructuredOutput, structuredOutputExpectation } from "./vertex-schema.mjs";
@@ -127,7 +128,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     let pathname;
     try { pathname = new URL(request.url, "http://localhost").pathname; }
     catch { return send(response, 400, { error: { code: "invalid_path" } }); }
-    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.5.2" });
+    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.6.0" });
     if (!authorized(request, config.gatewayKey)) return send(response, 401, { error: { code: "unauthorized" } });
     if (request.method === "GET" && pathname === "/v1/models") return send(response, 200, {
       object: "list", data: availability(config).filter(model => !model.hidden).map(model => ({ id: model.id, object: "model", owned_by: "vertex-streaming-anti-truncation" })),
@@ -143,7 +144,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     const onClose = () => { if (!response.writableEnded) client.abort(); };
     response.once("close", onClose);
     request.once("aborted", onClose);
-    let unicode = null;
+    let unicode = null, image = null;
     let stream = false, audit = null, integrity = null, status = 500, code = null, route, droppedParams = [];
     const compatibility = { prefillConverted: false, promptRetried: false };
     try {
@@ -160,6 +161,15 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         throw error;
       }
       response.setHeader("x-unicode-input", unicode?.reason || "disabled");
+      try {
+        if (config.unicodeInput && config.imageInput && config.imageInput !== "off") throw Object.assign(new Error(), {status:400,code:"image_input_conflict"});
+        const converted = await prepareImageInput(payload, config.imageInput || "off", config.bodyLimitBytes, {signal});
+        payload = converted.payload; image = converted.metadata;
+      } catch (error) {
+        if (error.code?.startsWith("image_") || error.code === "invalid_image_input_mode") throw new Problem(error.status,error.code);
+        throw error;
+      }
+      response.setHeader("x-image-input", image?.reason || "disabled");
       stream = payload.stream === true;
       const prefill = convertGeminiPrefill(payload, route.upstreamModel, config.geminiPrefillToUser !== false);
       payload = prefill.payload; compatibility.prefillConverted = prefill.converted;
@@ -278,7 +288,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         model: route?.id || null, upstreamModel: route?.upstreamModel || null, mode: route?.mode || null, stream, status, latencyMs: Date.now() - started,
         serviceTier: config.serviceTier || "standard",
         trafficType: ["ON_DEMAND", "ON_DEMAND_FLEX", "ON_DEMAND_PRIORITY", "PROVISIONED_THROUGHPUT"].includes(audit?.trafficType) ? audit.trafficType : null,
-        ...unicodeInputLogFields(unicode), ...antiTruncationLogFields(audit), ...integrityLogFields(integrity), ...compatibilityLogFields(compatibility),
+        ...imageInputLogFields(image), ...unicodeInputLogFields(unicode), ...antiTruncationLogFields(audit), ...integrityLogFields(integrity), ...compatibilityLogFields(compatibility),
         ...(droppedParams.length ? { droppedParams } : {}), ...(code ? { code } : {}) };
       events.push(event);
       if (events.length > 200) events.shift();

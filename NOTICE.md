@@ -11,3 +11,5 @@ This repository contains an independent JavaScript implementation extracted from
 The distribution contains transport and Vertex modules, a standalone HTTP server, tests and documentation. Personal configurations, account routing, runtime state, credentials, conversation data and private repository history are excluded.
 
 Google, Vertex AI, Gemini and SillyTavern are named to describe compatibility. Their maintainers do not endorse this project. The protocol reference is Google's documentation for [streaming function call arguments](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling#streaming_function_call_arguments).
+
+Text-to-image input is inspired by Antigravity-gateway experimental revision 004067b34f42cd6a9ba9b147a0cad02b88c10c7b (imagectx). This is an independent JavaScript implementation with deliberate compatibility differences. Bundled NotoSansCJKsc-Regular.otf is from https://github.com/notofonts/noto-cjk/tree/main/Sans/OTF/SimplifiedChinese and is redistributed under the SIL Open Font License in assets/fonts/OFL.txt. @napi-rs/canvas and its platform binaries retain their upstream license notices through npm.

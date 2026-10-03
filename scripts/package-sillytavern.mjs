@@ -8,7 +8,7 @@ const distribution = path.join(root, "dist");
 const output = path.join(distribution, "sillytavern");
 const name = "vertex-anti-truncation";
 const frontend = ["src/unicode-input.mjs", "manifest.json", "integrations/sillytavern/index.js", "integrations/sillytavern/shared.js", "integrations/sillytavern/style.css"];
-const backend = ["package.json", "integrations/sillytavern/server.mjs", "integrations/sillytavern/shared.js",
+const backend = ["package.json", "package-lock.json", "assets/fonts/NotoSansCJKsc-Regular.otf", "assets/fonts/OFL.txt", "integrations/sillytavern/server.mjs", "integrations/sillytavern/shared.js",
   ...(await readdir(path.join(root, "src"))).filter(file => file.endsWith(".mjs")).map(file => `src/${file}`)];
 const notices = ["LICENSE", "NOTICE.md", "LICENSES/Antigravity-gateway-MIT.txt", "docs/SILLYTAVERN.md"];
 // Only replace generated directories immediately beneath this repository's real

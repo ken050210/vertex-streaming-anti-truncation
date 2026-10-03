@@ -92,7 +92,7 @@ function draft() {
     gatewayKey: $("gateway-key").value.trim(), serviceAccountJson: $("service-account").value.trim(),
     apiKey: $("api-key").value.trim(), accessToken: $("access-token").value.trim(),
     port: Number($("port").value), timeoutMs: Number($("timeout").value) * 1000, antiTruncation: true, models: state.models.map(m => ({ ...m })),
-    unicodeInput: $("unicode-input").checked, hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
+    unicodeInput: $("unicode-input").checked, imageInput: $("image-input").value, hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
     geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
     geminiPromptRetryMatches: retryMatches() };
 }
@@ -143,6 +143,7 @@ function fillConfig() {
   for (const [id, name] of [["project-id", "projectId"], ["location", "location"], ["port", "port"]]) $(id).value = c[name];
   $("timeout").value = c.timeoutMs / 1000;
   $("unicode-input").checked = c.unicodeInput === true;
+  $("image-input").value = c.imageInput || "off";
   $("hide-unavailable").checked = c.hideUnavailableModels !== false;
   $("prefill-to-user").checked = c.geminiPrefillToUser !== false;
   $("prompt-retry-enabled").checked = c.geminiPromptRetryEnabled === true;
@@ -260,7 +261,7 @@ function eventTable(events) {
     const recovered = a.restored === true ? "已还原" : a.restored === false ? "未还原 / 跳过" : "未确认";
     const transport = a.transport === "tool-transport-native-streaming" ? "原生参数流" : a.transport === "tool-transport-buffered" ? "完整还原" : e.stream ? "SSE 流式" : "普通响应";
     const success = e.status >= 200 && e.status < 300;
-    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small></td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code">${esc(e.code)}</small>` : ""}${integrityBadge(e.responseIntegrity)}${compatibilityBadge(e.geminiCompatibility)}</td><td>${transport}<small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td><td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
+    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small></td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code">${esc(e.code)}</small>` : ""}${integrityBadge(e.responseIntegrity)}${compatibilityBadge(e.geminiCompatibility)}${e.imageInput ? `<small>图片输入：${esc(e.imageInput.reason)} · ${esc(e.imageInput.pages)} 页</small>` : ""}</td><td>${transport}<small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td><td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
   }).join("") + "</tbody></table></div>";
 }
 function renderEvents() {
@@ -403,3 +404,6 @@ window.addEventListener("beforeunload", e => { if (state.dirty || state.probe) {
     else if (setup) { state.csrf = (await api("/api/login", { key: setup })).csrf; await enter(); }
   } catch (error) { setError("login-error", error.message); }
 })();
+
+$("image-input").addEventListener("change", () => { if ($("image-input").value !== "off") $("unicode-input").checked = false; });
+$("unicode-input").addEventListener("change", () => { if ($("unicode-input").checked) $("image-input").value = "off"; });

@@ -11,3 +11,5 @@
 发布包包含传输和 Vertex 模块、独立 HTTP 服务、测试与文档。个人配置、账号路由、运行状态、凭据、对话数据和私有仓库历史均未包含。
 
 Google、Vertex AI、Gemini 和 SillyTavern 的名称用于说明兼容对象，其维护者没有为本项目背书。协议参考为 Google 的[流式函数参数文档](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling#streaming_function_call_arguments)。
+
+Text-to-image input is inspired by Antigravity-gateway experimental revision 004067b34f42cd6a9ba9b147a0cad02b88c10c7b (imagectx). This is an independent JavaScript implementation with deliberate compatibility differences. Bundled NotoSansCJKsc-Regular.otf is from https://github.com/notofonts/noto-cjk/tree/main/Sans/OTF/SimplifiedChinese and is redistributed under the SIL Open Font License in assets/fonts/OFL.txt. @napi-rs/canvas and its platform binaries retain their upstream license notices through npm.

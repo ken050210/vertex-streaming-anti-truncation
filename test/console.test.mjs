@@ -278,3 +278,12 @@ test("Unicode save/apply persists and affects new requests independently of tran
   await f.api("/api/stop", {}); await f.api("/api/start", {});
   assert.equal(f.app.status().active.unicodeInput, false);
 });
+
+test("image input setting persists and conflicts are rejected before writeback",async t=>{
+ const f=await fixture(t);
+ const response=await f.api('/api/config',{revision:'new',settings:{...f.settings,imageInput:'current-turn'}});
+ assert.equal(response.status,200);const saved=await response.json();
+ assert.equal(saved.status.active.imageInput,'current-turn');assert.equal((await f.store.load()).settings.imageInput,'current-turn');
+ const rejected=await f.api('/api/config',{revision:saved.revision,settings:{unicodeInput:true}});assert.equal(rejected.status,400);
+ assert.equal((await f.store.load()).settings.unicodeInput,false);assert.equal(f.requests.length,0);
+});

@@ -49,7 +49,7 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), models: activeConfig?.models || [],
       modelAvailability: gateway?.modelAvailability() || [],
       active: activeConfig ? { port: activeConfig.port, projectId: activeConfig.projectId, location: activeConfig.location, authMode: activeConfig.authMode,
-        unicodeInput: activeConfig.unicodeInput, serviceTier: activeConfig.serviceTier, antiTruncation: activeConfig.antiTruncation,
+        unicodeInput: activeConfig.unicodeInput, imageInput: activeConfig.imageInput, serviceTier: activeConfig.serviceTier, antiTruncation: activeConfig.antiTruncation,
         geminiPromptRetryEnabled: activeConfig.geminiPromptRetry.enabled } : null,
       requests: events.length, successes: events.filter(e => e.status >= 200 && e.status < 300).length,
       restored: events.filter(e => e.antiTruncation?.restored === true).length,

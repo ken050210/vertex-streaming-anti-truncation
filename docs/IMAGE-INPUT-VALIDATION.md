@@ -1,0 +1,7 @@
+# Image input validation
+
+This release adds an independent text-to-PNG encoder inspired by Antigravity experimental imagectx, not a Go port. Renderer and policy tests cover role preservation, latest-turn selection, existing media/tool contracts, pagination, glyph coverage, cancellation, bounds and fixed diagnostics. HTTP mocks cover compatible/native requests, restored SSE, errors without upstream calls and settings persistence. Browser checks used synthetic settings and confirmed image/Unicode mutual exclusion; they are not production configuration changes.
+
+A bounded live check used this gateway with a temporary loopback relay to an existing Vertex router (no settings writeback): one image-encoded synthetic prompt, SSE, 1024 output-token limit. HTTP 200, exact Chinese/ASCII/digit/XML-like transcription, finish=stop, DONE=true, tool-transport-buffered-fields, 1185 prompt tokens and 50 completion tokens, 4531 ms. This verifies the compatible relay path, not direct Express/Flex authentication, long conversations, visual reasoning quality, or installed SillyTavern UI persistence. No progressive delivery or reduced-filtering claim.
+
+System/developer instructions stay text. Tabs normalize to four spaces and CRLF/CR to LF. Font-unsupported characters and emoji are rejected before provider submission instead of becoming missing-glyph boxes. Font licensing is preserved in assets/fonts/OFL.txt.

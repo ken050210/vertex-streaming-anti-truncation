@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { buildConnectionConfig } from "../../src/config.mjs";
+import { prepareImageInput } from "../../src/image-input.mjs";
 import { buildNativeUrl } from "../../src/vertex-native.mjs";
 import { parseServiceAccount } from "../../src/vertex-auth.mjs";
 import { upstreamDispatcher } from "../../src/gateway.mjs";
@@ -39,7 +40,14 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
     response.once("close", close);
     let stage = "request";
     try {
-      const prepared = prepareSillyTavernRequest(request, adapters);
+      const imageMode = request.body?.vertex_image_input ?? "off";
+      // Validate normal plugin eligibility before spending CPU rasterizing.
+      let prepared = prepareSillyTavernRequest(request, adapters);
+      if (imageMode !== "off") {
+        const converted = await prepareImageInput(request.body, imageMode, 8 * 1024 * 1024, {signal});
+        prepared = prepareSillyTavernRequest({ ...request, body: converted.payload }, adapters);
+        response.setHeader("x-image-input", converted.metadata?.reason || "disabled");
+      }
       stage = "configuration";
       const config = connectionForRequest(request, adapters);
       stage = "authentication";

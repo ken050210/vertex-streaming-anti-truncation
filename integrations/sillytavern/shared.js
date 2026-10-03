@@ -1,6 +1,6 @@
 import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.2.0";
+export const PLUGIN_VERSION = "0.3.0";
 export const MODES = ["off", "buffered", "streaming"];
 export const GENERATE_PATH = "/api/backends/chat-completions/generate";
 export const PLUGIN_PATH = `/api/plugins/${PLUGIN_ID}`;
@@ -35,7 +35,7 @@ export function bypassReason(body, mode) {
 
 // ST 1.19 exposes a settings event, but not a generation-URL override. Intercept
 // only its same-origin Vertex POST; preserve the original fetch for everything else.
-export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getUserFloor = () => "", onStatus = () => {} }) {
+export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getUserFloor = () => "", onStatus = () => {} }) {
   return async function vertexFetch(input, init) {
     let url;
     try { url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, origin); }
@@ -43,7 +43,9 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     const mode = getMode();
     const unicodeEnabled = getUnicodeInput() === true;
-    if ((mode === "off" && !unicodeEnabled) || url.origin !== origin || url.pathname !== GENERATE_PATH || method.toUpperCase() !== "POST") {
+    const imageMode = getImageInput();
+    const imageEnabled = imageMode !== "off";
+    if ((mode === "off" && !unicodeEnabled && !imageEnabled) || url.origin !== origin || url.pathname !== GENERATE_PATH || method.toUpperCase() !== "POST") {
       return originalFetch(input, init);
     }
     let body;
@@ -52,6 +54,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
         : init?.body == null && input instanceof Request ? await input.clone().json() : null;
     } catch { return originalFetch(input, init); }
     if (!body || body.chat_completion_source !== "vertexai") return originalFetch(input, init);
+    if (imageEnabled && unicodeEnabled) throw new Error("input_encoding_conflict");
     let unicode;
     if (unicodeEnabled) {
       try {
@@ -59,7 +62,11 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
         body = prepared.payload; unicode = prepared.metadata;
       } catch (error) { onStatus({ error: error.code || "unicode_input_failed" }); throw error; }
     }
-    const reason = bypassReason(body, mode);
+    const reason = bypassReason(body, imageEnabled && mode === "off" ? "buffered" : mode);
+    if (imageEnabled) {
+      if (!["current-turn", "all"].includes(imageMode) || reason) { onStatus({error:"image_input_requires_supported_request"}); throw new Error("image_input_requires_supported_request"); }
+      body.vertex_image_input = imageMode;
+    }
     if (reason && !unicodeEnabled) { onStatus({ bypass: reason }); return originalFetch(input, init); }
     onStatus({ mode, bypass: reason, unicode });
     const target = reason ? url.href : new URL(`${PLUGIN_PATH}/generate`, origin).href;

@@ -6,6 +6,6 @@
   "js": "integrations/sillytavern/index.js",
   "css": "integrations/sillytavern/style.css",
   "author": "ken050210",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "homePage": "https://github.com/ken050210/vertex-streaming-anti-truncation"
 }

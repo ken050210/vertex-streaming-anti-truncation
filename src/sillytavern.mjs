@@ -20,8 +20,10 @@ export function prepareSillyTavernRequest(request, adapters) {
     (body.stream != null && typeof body.stream !== "boolean")) throw requestError("invalid_request");
   if (Buffer.byteLength(JSON.stringify(body)) > BODY_LIMIT) throw Object.assign(requestError("request_too_large"), { status: 413 });
   const mode = body.vertex_anti_truncation;
-  if (!["buffered", "streaming"].includes(mode)) throw requestError("invalid_transport_mode");
-  const bypass = bypassReason(body, mode);
+  const imageEnabled = ["current-turn", "all"].includes(body.vertex_image_input);
+  if (body.vertex_image_input != null && !["off", "current-turn", "all"].includes(body.vertex_image_input)) throw requestError("invalid_image_input_mode");
+  if (!["buffered", "streaming"].includes(mode) && !(mode === "off" && imageEnabled)) throw requestError("invalid_transport_mode");
+  const bypass = bypassReason(body, mode === "off" && imageEnabled ? "buffered" : mode);
   if (bypass) throw requestError("unsupported_request_" + bypass.replaceAll("-", "_"));
   let messages = structuredClone(body.messages);
   // ST's Google converter only recognizes system/user/assistant roles. Keep
@@ -31,7 +33,7 @@ export function prepareSillyTavernRequest(request, adapters) {
   if (body.custom_prompt_post_processing) {
     messages = adapters.postProcessPrompt(messages, body.custom_prompt_post_processing, adapters.getPromptNames(request));
   }
-  const prepared = prepareAntiTruncation({ messages }, true);
+  const prepared = prepareAntiTruncation({ messages }, mode !== "off");
   const useSystemPrompt = Boolean(body.use_sysprompt);
   const prompt = adapters.convertGooglePrompt(prepared.payload.messages, body.model, useSystemPrompt, adapters.getPromptNames(request));
   const native = nativeRequestBody({ ...prepared.payload, messages: [] });
@@ -54,7 +56,7 @@ export function prepareSillyTavernRequest(request, adapters) {
     if (Number.isInteger(budget)) config.thinkingConfig.thinkingBudget = budget;
     else if (typeof budget === "string" && budget) config.thinkingConfig.thinkingLevel = budget;
   }
-  const upstreamStream = mode === "streaming" && body.stream === true;
+  const upstreamStream = mode === "streaming" && body.stream === true && !(body.vertex_image_input && body.vertex_image_input !== "off");
   if (upstreamStream) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   return { body: native, toolName: prepared.toolName, model: body.model, stream: body.stream === true, upstreamStream, mode };
 }
@@ -122,7 +124,7 @@ export async function restoreSillyTavernResponse(upstream, prepared) {
   const translated = translateNativeCompletion(raw, prepared.model);
   const inspected = inspectCompletion(translated);
   if (!inspected.valid) throw protocolError(inspected.reason);
-  const completion = restoreAntiTruncationCompletion(translated, prepared.toolName);
+  const completion = prepared.toolName ? restoreAntiTruncationCompletion(translated, prepared.toolName) : translated;
   const restored = inspectCompletion(completion);
   if (!restored.valid) throw protocolError(restored.reason);
   const message = completion.choices[0].message;

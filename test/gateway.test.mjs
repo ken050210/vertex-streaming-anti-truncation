@@ -299,3 +299,37 @@ test("Unicode is independent of tools/schema bypass, and missing/expanded reques
   assert.equal(off.requests[0].json.router_unicode_input, undefined);
   assert.deepEqual(off.requests[0].json.messages, payload.messages);
 });
+
+test("image input reaches compatible and native routes; failures do not call upstream", async t => {
+ for (const nativeOnly of [false,true]) {
+  const f=await fixture(t, req => {
+   if(nativeOnly){assert.ok(req.json.contents[0].parts[0].inlineData);return Response.json({candidates:[{content:{parts:[{text:'OK'}]},finishReason:'STOP'}]});}
+   assert.match(req.json.messages[0].content[0].image_url.url,/^data:image\/png;base64,/);
+   return Response.json({choices:[{message:{role:'assistant',content:'OK'},finish_reason:'stop'}]});
+  },{imageInput:'current-turn',antiTruncation:false,nativeOnly});
+  const response=await f.post(payload);assert.equal(response.status,200);assert.equal(response.headers.get('x-image-input'),'encoded');await response.json();
+  assert.equal(f.events[0].imageInput.pages,1);assert.ok(!JSON.stringify(f.events).includes('base64'));
+  const rejected=await f.post({...payload,messages:[{role:'user',content:'😀'}]});assert.equal(rejected.status,400);assert.equal(f.requests.length,1);
+ }
+});
+test("image input selects buffered compatibility for a streaming alias",async t=>{
+ const f=await fixture(t,req=>Response.json(completion(req.json.tools[0].function.name)),{imageInput:'current-turn'});
+ const response=await f.post({...payload,stream:false});assert.equal(response.status,200);assert.equal((await response.json()).choices[0].message.content,'OK');
+ assert.ok(f.requests[0].json.messages[0].content[0].image_url);
+});
+
+test("streaming image fallback restores a complete SSE response and keeps diagnostics private",async t=>{
+ const f=await fixture(t,req=>{
+  const name=req.json.tools[0].function.name;
+  return new Response('data: '+JSON.stringify({choices:[{index:0,delta:{tool_calls:[{index:0,id:'call_test',type:'function',function:{name,arguments:JSON.stringify({content:'OK'})}}]},finish_reason:null}]})+'\n\ndata: '+JSON.stringify({choices:[{index:0,delta:{},finish_reason:'tool_calls'}]})+'\n\ndata: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}});
+ },{imageInput:'current-turn'});
+ const response=await f.post({...payload,stream:true});assert.equal(response.status,200);
+ assert.equal(response.headers.get('x-anti-truncation-transport'),'tool-transport-buffered-fields');
+ const wire=await response.text();assert.equal(visible(wire),'OK');assert.ok(wire.includes('[DONE]'));
+ assert.equal(f.events[0].antiTruncation.restored,true);assert.equal(f.events[0].imageInput.pages,1);
+});
+test("image configuration rejects conflicting or unknown encoding selections",async()=>{
+ const env={GATEWAY_API_KEY:key,VERTEX_PROJECT_ID:'example-project',VERTEX_ACCESS_TOKEN:token};
+ await assert.rejects(loadConfig({...env,IMAGE_INPUT:'bad'}),/image input/);
+ await assert.rejects(loadConfig({...env,IMAGE_INPUT:'all',UNICODE_INPUT:'true'}),/mutually exclusive/);
+});
