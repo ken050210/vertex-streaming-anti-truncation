@@ -64,34 +64,29 @@ function mount() {
   check.textContent = "检查插件连接";
   check.title = "只检查酒馆服务端插件，不调用模型";
   check.addEventListener("click", () => checkBackend());
-  const unicodeLabel = document.createElement("label");
-  unicodeLabel.className = "checkbox_label";
-  const unicode = document.createElement("input");
-  unicode.type = "checkbox";
-  unicode.id = "vertex_unicode_input";
-  unicode.checked = settings().unicodeInput === true;
-  unicode.addEventListener("change", () => {
-    settings().unicodeInput = unicode.checked;
-    if (unicode.checked) { settings().imageInput = "off"; image.value = "off"; }
+  const inputLabel = document.createElement("label");
+  inputLabel.htmlFor = "vertex_input_encoding";
+  inputLabel.textContent = "输入转码";
+  const input = document.createElement("select");
+  input.id = inputLabel.htmlFor;
+  input.className = "text_pole";
+  for (const [value, text] of [
+    ["off", "关闭（保持原文）"],
+    ["unicode", "Unicode（最新用户楼层及其副本）"],
+    ["current-turn", "图片·当前轮（本轮用户文本）"],
+    ["all", "图片·全部会话（用户与 AI 文本）"],
+  ]) input.add(new Option(text, value));
+  const saved = settings();
+  input.value = saved.unicodeInput === true ? "unicode"
+    : ["current-turn", "all"].includes(saved.imageInput) ? saved.imageInput : "off";
+  input.addEventListener("change", () => {
+    const current = settings();
+    current.unicodeInput = input.value === "unicode";
+    current.imageInput = ["current-turn", "all"].includes(input.value) ? input.value : "off";
     context.saveSettingsDebounced();
     showStatus();
   });
-  unicodeLabel.append(unicode, document.createTextNode("Unicode 输入转码（所有 Vertex 模式）"));
-  const unicodeHint = document.createElement("small");
-  unicodeHint.id = "vertex_unicode_hint";
-  unicodeHint.textContent = "独立于抗截断；仅编码最新真实用户楼层的匹配文本，默认关闭。可能增加 token 用量；请关闭预设中的重复转码。";
-  unicode.setAttribute("aria-describedby", unicodeHint.id);
-  const imageLabel = document.createElement("label");
-  imageLabel.textContent = "图片输入（与 Unicode 互斥）";
-  const image = document.createElement("select");
-  image.id = "vertex_image_input"; imageLabel.htmlFor = image.id;
-  for (const [value,text] of [["off","关闭"],["current-turn","当前轮转图"],["all","全部会话转图"]]) image.add(new Option(text,value));
-  image.value = settings().imageInput || "off";
-  image.addEventListener("change", () => { settings().imageInput = image.value; if (image.value !== "off") { settings().unicodeInput = false; unicode.checked = false; } context.saveSettingsDebounced(); });
-  const imageHint = document.createElement("small");
-  imageHint.id="vertex_image_hint"; imageHint.textContent="独立于抗截断开关；保留系统指令。图片使用缓冲输出，可能增加用量；工具、Schema 等不兼容请求会报错，不会悄悄改回明文。";
-  image.setAttribute("aria-describedby",imageHint.id);
-  panel.append(label, select, unicodeLabel, unicodeHint, imageLabel, image, imageHint, status, check);
+  panel.append(label, select, inputLabel, input, status, check);
   parent.append(panel);
   // Install once and chain any previously installed fetch wrapper.
   const key = Symbol.for("vertex-anti-truncation.fetch");
