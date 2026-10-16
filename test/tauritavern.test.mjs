@@ -59,7 +59,7 @@ test("TauriTavern requests keep ST's own route and carry the transport in body o
     assert.equal(sent.messages.length, 3);
     const included = JSON.parse(sent.custom_include_body);
     const [declaration] = included.tools[0].functionDeclarations;
-    assert.match(declaration.name, /^router_emit_[a-f0-9]{24}$/);
+    assert.equal(declaration.name, "router_emit");
     assert.match(sent.messages[2].content, new RegExp(declaration.name));
     assert.equal(sent.messages[2].role, "user");
     assert.deepEqual(included.toolConfig, { functionCallingConfig: { mode: "ANY", allowedFunctionNames: [declaration.name],
@@ -189,10 +189,11 @@ test("Continue asks for the suffix only and is confirmed without a server plugin
   const sent = original.calls[0].sent;
   assert.deepEqual(sent.messages.slice(0, 3), patch.messages);
   assert.ok(sent.messages[3].content.endsWith(CONTINUATION_INSTRUCTION));
-  assert.match(JSON.parse(sent.custom_include_body).tools[0].functionDeclarations[0].description, /continuation/);
   assert.deepEqual(statuses.at(-1), { mode: "streaming", continuation: true });
   await send(wrapped);
   assert.ok(!original.calls[1].sent.messages.at(-1).content.includes(CONTINUATION_INSTRUCTION));
+  // Continue keeps the ordinary tool declaration; only the final message changes.
+  assert.deepEqual(JSON.parse(sent.custom_include_body).tools, JSON.parse(original.calls[1].sent.custom_include_body).tools);
 });
 
 test("Gemini 4 Argon output limits are checked before TauriTavern sends anything", async () => {

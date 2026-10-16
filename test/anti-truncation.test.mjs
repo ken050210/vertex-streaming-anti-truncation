@@ -37,10 +37,13 @@ test("opt-in preparation preserves parameters and isolates the original request"
   assert.equal(prepared.payload.custom, payload.custom);
   assert.equal(prepared.payload.reasoning, payload.reasoning);
   assert.equal(prepared.payload.temperature, payload.temperature);
-  assert.match(prepared.toolName, /^router_emit_[a-f0-9]{24}$/);
+  assert.equal(prepared.toolName, "router_emit");
   assert.equal(prepared.payload.tools.length, 1);
   assert.equal(prepared.payload.tool_choice.function.name, prepared.toolName);
-  assert.notEqual(prepareAntiTruncation(payload, true).toolName, prepared.toolName);
+  // Repeated, streamed and Continue requests declare identical tools, keeping Vertex's implicit-cache prefix.
+  for (const again of [prepareAntiTruncation(payload, true), prepareAntiTruncation({ ...payload, stream: true }, true, true, { continuation: true })]) {
+    assert.deepEqual([again.payload.tools, again.payload.tool_choice], [prepared.payload.tools, prepared.payload.tool_choice]);
+  }
   assert.equal(prepareAntiTruncation(payload, false).payload, payload);
 });
 

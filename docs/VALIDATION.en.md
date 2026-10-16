@@ -2,6 +2,47 @@
 
 [中文](VALIDATION.md) | English
 
+## Fixed synthetic tool name and implicit caching (2026-10-16, main source update)
+
+A user reported a very low cache rate with anti-truncation enabled. The synthetic tool is now always named `router_emit`, and Continue uses the same tool description as ordinary requests. `npm run verify` passed 211 offline tests. New assertions check that repeated, streamed and Continue requests produce identical tool declarations, and that Continue keeps the ordinary declaration on the SillyTavern plugin and TauriTavern paths.
+
+The live test used the service account already saved in the local Tavern (used only inside the test process; not written to the repository, logs or receipts), Gemini 3.7 Flash, global, Standard and native `generateContent`. Each request was capped at 512 output tokens and sent serially, 10 seconds apart, stopping on any failure with no retries. Request bodies came from the repository code, using the same anti-truncation preparation and native translation as the plugin and gateway. The "before" arm only replaced the tool name with a fresh 24-hex random name per request and restored the old description; everything else was unchanged. Each arm used its own text so no arm could reuse another's cache. Results for the ~30k-token round:
+
+| Request | Prompt tokens | Cached tokens | Reply |
+| --- | --- | --- | --- |
+| After: same request, 1st | 30,430 | 0 | `ALPHA`, restored=true, stop |
+| After: same request, 2nd and 3rd | 30,430 | 24,501 / 24,501 | as above |
+| After: next turn (one more exchange) | 30,442 | 24,493 | `BRAVO`, restored=true, stop |
+| After: Continue (existing `BRA`) | 30,518 | 24,486 | only `VO` added, restored=true, stop |
+| Before: same request 3 times, new random name each | 30,567 / 30,571 / 30,567 | 0 / 0 / 0 | `ALPHA`, restored=true, stop |
+| Control: no tools at all, same request 3 times | 30,474 | 0 / 24,521 / 24,521 | `ALPHA` |
+
+In the "before" arm the system prompt and chat history were identical every time, yet nothing was cached. Tool declarations are thus part of the cached prefix and come before the system prompt; a changed name leaves none of the ~30k tokens after them reusable. After the change, cache reuse matches the no-tool control, and Continue and the next turn reuse the same prefix.
+
+An earlier round used a ~6k-token prompt: all 12 requests (after, before and the no-tool control) cached nothing, so implicit caching did not trigger at that length and the round cannot compare the two. That round did confirm restoration with the fixed name for a plain reply, the next turn, Continue and native streaming (streamed reply `BRAVO`, restored=true, stop). Both rounds made 23 live requests totalling 405,342 prompt tokens, 147,023 of them cached. Receipts are kept in the ignored local files `runtime/cache-live-*.json`.
+
+Evidence boundary: the script comparison above used only Gemini 3.7 Flash, global, Standard and service-account authentication; Express, Flex and Priority were not tested. Implicit caching is best-effort on Vertex's side and may miss after longer gaps or when requests land on other servers. The running Tavern plugin was not updated.
+
+### Real Tavern test (2026-10-16)
+
+A separate SillyTavern 1.19 copy ran from a temporary folder with its own port and data root, using the server plugin with this change. Only the user's actual large role-play preset (about 250 prompts), a character card with an MVU status bar and table-data scripts, the lorebooks it uses and the required settings were copied in; the Tavern Helper scripts and regexes bundled with the card and preset loaded as usual. The model was Gemini 4 Argon, global, Standard, with streaming anti-truncation. Hashes of 88 key files in the user's Tavern matched before and after, nothing was written to its data folder during the test, and the copy, including its copied credentials, was deleted afterwards. To capture request bodies, the copy's plugin had one temporary logging line; the repository code does not contain it.
+
+| Request | Prompt tokens | Cached tokens | Result |
+| --- | --- | --- | --- |
+| Turn 2 reply | 126,078 | 0 | about 20k characters, restored=true, STOP |
+| Turn 3 reply | 136,432 | 0 | about 21k characters, restored=true, STOP |
+| Turn 3 Continue | 140,439 | 0 | only 2,950 characters added (`suffix`), no rewrite or repetition, restored=true, STOP |
+| Card script requests (story-memory recall, table-data update), 3 | 134,728–141,231 | 0 | restored=true, stop |
+| Turn 3 reply body resent unchanged, 200-token output cap | 136,432 | 134,383 | still 134,383 when sent again about 5 minutes later |
+
+Turn 1 (the opening) and one script request after it also restored normally, but their usage was not recorded.
+
+Functionally, replies, native streaming, Continue, the MVU status bar and variable updates, and the scripts' non-streaming requests all worked. For caching, the unchanged resend reused 98.5%, so with the fixed tool name this real prompt is cacheable; but turn after turn in Tavern, nothing was cached. Comparing the turn 3 reply and Continue bodies: they share the first 59,918 characters and then differ at the 全局状态 (global state) table, which updates every turn. The table sits inside one long block the preset merges, about a third of the way into the prompt. When Continue was sent, the turn 3 cache was still valid (a later resend still hit it), yet none of that identical opening was reused. The inference is that Vertex reuses a cache only when the new request contains the whole previous request except roughly its last 2k tokens; any change partway through makes the whole cached prompt unusable. Google's documentation does not state this; it is inferred from these measurements.
+
+Presets or cards that change the front of the prompt every turn (for example, a status table or depth-inserted lorebook entries placed before the chat history) therefore still get very few cache hits in normal play. Hits are expected only when the same prompt is resent within a few minutes, such as a regenerate; regenerating inside Tavern was not tested here. Normal turns can only hit if the content that changes each turn comes after the chat history and is kept short, which depends on the preset and card structure, not the plugin. The scripts bundled with such cards also send one or two extra requests of similar size each turn, and these miss too.
+
+This round made about 10 live requests inside Tavern; the 6 with recorded usage totalled about 815k prompt tokens and 41k output tokens. The 6 script resends totalled about 827k prompt tokens, 814k of them cached. A usage receipt without chat content is kept in the ignored local file `runtime/tavern-cache-live-2026-10-16.json`.
+
 ## Docker gateway 0.8.0 (2026-10-16)
 
 All 206 offline tests passed on Windows and inside a Linux amd64 container. Compose checks cover initial setup, Host/Origin/CSRF and API authentication, published ports, service-name networking, non-root/read-only operation, CJK WebP rendering, persistence across recreation, health and graceful shutdown. The ARM64 image also receives a locally emulated Compose check; this is not an ARM hardware performance test.

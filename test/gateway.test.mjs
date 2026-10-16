@@ -129,7 +129,7 @@ test("native HTTP text arrives before upstream completion, with matching metadat
   assert.deepEqual(f.events, events);
   assert.equal(events[0].trafficType, "ON_DEMAND");
   const logs = JSON.stringify(events);
-  for (const privateValue of [key, token, payload.messages[0].content, "The river", "router_emit_"]) assert.equal(logs.includes(privateValue), false);
+  for (const privateValue of [key, token, payload.messages[0].content, "The river", "router_emit"]) assert.equal(logs.includes(privateValue), false);
   assert.equal(f.requests.length, 1);
 });
 

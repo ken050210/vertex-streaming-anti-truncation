@@ -33,7 +33,10 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
         message.tool_calls?.length || message.function_call)) return skip("tool-history");
     const requested = streamArguments && payload.stream === true;
     const nativeStreaming = requested && supportsNativeTextStream(payload);
-    const toolName = "router_emit_" + Array.from(crypto.getRandomValues(new Uint8Array(12)), byte => byte.toString(16).padStart(2, "0")).join("");
+    // Every request declares the same tool so the prompt prefix stays identical for Vertex
+    // implicit caching; Continue differs only in the final message. Requests with client
+    // tools bypass this transport, so the fixed name cannot collide with a real tool.
+    const toolName = "router_emit";
     return {
         toolName,
         nativeStreaming,
@@ -46,7 +49,7 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
             }],
             tools: [{ type: "function", function: {
                 name: toolName,
-                description: continuation ? "Deliver only the new continuation text to append to the existing message." : "Deliver the complete user-visible reply as text.",
+                description: "Deliver the user-visible reply as text.",
                 parameters: { type: "object", properties: { content: { type: "string" } }, required: ["content"], additionalProperties: false },
             } }],
             tool_choice: { type: "function", function: { name: toolName } },

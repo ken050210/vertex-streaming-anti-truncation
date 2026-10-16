@@ -2,6 +2,16 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Unreleased — anti-truncation requests can hit the Vertex cache
+
+Available from `main` (2026-10-16); versions are unchanged. The standalone gateway, the SillyTavern server plugin and the TauriTavern adaptation all include it.
+
+- The synthetic anti-truncation tool is now always named `router_emit` instead of a fresh random name per request (`router_emit_` plus 24 hex digits). Tool declarations sit near the start of the prompt, so a changing name made every request start differently: Vertex implicit caching never matched, and character settings and chat history were billed at full price every turn. Requests that carry client tools already bypass anti-truncation, so the fixed name cannot collide with a real tool.
+- Continue no longer switches to a different tool description; only the final instruction differs, so it shares the cache with ordinary requests.
+- Live comparison (Gemini 3.7 Flash, a ~30k-token conversation): after the change, every request from the second on reused about 80% of the prompt (24,501 of 30,430 tokens); before it, all three requests reused none. Caching remains Vertex's decision: a ~6k-token prompt was not cached even when identical and sent without tools. See [Validation](docs/VALIDATION.en.md).
+- Presets or cards that change the front of the prompt every turn still get very few cache hits. In a real Tavern test (Gemini 4 Argon, a large preset of about 136k tokens and a card with an MVU status table), resending the same prompt reused 98.5%, but every normal turn reused nothing: the status table updates each turn and sits before the chat history, and Vertex does not reuse a cache when the prompt changes partway through. For normal turns to hit, the preset or card must put the content that changes each turn after the chat history and keep it short; the plugin cannot change this.
+- Update the half that actually runs: the server plugin in SillyTavern (a Git install updates itself when Tavern starts), the extension in TauriTavern, or the gateway source or image.
+
 ## Standalone gateway 0.8.0 — Docker deployment
 
 - Publish Node 24 Linux images on GHCR for amd64 and arm64, with `latest`, `0.8.0` and commit tags. The default Compose file pulls the image; `compose.build.yaml` enables a source build. Includes a persistent settings volume, non-root execution, a read-only root filesystem and a local liveness check.

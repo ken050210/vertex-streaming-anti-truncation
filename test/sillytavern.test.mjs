@@ -125,7 +125,7 @@ test("Continue requests append a suffix instruction after processing, for prefil
     assert.deepEqual(input, before);
     assert.equal(prepared.continuation, true);
     assert.equal(prepared.upstreamStream, mode === "streaming");
-    assert.match(prepared.body.tools[0].functionDeclarations[0].description, /only the new continuation/);
+    assert.deepEqual(prepared.body.tools, prepareSillyTavernRequest(request({ vertex_anti_truncation: mode }), adapters).body.tools);
     assert.equal(prepared.body.contents.at(-1).role, "user");
   }
   // An assistant prefill in an ordinary preset is not a Continue operation.
