@@ -11,8 +11,31 @@ export const DEFAULT_SETTINGS = Object.freeze({
   hideUnavailableModels: true, geminiPrefillToUser: true, geminiLongDecode: false, unicodeInput: false, imageInput: "off",
   geminiPromptRetryEnabled: false, geminiPromptRetryText: "", geminiPromptRetryMatches: null, customBaseUrl: "",
   gatewayKey: "", serviceAccountJson: "", apiKey: "", accessToken: "", customApiKey: "",
+  accountRotationEnabled: false, accountTimeoutMs: 60000, accountFailureThreshold: 2, accountCooldownMs: 60000, accounts: [],
 });
 export const SECRET_FIELDS = ["gatewayKey", "serviceAccountJson", "apiKey", "accessToken", "customApiKey"];
+export const ACCOUNT_FIELDS = ["id", "name", "authMode", "projectId", "location", "customBaseUrl", "credential"];
+export const ACCOUNT_CREDENTIALS = { "service-account": "serviceAccountJson", express: "apiKey", "access-token": "accessToken", custom: "customApiKey" };
+
+function accountConnections(s, requireAscii) {
+  if (!Array.isArray(s.accounts) || s.accounts.length > 19) throw new Error("Accounts must be a list of at most 19 additional accounts");
+  const ids = new Set(["primary"]);
+  return s.accounts.map(account => {
+    if (!account || typeof account !== "object" || Object.keys(account).some(key => !ACCOUNT_FIELDS.includes(key)) ||
+        typeof account.id !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(account.id) || ids.has(account.id)) throw new Error("Invalid or duplicate account ID");
+    ids.add(account.id);
+    if (typeof account.name !== "string" || !account.name.trim() || account.name.length > 80) throw new Error("Account name must contain 1-80 characters");
+    if (!Object.hasOwn(ACCOUNT_CREDENTIALS, account.authMode)) throw new Error("Invalid account authentication mode");
+    // Keep custom model aliases and Vertex models in separate pools; Vertex auth modes can mix.
+    if ((account.authMode === "custom") !== (s.authMode === "custom")) throw new Error("Accounts must all use Vertex or all use custom upstreams");
+    if (typeof account.credential !== "string" || account.credential.length > 128 * 1024) throw new Error("Invalid account credential");
+    return { id: account.id, name: account.name, ...buildConnectionConfig({
+      authMode: account.authMode, projectId: account.projectId ?? "", location: account.location ?? "global",
+      customBaseUrl: account.customBaseUrl ?? "", serviceTier: s.serviceTier,
+      [ACCOUNT_CREDENTIALS[account.authMode]]: account.credential,
+    }, { requireAscii }) };
+  });
+}
 
 function integer(value, fallback, min, max, name) {
   const number = value == null || value === "" ? fallback : Number(value);
@@ -34,6 +57,11 @@ export async function settingsFromEnv(env = process.env) {
     catch { throw new Error("Unable to read the Google service-account file (GOOGLE_APPLICATION_CREDENTIALS)"); }
   }
   let geminiPromptRetryText = "";
+  let accounts = [];
+  if (env.GATEWAY_ACCOUNTS_FILE) {
+    try { accounts = JSON.parse((await readFile(env.GATEWAY_ACCOUNTS_FILE, "utf8")).replace(/^\uFEFF/, "")); }
+    catch { throw new Error("Unable to read account JSON (GATEWAY_ACCOUNTS_FILE)"); }
+  }
   if (env.GEMINI_PROMPT_RETRY_TEXT_FILE) {
     try { geminiPromptRetryText = (await readFile(env.GEMINI_PROMPT_RETRY_TEXT_FILE, "utf8")).replace(/^\uFEFF/, ""); }
     catch { throw new Error("Unable to read the prompt retry text file (GEMINI_PROMPT_RETRY_TEXT_FILE)"); }
@@ -60,6 +88,10 @@ export async function settingsFromEnv(env = process.env) {
     geminiPrefillToUser: toggle("GEMINI_PREFILL_TO_USER", true), geminiLongDecode: toggle("GEMINI_LONG_DECODE", false),
     geminiPromptRetryEnabled: toggle("GEMINI_PROMPT_RETRY_ENABLED", false), geminiPromptRetryText,
     geminiPromptRetryMatches: retryMatches.length ? retryMatches : null,
+    accounts, accountRotationEnabled: toggle("ACCOUNT_ROTATION_ENABLED", false),
+    accountTimeoutMs: integer(env.ACCOUNT_TIMEOUT_MS, 60000, 1000, 1800000, "ACCOUNT_TIMEOUT_MS"),
+    accountFailureThreshold: integer(env.ACCOUNT_FAILURE_THRESHOLD, 2, 1, 100, "ACCOUNT_FAILURE_THRESHOLD"),
+    accountCooldownMs: integer(env.ACCOUNT_COOLDOWN_MS, 60000, 1000, 3600000, "ACCOUNT_COOLDOWN_MS"),
   };
 }
 
@@ -130,7 +162,7 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
   if (!["off", "current-turn", "all"].includes(s.imageInput)) throw new Error("Invalid image input mode");
   if (s.unicodeInput && s.imageInput !== "off") throw new Error("Unicode and image input are mutually exclusive");
   if (typeof s.antiTruncation !== "boolean") throw new Error("Invalid anti-truncation setting");
-  for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiLongDecode", "geminiPromptRetryEnabled", "unicodeInput"]) {
+  for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiLongDecode", "geminiPromptRetryEnabled", "unicodeInput", "accountRotationEnabled"]) {
     if (typeof s[name] !== "boolean") throw new Error("Invalid compatibility toggle");
   }
   if (typeof s.geminiPromptRetryText !== "string" || Buffer.byteLength(s.geminiPromptRetryText) > MAX_RETRY_TEXT_BYTES) {
@@ -143,8 +175,14 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
     throw new Error("Prompt retry error matches must list 1-32 texts of at most 500 characters");
   }
   const models = modelProfiles(s.models, s.antiTruncation, { custom: s.authMode === "custom" });
+  const accounts = accountConnections(s, requireAscii);
+  if (s.accountRotationEnabled && !accounts.length) throw new Error("Add at least one additional account before enabling rotation");
   return {
     ...buildConnectionConfig(s, { requireAscii }), gatewayKey: key, models,
+    accountRotation: { enabled: s.accountRotationEnabled, accounts,
+      timeoutMs: integer(s.accountTimeoutMs, 60000, 1000, 1800000, "ACCOUNT_TIMEOUT_MS"),
+      failureThreshold: integer(s.accountFailureThreshold, 2, 1, 100, "ACCOUNT_FAILURE_THRESHOLD"),
+      cooldownMs: integer(s.accountCooldownMs, 60000, 1000, 3600000, "ACCOUNT_COOLDOWN_MS") },
     hideUnavailableModels: s.hideUnavailableModels, geminiPrefillToUser: s.geminiPrefillToUser, geminiLongDecode: s.geminiLongDecode, unicodeInput: s.unicodeInput, imageInput: s.imageInput,
     geminiPromptRetry: { enabled: s.geminiPromptRetryEnabled, text: s.geminiPromptRetryText, ...(matches ? { errorMatches: matches } : {}) },
     // Legacy fields remain available to CLI integrations; profiles own behavior.
@@ -167,5 +205,6 @@ export async function loadConfig(env = process.env) {
 export function publicSettings(settings) {
   const result = { ...settings, models: modelProfiles(settings.models, settings.antiTruncation, { custom: settings.authMode === "custom" }) };
   for (const name of SECRET_FIELDS) { delete result[name]; result[name + "Set"] = Boolean(settings[name]); }
+  result.accounts = (settings.accounts || []).map(({ credential, ...account }) => ({ ...account, credentialSet: Boolean(credential) }));
   return result;
 }

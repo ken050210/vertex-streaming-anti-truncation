@@ -2,14 +2,14 @@
 
 中文 | [English](DOCKER.en.md)
 
-这是独立网关的 Docker 版，包含网页控制台与 OpenAI 兼容 API。酒馆通过自定义 API 连接它；它不会给酒馆容器安装插件。公开镜像为 `ghcr.io/ken050210/vertex-streaming-anti-truncation`，提供 `latest`、`0.11.0` 和提交标签，支持 `linux/amd64` 与 `linux/arm64`。需要 Docker Engine / Docker Desktop（Linux containers）和 Docker Compose v2 或更新版本。
+这是独立网关的 Docker 版，包含网页控制台与 OpenAI 兼容 API。酒馆通过自定义 API 连接它；它不会给酒馆容器安装插件。公开镜像为 `ghcr.io/ken050210/vertex-streaming-anti-truncation`，提供 `latest`、`0.12.0` 和提交标签，支持 `linux/amd64` 与 `linux/arm64`。需要 Docker Engine / Docker Desktop（Linux containers）和 Docker Compose v2 或更新版本。
 
 ## 启动
 
 ```sh
 mkdir vertex-gateway
 cd vertex-gateway
-curl -fL https://github.com/ken050210/vertex-streaming-anti-truncation/releases/download/gateway-v0.11.0/compose.yaml -o compose.yaml
+curl -fL https://github.com/ken050210/vertex-streaming-anti-truncation/releases/download/gateway-v0.12.0/compose.yaml -o compose.yaml
 docker compose pull
 docker compose up -d
 docker compose logs vertex-gateway
@@ -17,13 +17,13 @@ docker compose logs vertex-gateway
 
 打开日志中的首次设置链接（含 `#setup=...`），默认控制台为 `http://127.0.0.1:4780/`。按网页提示填写 Google 凭据（或[自定义上游](../README.md#自定义上游)的地址和 API Key）、模型和随机网关密钥，保存后 API 在 `http://127.0.0.1:4781/v1` 启动。以后使用保存的网关密钥登录。首次设置链接属于管理凭据，不要分享日志。
 
-默认无需登录镜像仓库、克隆源码、安装宿主机 Node.js 或准备 `.env`。也可从 [Release](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/gateway-v0.11.0) 手动下载 Compose 文件。Compose 不会把宿主机的 Google 环境变量自动传入容器。启动、保存、健康检查均不会发送推理；网页中的连接测试需要手动触发，按 Google 账户计费；接自定义上游时按该服务的规则计费。
+默认无需登录镜像仓库、克隆源码、安装宿主机 Node.js 或准备 `.env`。也可从 [Release](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/gateway-v0.12.0) 手动下载 Compose 文件。Compose 不会把宿主机的 Google 环境变量自动传入容器。启动、保存、健康检查均不会发送推理；网页中的连接测试需要手动触发，按 Google 账户计费；接自定义上游时按该服务的规则计费。
 
 容器内监听 `0.0.0.0`，Compose 默认只把两个端口发布到宿主机 `127.0.0.1`。[Docker 的端口发布说明](https://docs.docker.com/engine/network/port-publishing/)解释了两者的区别。原有 `npm start` 仍默认只监听本机。
 
 ## 修改端口或访问地址
 
-从 Release 下载 `.env.docker.example`，复制为 `.env.docker`，编辑后每次使用：
+从 Release 下载 `default.env.docker.example`，复制为 `.env.docker`，编辑后每次使用：
 
 ```sh
 docker compose --env-file .env.docker pull
@@ -33,7 +33,7 @@ docker compose --env-file .env.docker logs vertex-gateway
 
 | 设置 | 用途 |
 | --- | --- |
-| `IMAGE_TAG` | 默认 `latest`；填写 `0.11.0` 可固定版本 |
+| `IMAGE_TAG` | 默认 `latest`；填写 `0.12.0` 可固定版本 |
 | `DOCKER_BIND_IP` | 宿主机发布地址，默认 `127.0.0.1`；可信局域网可指定宿主机网卡 IP |
 | `CONSOLE_PORT` | 宿主机控制台端口，默认 `4780` |
 | `GATEWAY_PORT` | 宿主机 API 端口，默认 `4781` |
@@ -67,6 +67,12 @@ ssh -N -L 4780:127.0.0.1:4780 -L 4781:127.0.0.1:4781 user@server
 使用 HTTPS 反代时，设置 `GUI_ORIGIN=https://console.example.com`，以及实际客户端使用的 `GATEWAY_PUBLIC_URL`。反代必须保留浏览器的 **Host** 和 **Origin**，并把整个控制台站点转发到 4780；不支持把控制台挂在子路径下。程序只信任明确配置的来源，不根据 `X-Forwarded-Host` 自动放行。HTTPS 来源的会话 Cookie 带 `Secure`。
 
 API 反代转发到 4781，保留 `Authorization`，关闭响应缓冲，并让读取超时覆盖配置的上游超时（默认 600 秒），以保留 SSE 增量输出。配置文件支持反代访问；具体代理软件和公网 TLS 需按你的部署验证。不要将带管理凭据的控制台直接暴露在公网 HTTP 上。
+
+## 更新到 0.12.0 与多账号轮询
+
+保留现有数据卷，运行 `docker compose pull` 和 `docker compose up -d`；使用 `.env.docker` 的部署继续为这两条命令加上 `--env-file .env.docker`，并将固定的 `IMAGE_TAG` 改为 `0.12.0`。不要运行 `down -v`，它会删除保存的配置。
+
+原有连接会继续作为主账号，轮询默认关闭。打开「连接配置 → 多账号轮询」，添加附加账号后启用并保存；可设置单账号超时、失败阈值及恢复等待时间，无需重建容器。所有账号保存在同一数据卷的 `settings.json`，须像原有凭据一样保护。详见[轮询规则与限制](../README.md#多账号轮询独立网关)。
 
 ## 酒馆也在 Docker 中
 

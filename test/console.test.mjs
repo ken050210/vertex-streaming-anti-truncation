@@ -64,6 +64,30 @@ async function fixture(t, options = {}) {
   return { app, store, directory, base, cookie, csrf, api, settings, requests };
 }
 
+test("console saves account rotation, redacts nested credentials and preserves them across reloads", async t => {
+  const f = await fixture(t);
+  const account = { id: "backup", name: "Backup", authMode: "express", projectId: "backup-project", location: "global", credential: "synthetic-backup-key" };
+  let saved = await f.api("/api/config", { revision: "new", settings: { ...f.settings, accountRotationEnabled: true,
+    accountTimeoutMs: 15000, accountFailureThreshold: 3, accountCooldownMs: 90000, accounts: [account] } });
+  assert.equal(saved.status, 200);
+  let config = await (await f.api("/api/config")).json();
+  assert.equal(config.settings.accounts[0].credentialSet, true);
+  assert.equal(JSON.stringify(config).includes(account.credential), false);
+  assert.equal((await f.store.load()).settings.accounts[0].credential, account.credential);
+  const { credentialSet, ...publicAccount } = config.settings.accounts[0];
+  saved = await f.api("/api/config", { revision: config.revision, settings: { accounts: [{ ...publicAccount, name: "Renamed", credential: "" }] } });
+  assert.equal(saved.status, 200);
+  assert.equal((await f.store.load()).settings.accounts[0].credential, account.credential);
+  const status = await (await f.api("/api/status")).json();
+  assert.equal(status.accounts.length, 2);
+  assert.equal(status.active.accountRotationEnabled, true);
+  config = await (await f.api("/api/config")).json();
+  saved = await f.api("/api/config", { revision: config.revision, settings: { accountRotationEnabled: false, accounts: [] } });
+  assert.equal(saved.status, 200);
+  assert.deepEqual((await f.store.load()).settings.accounts, []);
+  assert.equal(f.requests.length, 0);
+});
+
 test("console protects credentials and mutations with local Host, origin, session and CSRF checks", async t => {
   const f = await fixture(t);
   for (const path of ["/", "/app.js", "/app.css", "/favicon.svg"]) assert.equal((await fetch(f.base + path)).status, 200);

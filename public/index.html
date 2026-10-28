@@ -31,7 +31,7 @@
         <button data-page="test"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6m-5 0v7l-5 8a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-8V3M8 15h8"/></svg>连接测试</button>
       </nav>
       <div class="rail-note"><span class="eyebrow">MODEL LIBRARY</span><strong id="rail-models">正在读取模型</strong><span class="small muted">正常 · 非流式 · 流式抗截断</span></div>
-      <div class="rail-foot"><span id="rail-lamp" class="lamp idle"></span><div><strong id="rail-status">正在连接</strong><span id="listen-scope" class="small muted">仅限本机 · 127.0.0.1</span></div><span class="version">0.8</span></div>
+      <div class="rail-foot"><span id="rail-lamp" class="lamp idle"></span><div><strong id="rail-status">正在连接</strong><span id="listen-scope" class="small muted">仅限本机 · 127.0.0.1</span></div><span class="version">0.12.0</span></div>
     </aside>
     <div class="main-wrap">
       <header class="topbar"><div><p class="eyebrow">GATEWAY OPERATIONS</p><h1 id="page-title">总览</h1></div>
@@ -67,6 +67,19 @@
                 <div id="credential-custom" class="form-grid" hidden><div class="field"><label for="custom-base-url">上游地址（Base URL）</label><input id="custom-base-url" name="customBaseUrl" inputmode="url" placeholder="https://relay.example.com/v1" spellcheck="false" maxlength="2048" aria-describedby="custom-base-url-help"><p id="custom-base-url-help" class="hint">提供 Gemini 模型的 OpenAI 兼容服务，填到 /v1 这一级。请求发往“地址/chat/completions”，拉取目录读“地址/models”。</p></div><div class="field"><label for="custom-api-key">上游 API Key</label><input id="custom-api-key" name="customApiKey" type="password" placeholder="输入上游 API Key" autocomplete="new-password" aria-describedby="custom-api-key-help"><p id="custom-api-key-help" class="hint">以 Authorization: Bearer 发送。已保存后留空保留。</p></div></div>
                 <label id="clear-other-row" class="check-row" hidden><input id="clear-other" type="checkbox"><span id="clear-other-label">保存时删除其他鉴权方式已保存的凭据</span></label>
               </section>
+              <section class="panel"><div class="panel-head"><h2>多账号轮询</h2></div>
+                <label class="toggle-row"><span>启用多账号轮询<small>默认关闭。开启后，上方主账号与下方账号按请求轮流使用，共用模型列表和服务等级。</small></span><input id="account-rotation" type="checkbox"></label>
+                <div class="form-grid">
+                  <label class="field">单账号超时（秒）<input id="account-timeout" type="number" min="1" max="1800" value="60" required></label>
+                  <label class="field">连续失败阈值（次）<input id="account-failures" type="number" min="1" max="100" value="2" required></label>
+                  <label class="field">恢复等待时间（秒）<input id="account-cooldown" type="number" min="1" max="3600" value="60" required></label>
+                </div>
+                <p class="hint">超时、鉴权、限流和上游服务错误计入失败。达到阈值后暂时跳过该账号，等待后重新参与；成功会清零失败次数。尚未输出时可切换下一账号，每次请求每个账号最多尝试一次，总时长仍受下方上游超时限制。重试可能增加上游用量。</p>
+                <p class="hint">可混用 Vertex 的服务账号、Express 和 OAuth；自定义上游只能与自定义上游组成账号池。各账号须能使用相同模型。</p>
+                <div id="account-list"></div>
+                <button id="add-account" class="btn" type="button">添加账号</button>
+                <p id="account-status" class="hint" role="status"></p>
+              </section>
               <section class="panel"><div class="panel-head"><h2><span class="step">02</span> 服务等级与传输</h2></div>
                 <fieldset id="tier-options" class="option-group tier-options"><legend class="sr-only">服务等级</legend>
                   <label class="option-card"><input type="radio" name="serviceTier" value="standard" checked><span><strong>Standard</strong><small>标准按量服务</small></span></label>
@@ -83,7 +96,7 @@
               <section class="panel compatibility-panel">
                 <div class="panel-head"><h2><span class="step">04</span> SillyTavern 兼容与重试</h2></div>
                 <label class="toggle-row"><span>隐藏无可用路由的模型<small>隐藏已停用的版本及上游返回 401 后的连接。429、超时和其他临时错误不隐藏。</small></span><input id="hide-unavailable" type="checkbox" checked></label>
-                <p class="hint">独立网关共用一套凭据。修正凭据后保存并应用，即可重新判断；模型列表不会触发推理探测。</p>
+                <p class="hint">轮询关闭时使用主账号；开启时，单个账号的 401 不隐藏整个模型。修正凭据后保存并应用会重置账号状态；模型列表不会触发推理探测。</p>
                 <label class="field">图片输入（实验）<select id="image-input" aria-describedby="image-input-help"><option value="off">关闭</option><option value="current-turn">当前轮转图</option><option value="all">全部会话转图</option></select></label><p id="image-input-help" class="hint">与 Unicode 互斥。文字转图片（无损 WebP）会增加用量，图片会触发抗截断缓冲回退。超限或不支持的字符会报错。</p>
                 <label class="toggle-row"><span>Unicode 输入转码（所有模型）<small>独立于抗截断，仅编码最新真实用户楼层的匹配文本。客户端须传递楼层原文；默认关闭，可能增加 token 用量。</small></span><input id="unicode-input" type="checkbox"></label>
                 <label class="toggle-row"><span>Gemini 3.7 / 3.8 Flash、4 Argon 预填充转为 USER<small>将末尾纯文本 assistant 消息改为 user，保留原文；工具和思考历史保持原样。转换不保证模型会接着预填充续写。</small></span><input id="prefill-to-user" type="checkbox" checked></label>

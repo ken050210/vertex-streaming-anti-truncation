@@ -2,7 +2,7 @@ import { readFile, mkdir, open, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
-import { DEFAULT_SETTINGS, SECRET_FIELDS, buildConfig, buildConnectionConfig, settingsFromEnv } from "./config.mjs";
+import { DEFAULT_SETTINGS, SECRET_FIELDS, ACCOUNT_FIELDS, buildConfig, buildConnectionConfig, settingsFromEnv } from "./config.mjs";
 import { modelProfiles } from "./model-profiles.mjs";
 
 export class SettingsError extends Error {
@@ -15,6 +15,17 @@ export function mergeSettings(current, patch, { connectionOnly = false } = {}) {
   if (!patch || typeof patch !== "object" || Array.isArray(patch) || Object.keys(patch).some(k => !settingNames.has(k))) throw new SettingsError("Invalid configuration fields");
   const next = { ...current };
   for (const [key, value] of Object.entries(patch)) {
+    if (key === "accounts") {
+      if (!Array.isArray(value) || value.length > 19) throw new SettingsError("Accounts must be a list of at most 19 additional accounts");
+      next.accounts = value.map(account => {
+        if (!account || typeof account !== "object" || Object.keys(account).some(k => !ACCOUNT_FIELDS.includes(k))) throw new SettingsError("Invalid account fields");
+        const previous = current.accounts?.find(item => item.id === account.id && item.authMode === account.authMode);
+        const credential = account.credential;
+        if (credential != null && typeof credential !== "string") throw new SettingsError("Invalid account credential");
+        return { ...account, credential: credential === null ? "" : credential?.trim().replace(/^\uFEFF/, "") || previous?.credential || "" };
+      });
+      continue;
+    }
     if (SECRET_FIELDS.includes(key)) {
       // Blank keeps the stored secret; null removes it.
       if (value === null) { next[key] = ""; continue; }

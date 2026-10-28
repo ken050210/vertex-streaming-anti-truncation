@@ -18,6 +18,13 @@ function toast(message) { $("toast").textContent = message; $("toast").hidden = 
 function errorMessage(message) {
   const catalogFailed = "Google 模型目录返回异常，未应用部分列表，可重试或手动添加模型 ID。";
   const messages = {
+    "Add at least one additional account before enabling rotation": "请先添加至少一个附加账号，再启用轮询。",
+    "Accounts must all use Vertex or all use custom upstreams": "主账号与附加账号须同为 Vertex 或同为自定义上游，请调整账号的鉴权方式。",
+    "Invalid ACCOUNT_TIMEOUT_MS": "单账号超时须为 1–1800 秒。",
+    "Invalid ACCOUNT_FAILURE_THRESHOLD": "连续失败阈值须为 1–100 次。",
+    "Invalid ACCOUNT_COOLDOWN_MS": "恢复等待时间须为 1–3600 秒。",
+    "account_timeout": "此账号超过单账号超时限制。",
+    "accounts_unavailable": "所有账号都在恢复等待中，请稍后重试。",
     "Invalid local access key": "本地访问密钥不正确。", "Please sign in": "登录已过期，请重新登录。",
     "Invalid VERTEX_PROJECT_ID": "请填写有效的 Google Cloud 项目 ID。", "Invalid VERTEX_API_KEY": "请输入快速模式 API Key。",
     "Invalid VERTEX_ACCESS_TOKEN": "请输入有效的 OAuth Access Token。", "Invalid PORT": "端口必须在 1–65535 之间。",
@@ -207,9 +214,40 @@ function draft() {
     apiKey: credential("api-key", "express"), accessToken: credential("access-token", "access-token"),
     customBaseUrl: $("custom-base-url").value.trim(), customApiKey: credential("custom-api-key", "custom"),
     port: Number($("port").value), timeoutMs: Number($("timeout").value) * 1000, antiTruncation: true, models: state.models.map(m => ({ ...m })),
+    accountRotationEnabled: $("account-rotation").checked, accounts: accountDraft(),
+    accountTimeoutMs: Number($("account-timeout").value) * 1000, accountFailureThreshold: Number($("account-failures").value), accountCooldownMs: Number($("account-cooldown").value) * 1000,
     unicodeInput: $("unicode-input").checked, imageInput: $("image-input").value, hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
     geminiLongDecode: $("long-decode").checked, geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
     geminiPromptRetryMatches: retryMatches() };
+}
+function accountDraft() {
+  return [...$("account-list").children].map(row => Object.fromEntries([["id", row.dataset.id],
+    ...[...row.querySelectorAll("[data-field]")].map(input => [input.dataset.field, input.value.trim()])]));
+}
+function addAccount(account) {
+  const row = document.createElement("fieldset");
+  row.className = "account-row"; row.dataset.id = account.id;
+  row.innerHTML = `<legend>附加账号</legend><div class="form-grid">
+    <label class="field">账号名称<input data-field="name" maxlength="80" required></label>
+    <label class="field">鉴权方式<select data-field="authMode">${Object.entries(authNames).map(([value, name]) => `<option value="${value}">${name}</option>`).join("")}</select></label>
+    <label class="field" data-vertex>项目 ID<input data-field="projectId" maxlength="128" spellcheck="false"></label>
+    <label class="field" data-vertex>地区<input data-field="location" spellcheck="false"></label>
+    <label class="field" data-custom>上游地址<input data-field="customBaseUrl" type="url" placeholder="https://relay.example.com/v1" spellcheck="false"></label>
+    </div><label class="field"><span data-credential-label>凭据</span><textarea data-field="credential" rows="3" spellcheck="false" autocomplete="off"></textarea></label>
+    <button class="btn small-button" type="button">移除账号</button>`;
+  for (const input of row.querySelectorAll("[data-field]")) input.value = account[input.dataset.field] || "";
+  const mode = row.querySelector('[data-field="authMode"]'), secret = row.querySelector('[data-field="credential"]');
+  secret.placeholder = account.credentialSet ? "已保存 · 留空保留，输入则替换" : "输入此账号的凭据";
+  function showFields() {
+    row.querySelectorAll("[data-vertex]").forEach(el => { el.hidden = mode.value === "custom"; });
+    row.querySelector("[data-custom]").hidden = mode.value !== "custom";
+    row.querySelector('[data-field="customBaseUrl"]').disabled = mode.value !== "custom";
+    row.querySelector("[data-credential-label]").textContent = credentialFields[mode.value][1];
+  }
+  mode.addEventListener("change", () => { secret.value = ""; secret.placeholder = "鉴权方式已更改，请重新输入凭据"; showFields(); });
+  row.querySelector("button").addEventListener("click", () => { row.remove(); $("add-account").disabled = false; updateDraft(); });
+  $("account-list").append(row); showFields();
+  $("add-account").disabled = $("account-list").children.length >= 19;
 }
 function retryMatches() {
   const lines = $("prompt-retry-matches").value.split("\n").map(line => line.trim()).filter(Boolean);
@@ -281,6 +319,12 @@ function fillConfig(c = state.config.settings) {
   }
   for (const [id, name] of [["project-id", "projectId"], ["location", "location"], ["port", "port"], ["custom-base-url", "customBaseUrl"]]) $(id).value = c[name];
   $("timeout").value = c.timeoutMs / 1000;
+  $("account-rotation").checked = c.accountRotationEnabled === true;
+  $("account-timeout").value = (c.accountTimeoutMs ?? 60000) / 1000;
+  $("account-failures").value = c.accountFailureThreshold ?? 2;
+  $("account-cooldown").value = (c.accountCooldownMs ?? 60000) / 1000;
+  $("account-list").replaceChildren(); $("add-account").disabled = false;
+  for (const account of c.accounts || []) addAccount(account);
   $("unicode-input").checked = c.unicodeInput === true;
   $("image-input").value = c.imageInput || "off";
   $("hide-unavailable").checked = c.hideUnavailableModels !== false;
@@ -301,6 +345,7 @@ function fillConfig(c = state.config.settings) {
 const isReady = c => Boolean(c.gatewayKeySet && c[credentialFields[c.authMode]?.[0] + "Set"]);
 function renderStatus() {
   const s = state.status, c = state.config.settings, current = s.active;
+  $("account-status").textContent = s.accounts?.length ? "运行状态：" + s.accounts.map(a => `${a.name}：${a.cooldownRemainingMs > 0 ? `等待 ${Math.ceil(a.cooldownRemainingMs / 1000)} 秒` : "参与轮询"}，连续失败 ${a.failures} 次`).join("；") : "当前未启用轮询。";
   const ready = isReady(c);
   const label = s.running ? "运行中" : ready ? "已停止" : "待配置";
   $("rail-status").textContent = label; $("rail-lamp").className = "lamp " + (s.running ? "" : "idle");
@@ -440,8 +485,13 @@ function eventTable(events) {
     // Pass-through requests keep the plain stream label; every audited transport, fallback and skip reason has its own.
     const transport = transportNames[a.transport] || (!a.transport || a.transport === "disabled" ? (e.stream ? "SSE 流式" : "普通响应") : a.transport);
     const success = e.status >= 200 && e.status < 300;
-    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small></td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code" title="${esc(errorMessage(e.code))}">${esc(e.code)}</small>` : ""}${integrityBadge(e.responseIntegrity)}${e.upstreamError ? `<small>上游：${esc([e.upstreamError.status, e.upstreamError.reason].filter(Boolean).join(" · "))}</small>` : ""}${compatibilityBadge(e.geminiCompatibility)}${inputBadge(e)}</td><td><span title="${esc(a.transport || "")}">${esc(transport)}</span><small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td>${usageCell(e)}<td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
+    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small></td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code" title="${esc(errorMessage(e.code))}">${esc(e.code)}</small>` : ""}${integrityBadge(e.responseIntegrity)}${e.upstreamError ? `<small>上游：${esc([e.upstreamError.status, e.upstreamError.reason].filter(Boolean).join(" · "))}</small>` : ""}${compatibilityBadge(e.geminiCompatibility)}${inputBadge(e)}${accountBadge(e)}</td><td><span title="${esc(a.transport || "")}">${esc(transport)}</span><small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td>${usageCell(e)}<td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
   }).join("") + "</tbody></table></div>";
+}
+function accountBadge(event) {
+  if (!event.accountAttempts?.length) return "";
+  const label = id => id === "primary" ? "主账号" : state.config.settings.accounts?.find(account => account.id === id)?.name || id;
+  return `<small>账号：${event.accountAttempts.map(a => `${esc(label(a.accountId))} (${a.status})`).join(" → ")}</small>`;
 }
 // Rebuilding a table resets its horizontal scroll and drops a text selection: skip unchanged
 // tables, let a poll wait while text inside is selected, and keep the scroll position across a rebuild.
@@ -487,6 +537,11 @@ document.querySelectorAll("[data-page],[data-go]").forEach(b => b.addEventListen
 document.querySelectorAll('[name="authMode"]').forEach(r => r.addEventListener("change", () => { $("clear-other").checked = false; }));
 $("settings-form").addEventListener("input", () => updateDraft());
 $("settings-form").addEventListener("change", () => updateDraft());
+$("add-account").addEventListener("click", () => {
+  addAccount({ id: crypto.randomUUID(), name: "账号 " + ($("account-list").children.length + 2),
+    authMode: document.querySelector('[name="authMode"]:checked').value, location: "global" });
+  updateDraft(); $("account-list").lastElementChild.querySelector("input").focus();
+});
 async function saveConfiguration() {
   const result = await api("/api/config", { settings: draft(), revision: state.config.revision });
   state.config = result; fillConfig(); await refresh(); toast("配置已保存并应用，网关正在运行。");

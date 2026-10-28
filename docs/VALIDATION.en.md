@@ -2,6 +2,16 @@
 
 [中文](VALIDATION.md) | English
 
+## Standalone gateway 0.12.0: account rotation (2026-10-29)
+
+Windows / Node.js 24.16.0: all 251 offline tests passed. New fixtures use synthetic credentials, temporary configuration directories and local mock upstreams. Coverage includes default-off behavior, sequential/concurrent distribution, failure thresholds and cooldown, all accounts unavailable, success resetting failures, configuration replacement resetting the pool, invalid input without failover, authentication timeout with no submission after late credentials resolve, overall deadlines and client cancellation without retry, stalled response-body failover, no replay after streaming starts, and OAuth-to-Express switching with rebuilt URL, headers and native request body. Console tests cover save/reload, credential redaction, blank retention and account removal.
+
+An isolated console started with rotation off. Adding a synthetic account and saving a 25-second timeout persisted across reload; the credential field was blank with its saved indicator and runtime status listed both accounts. Desktop dark at 1280 pixels and mobile light at 390 pixels showed no horizontal overflow or browser errors. Daily configuration and the running production instance were unchanged.
+
+Release-file syntax and credential/private-path scans passed in a clean release snapshot.
+
+No real inference, multi-account quota or billing validation was performed. Cooldown is local failure scheduling, not a balance check. Retried attempts may already incur upstream charges; estimates do not aggregate failed-attempt usage. Docker and cross-platform verification are recorded by this version's GitHub Actions runs.
+
 ## Standalone gateway 0.11.0 and SillyTavern integration 0.6.0: Gemini 4 Argon output limits and long decode (2026-10-20)
 
 All 237 offline tests passed. New and rewritten coverage:

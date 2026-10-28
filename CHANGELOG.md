@@ -10,6 +10,17 @@ Not released yet; the UI extension still reports 0.6.1. Only the UI extension ch
 - The panel's option label, status lines and stop message now speak of "user input".
 - Validation: new offline tests cover the order of the two sources and a simulated single-floor request in which both copies of the input (the `<new_user>` block and the "[我的行动]" injection) are encoded while tag lines stay unchanged.
 
+## Standalone gateway 0.12.0 — opt-in account rotation (2026-10-29)
+
+Tag `gateway-v0.12.0`, Docker image `0.12.0`. This release updates the standalone gateway; it does not publish a new SillyTavern integration package.
+
+- Account rotation is off by default. The existing connection remains the primary account; add up to 19 additional accounts in the console or through `GATEWAY_ACCOUNTS_FILE` for CLI deployments. Eligible accounts are selected round robin per request.
+- Configure the per-account timeout (default 60 seconds), consecutive failure threshold (2), and cooldown (60 seconds). At the threshold, skip the failed account and try the next eligible one if no output has reached the client. Every account is attempted at most once per request; streaming output is never replayed. The overall request timeout still applies.
+- Vertex service accounts, Express keys and OAuth tokens can share a pool; custom upstreams use their own pool. Each attempt rebuilds the endpoint, authentication and transport for its selected account. Accounts share the model list and service tier. Model discovery still uses the primary account.
+- Saved credentials are write-only in the console. Account status shows failures and cooldowns; request logs show the account attempts. Saving settings or restarting resets pool state. Retries may incur additional usage, and displayed cost estimates cover only the final attempt's reported usage.
+- Updated console and health endpoint version labels, CLI environment examples, bilingual setup and Docker documentation. Existing settings retain single-account behavior until rotation is enabled.
+- Validation: 251 offline tests passed, including concurrent distribution, failover thresholds, cooldown recovery, authentication and response-body timeouts, client cancellation, no replay after streaming starts, mixed Vertex authentication and settings persistence/redaction. Desktop dark and mobile light UI checks passed with synthetic credentials. No real model inference was performed. See [validation](docs/VALIDATION.en.md).
+
 ## SillyTavern integration 0.6.1 — shorter long-decode description
 
 Tag `sillytavern-v0.6.1` (one-step package). The standalone gateway and its Docker image stay at 0.11.0.

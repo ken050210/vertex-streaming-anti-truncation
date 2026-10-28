@@ -278,7 +278,7 @@ Express 和 Flex 的普通/流式请求均走原生接口。完整模式（服�
 
 “抗截断”指通过工具参数传输并恢复已收到的文本。它不能恢复模型未生成或网络未收到的内容，也不能保证消除截断或绕过模型限制。
 
-网关不会自动升级、降级或切换所选服务等级。Flex/Priority 发送官方服务等级标头，实际使用的等级以响应中的档位字段（原生接口为 `usage.traffic_type`，兼容接口为 `usage.extra_properties.google.traffic_type`）及日志 `trafficType` 为准；缺失时显示“上游未报告”。模型、账户及 Express 对档位的实际支持须由真实请求验证。参见 [Express 端点](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview)、[Flex](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo) 和 [Priority](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo) 官方说明。独立包不含多账号调度或额度管理。
+网关不会自动升级、降级或切换所选服务等级。Flex/Priority 发送官方服务等级标头，实际使用的等级以响应中的档位字段（原生接口为 `usage.traffic_type`，兼容接口为 `usage.extra_properties.google.traffic_type`）及日志 `trafficType` 为准；缺失时显示“上游未报告”。模型、账户及 Express 对档位的实际支持须由真实请求验证。参见 [Express 端点](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/express-mode/overview)、[Flex](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo) 和 [Priority](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo) 官方说明。独立网关支持默认关闭的多账号轮询（见下文），不含额度管理。
 
 ## 响应与 Schema 校验
 
@@ -364,3 +364,17 @@ npm run smoke -- --live
 图片会触发现有抗截断的兼容层缓冲回退，不能保证渐进输出。可能增加 token、延迟和 OCR 错误，不承诺减少内容过滤。图片与正文只在内存中处理；日志仅记录模式、状态和页数/字节/消息计数。验收范围见[图片输入验收记录](docs/IMAGE-INPUT-VALIDATION.md)（英文）。
 
 安装或更新后在项目目录运行 `npm ci --ignore-scripts`。离线部署须包含对应平台的 @napi-rs/canvas 二进制以及 `assets/fonts`；普通输入不会加载渲染器。
+
+## 多账号轮询（独立网关）
+
+默认关闭。在控制台「连接配置 → 多账号轮询」添加附加账号，再勾选启用并保存。上方原连接作为主账号，最多添加 19 个账号；按请求轮流使用可用账号。Vertex 的服务账号、Express 和 OAuth 可混用；自定义上游只能和其他自定义上游组成池。账号共用模型列表和服务等级，须各自拥有相应模型权限。模型目录发现仍使用主账号。
+
+- 单账号超时：默认 60 秒，可设 1–1800 秒，覆盖鉴权、响应头和整个回复读取。
+- 连续失败阈值：默认 2 次，可设 1–100 次。超时、鉴权失败、HTTP 401/403/408/429/5xx、网络及上游协议错误计入失败；成功清零。无效客户端输入、提示词专用重试失败、客户端断连和整次请求总超时不计入。
+- 恢复等待时间：默认 60 秒，可设 1–3600 秒。达到阈值的账号被暂时跳过，等待结束后由后续请求重试，无后台推理探测。
+
+达到失败阈值时，若尚未向客户端输出，则当前请求切换到下一可用账号。每次请求每个账号最多尝试一次；未达到阈值则返回本次错误。流式输出已经开始时只记录失败并断开，不重放正文。所有账号均在等待时返回 `503 accounts_unavailable`。单账号超时为 `504 account_timeout`；已有 `UPSTREAM_TIMEOUT_MS` 仍限制整次请求总时长，预算耗尽不再切换。重试可能增加上游用量；提示词重试、long decode 都留在同一账号尝试内。
+
+保存配置或重启会重置轮询顺序、失败次数及等待状态；正在运行的请求保留旧配置。关闭轮询后只使用主账号。附加凭据保存于原配置文件，页面只返回是否已设置；留空保留，输入替换，移除账号并保存会删除该项。日志的 `accountAttempts` 记录每次尝试的账号 ID、状态和耗时，不记录凭据；用量估算仅反映最后一次尝试收到的用量，不包含失败尝试可能产生的费用。
+
+CLI 可在 `.env` 配置 `ACCOUNT_ROTATION_ENABLED=true`、`ACCOUNT_TIMEOUT_MS=60000`、`ACCOUNT_FAILURE_THRESHOLD=2`、`ACCOUNT_COOLDOWN_MS=60000`，并用 `GATEWAY_ACCOUNTS_FILE` 指向仓库外的私密 JSON 数组文件。原有环境变量仍配置主账号。每项包含 `id`（唯一，不能为 `primary`）、`name`、`authMode`、`credential`，以及 Vertex 的 `projectId` / `location`（默认 `global`），或自定义上游的 `customBaseUrl`。服务账号的 `credential` 是完整 JSON 的字符串；其他方式为相应 key / token。不要把此文件提交到仓库。
