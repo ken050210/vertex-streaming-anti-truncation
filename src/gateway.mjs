@@ -163,8 +163,8 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     let pathname;
     try { pathname = new URL(request.url, "http://localhost").pathname; }
     catch { return send(response, 400, { error: { code: "invalid_path" } }); }
-    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.12.0" });
-    if (!authorized(request, config.gatewayKey)) return send(response, 401, { error: { code: "unauthorized" } });
+    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.13.0" });
+    if (config.gatewayKeyMode !== "none" && !authorized(request, config.gatewayKey)) return send(response, 401, { error: { code: "unauthorized" } });
     if (request.method === "GET" && pathname === "/v1/models") return send(response, 200, {
       object: "list", data: availability(config).filter(model => !model.hidden).map(model => ({ id: model.id, object: "model", owned_by: "vertex-streaming-anti-truncation" })),
     });

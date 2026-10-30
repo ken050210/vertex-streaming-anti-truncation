@@ -40,7 +40,7 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
   let saved = await store.load();
   let activeConfig, gateway, gatewayRef, runtimeError = saved.envError ? "Environment settings were ignored: " + saved.envError : null, busy = false;
   const retired = new Set(), events = [], sessions = new Map();
-  const bootstrapToken = saved.settings.gatewayKey ? null : randomBytes(32).toString("hex");
+  const bootstrapToken = saved.settings.gatewayKey || saved.settings.gatewayKeyMode === "none" ? null : randomBytes(32).toString("hex");
   let failures = 0, blockedUntil = 0;
   const startedAt = Date.now();
   const log = event => { events.unshift(event); if (events.length > 200) events.pop(); logger(event); };
@@ -53,7 +53,7 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000), models: activeConfig?.models || [],
       modelAvailability: gateway?.modelAvailability() || [],
       accounts: gateway?.accountStatus() || [],
-      active: activeConfig ? { port: activeConfig.port, projectId: activeConfig.projectId, location: activeConfig.location, authMode: activeConfig.authMode,
+      active: activeConfig ? { port: activeConfig.port, projectId: activeConfig.projectId, location: activeConfig.location, authMode: activeConfig.authMode, gatewayKeyMode: activeConfig.gatewayKeyMode,
         customBaseUrl: activeConfig.authMode === "custom" ? activeConfig.baseUrl : "",
         unicodeInput: activeConfig.unicodeInput, imageInput: activeConfig.imageInput, serviceTier: activeConfig.serviceTier, antiTruncation: activeConfig.antiTruncation,
         accountRotationEnabled: activeConfig.accountRotation.enabled,
@@ -78,6 +78,9 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
     const latest = await store.load();
     if (body.revision !== latest.revision) throw new SettingsError("Configuration changed; reload before saving", 409);
     const next = mergeSettings(latest.settings, body.settings);
+    if (next.gatewayKeyMode !== "strict" && next.gatewayKeyMode !== latest.settings.gatewayKeyMode && body.confirmGatewayAccess !== true) {
+      throw new SettingsError("Confirm the risks before enabling weak-key or keyless access");
+    }
     // The first save starts from environment values, which can hold another mode's credential
     // (for example a system-wide GOOGLE_APPLICATION_CREDENTIALS). Keep only the selected mode's
     // credential unless this save entered the other one.
@@ -116,8 +119,11 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
       }
     } else gatewayRef.current = config;
     activeConfig = config; runtimeError = null;
-    // Only a new gateway key ends other sign-ins; ordinary edits keep them.
-    if (next.gatewayKey !== latest.settings.gatewayKey) for (const id of sessions.keys()) if (id !== sessionId) sessions.delete(id);
+    // Access changes end other sign-ins, including sessions created without a key.
+    if (next.gatewayKey !== latest.settings.gatewayKey || next.gatewayKeyMode !== latest.settings.gatewayKeyMode) {
+      for (const id of sessions.keys()) if (id !== sessionId) sessions.delete(id);
+      failures = 0; blockedUntil = 0;
+    }
   }
   const server = http.createServer(async (req, res) => {
     res.setHeader("cache-control", "no-store");
@@ -140,13 +146,15 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
       const sessionId = /(?:^|;\s*)vertex_console=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie || "")?.[1];
       for (const [id, session] of sessions) if (session.expires < Date.now()) sessions.delete(id);
       const session = sessions.get(sessionId);
-      if (req.method === "GET" && path === "/api/session") return json(res, 200, { authenticated: Boolean(session), setup: !saved.settings.gatewayKey, ...(session ? { csrf: session.csrf } : {}) });
+      if (req.method === "GET" && path === "/api/session") return json(res, 200, { authenticated: Boolean(session),
+        setup: !saved.settings.gatewayKey && saved.settings.gatewayKeyMode !== "none", keyless: saved.settings.gatewayKeyMode === "none", ...(session ? { csrf: session.csrf } : {}) });
       if (req.method === "POST" && path === "/api/login") {
-        if (Date.now() < blockedUntil) throw new SettingsError("Too many attempts; try again in a minute", 429);
         const body = await readJson(req);
         saved = await store.load();
+        const keyless = saved.settings.gatewayKeyMode === "none";
+        if (!keyless && Date.now() < blockedUntil) throw new SettingsError("Too many attempts; try again in a minute", 429);
         const expected = saved.settings.gatewayKey || bootstrapToken;
-        if (!equal(body?.key, expected)) {
+        if (!keyless && !equal(body?.key, expected)) {
           if (++failures >= 5) { blockedUntil = Date.now() + 60000; failures = 0; }
           throw new SettingsError("Invalid local access key", 401);
         }
@@ -187,7 +195,7 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
               method: "POST", signal,
               // The gateway answers by its own upstream timeout; fetch's built-in 300 s limit must not cut a slower probe first.
               dispatcher: await upstreamDispatcher(activeConfig.timeoutMs + 30000),
-              headers: { authorization: "Bearer " + activeConfig.gatewayKey, "content-type": "application/json" },
+              headers: { ...(activeConfig.gatewayKeyMode === "none" ? {} : { authorization: "Bearer " + activeConfig.gatewayKey }), "content-type": "application/json" },
               body: JSON.stringify({ model, router_unicode_input: { user_floor: "Write three short lines about a river." }, messages: [{ role: "user", content: "Write three short lines about a river." }], max_tokens: 512, stream: body.stream === true,
                 ...(body.stream === true ? { stream_options: { include_usage: true } } : {}) }),
             });
@@ -227,7 +235,7 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
     async listen(port = 4780) {
       try { await listen(server, port, network.listenHost); }
       catch { throw new SettingsError(`Console port ${port} is unavailable (GUI_PORT); another console may already be running`, 409); }
-      if (autoStart && saved.settings.gatewayKey) {
+      if (autoStart && (saved.settings.gatewayKey || saved.settings.gatewayKeyMode === "none")) {
         try { await start(); } catch (error) { runtimeError = error.message; }
       }
     },

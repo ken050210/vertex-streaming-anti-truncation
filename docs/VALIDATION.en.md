@@ -2,6 +2,18 @@
 
 [中文](VALIDATION.md) | English
 
+## Standalone gateway 0.13.0: weak and keyless access (2026-10-30)
+
+Strict access remains the default. `gatewayKeyMode` / `GATEWAY_KEY_MODE` adds `weak` and `none`; console transitions to either require explicit confirmation, enforced by the server. Keyless mode covers both API and console and clears the stored gateway key. Restoring keyed access revokes other sessions.
+
+Windows / Node.js 24.16.0: an isolated release-source copy passed syntax, credential/path checks and all 257 offline tests. The original workspace scan stopped on a pre-existing untracked `.playwright-cli` recording resource; that directory was preserved, and the copy contains the current contents of Git-tracked files. New coverage includes strict defaults, weak-key validation and authentication, omitted/arbitrary keys in keyless mode, confirmation enforcement, first setup, key clearing, restart/autostart, revocation when restoring keyed access, and console Origin/CSRF checks.
+
+Playwright used temporary settings and a console that rejects real upstream requests. Saving without confirmation was blocked; `123456` saved and worked after logout; keyless mode opened directly after clearing cookies and reloading, and the model list returned 200 without an API key. The new controls were visually checked on light desktop and dark 390px mobile layouts, with no mobile horizontal overflow or browser errors/warnings.
+
+Release verification: the clean source snapshot passed checks on 120 release files and all 257 offline tests again. Docker Desktop / Engine 29.9.2 built the Linux image and passed isolated Compose smoke checks for strict/weak/keyless transitions, confirmation, keyless autostart after container replacement, restoring strict access, service-name routing, non-root operation, settings permissions, CJK WebP rendering, health and graceful shutdown. Only local endpoints were called. Consult this tag's GitHub Actions for cross-platform and multi-architecture publication results.
+
+SillyTavern integration 0.6.2: extracted the installer ZIP, verified 52 file hashes, installed dependencies into a synthetic SillyTavern 1.19.0 directory, checked 48 installed frontend/backend files, configuration backup and plugin enablement, then imported the installed server module and rendered CJK text. Offline tests cover the single-floor Unicode fix; the actual Tavern UI and Termux were not retested. Release verification made no real model calls, daily configuration changes or existing service restarts.
+
 ## Standalone gateway 0.12.0: account rotation (2026-10-29)
 
 Windows / Node.js 24.16.0: all 251 offline tests passed. New fixtures use synthetic credentials, temporary configuration directories and local mock upstreams. Coverage includes default-off behavior, sequential/concurrent distribution, failure thresholds and cooldown, all accounts unavailable, success resetting failures, configuration replacement resetting the pool, invalid input without failover, authentication timeout with no submission after late credentials resolve, overall deadlines and client cancellation without retry, stalled response-body failover, no replay after streaming starts, and OAuth-to-Express switching with rebuilt URL, headers and native request body. Console tests cover save/reload, credential redaction, blank retention and account removal.

@@ -10,7 +10,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   port: 4781, timeoutMs: 600000, antiTruncation: true, models: null,
   hideUnavailableModels: true, geminiPrefillToUser: true, geminiLongDecode: false, unicodeInput: false, imageInput: "off",
   geminiPromptRetryEnabled: false, geminiPromptRetryText: "", geminiPromptRetryMatches: null, customBaseUrl: "",
-  gatewayKey: "", serviceAccountJson: "", apiKey: "", accessToken: "", customApiKey: "",
+  gatewayKeyMode: "strict", gatewayKey: "", serviceAccountJson: "", apiKey: "", accessToken: "", customApiKey: "",
   accountRotationEnabled: false, accountTimeoutMs: 60000, accountFailureThreshold: 2, accountCooldownMs: 60000, accounts: [],
 });
 export const SECRET_FIELDS = ["gatewayKey", "serviceAccountJson", "apiKey", "accessToken", "customApiKey"];
@@ -75,7 +75,8 @@ export async function settingsFromEnv(env = process.env) {
   const retryMatches = (env.GEMINI_PROMPT_RETRY_MATCHES || "").split("|").map(text => text.trim()).filter(Boolean);
   return {
     ...DEFAULT_SETTINGS, projectId: env.VERTEX_PROJECT_ID || "", location: env.VERTEX_LOCATION || "global",
-    gatewayKey: env.GATEWAY_API_KEY || "", serviceAccountJson,
+    gatewayKeyMode: env.GATEWAY_KEY_MODE || "strict",
+    gatewayKey: env.GATEWAY_KEY_MODE === "none" ? "" : env.GATEWAY_API_KEY || "", serviceAccountJson,
     accessToken: env.VERTEX_ACCESS_TOKEN || "", apiKey: env.VERTEX_API_KEY || "",
     customBaseUrl: env.CUSTOM_UPSTREAM_URL || "", customApiKey: env.CUSTOM_UPSTREAM_API_KEY || "",
     authMode: env.CUSTOM_UPSTREAM_URL ? "custom" : env.VERTEX_API_KEY ? "express" : env.VERTEX_ACCESS_TOKEN ? "access-token" : "service-account",
@@ -154,11 +155,15 @@ export function buildConnectionConfig(settings, { requireAscii = true } = {}) {
 
 export function buildConfig(settings, { requireAscii = true } = {}) {
   const s = { ...DEFAULT_SETTINGS, ...settings };
-  const key = s.gatewayKey;
-  if (typeof key !== "string" || key.length < 16 || key.length > 512 || /\s/.test(key) || /^(change|replace|your)[-_ ]?me/i.test(key)) {
+  if (!["strict", "weak", "none"].includes(s.gatewayKeyMode)) throw new Error("Invalid GATEWAY_KEY_MODE");
+  const key = s.gatewayKeyMode === "none" ? "" : s.gatewayKey;
+  if (s.gatewayKeyMode === "strict" && (typeof key !== "string" || key.length < 16 || key.length > 512 || /\s/.test(key) || /^(change|replace|your)[-_ ]?me/i.test(key))) {
     throw new Error("Set GATEWAY_API_KEY to a random value of at least 16 characters");
   }
-  if (requireAscii && !visibleAscii(key)) throw new Error("GATEWAY_API_KEY must contain only visible ASCII characters");
+  if (s.gatewayKeyMode === "weak" && (typeof key !== "string" || !key || key.length > 512 || /\s/.test(key))) {
+    throw new Error("Set GATEWAY_API_KEY to 1-512 visible ASCII characters without spaces");
+  }
+  if (s.gatewayKeyMode !== "none" && requireAscii && !visibleAscii(key)) throw new Error("GATEWAY_API_KEY must contain only visible ASCII characters");
   if (!["off", "current-turn", "all"].includes(s.imageInput)) throw new Error("Invalid image input mode");
   if (s.unicodeInput && s.imageInput !== "off") throw new Error("Unicode and image input are mutually exclusive");
   if (typeof s.antiTruncation !== "boolean") throw new Error("Invalid anti-truncation setting");
@@ -178,7 +183,7 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
   const accounts = accountConnections(s, requireAscii);
   if (s.accountRotationEnabled && !accounts.length) throw new Error("Add at least one additional account before enabling rotation");
   return {
-    ...buildConnectionConfig(s, { requireAscii }), gatewayKey: key, models,
+    ...buildConnectionConfig(s, { requireAscii }), gatewayKeyMode: s.gatewayKeyMode, gatewayKey: key, models,
     accountRotation: { enabled: s.accountRotationEnabled, accounts,
       timeoutMs: integer(s.accountTimeoutMs, 60000, 1000, 1800000, "ACCOUNT_TIMEOUT_MS"),
       failureThreshold: integer(s.accountFailureThreshold, 2, 1, 100, "ACCOUNT_FAILURE_THRESHOLD"),

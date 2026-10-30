@@ -33,6 +33,7 @@ export function mergeSettings(current, patch, { connectionOnly = false } = {}) {
       if (value.trim()) next[key] = value.trim().replace(/^\uFEFF/, "");
     } else next[key] = value;
   }
+  if (next.gatewayKeyMode === "none") next.gatewayKey = "";
   if (next.authMode === "service-account" && !next.projectId && next.serviceAccountJson) {
     try { next.projectId = JSON.parse(next.serviceAccountJson).project_id || ""; } catch { /* Validated below. */ }
   }

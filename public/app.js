@@ -31,7 +31,10 @@ function errorMessage(message) {
     "Service account must contain a valid RSA private key": "服务账号中没有有效的 RSA 私钥，请导入完整 JSON。",
     "vertex service account secret is not valid JSON": "服务账号 JSON 格式无效，请检查是否复制完整。",
     "Only Google's OAuth token endpoint is allowed": "服务账号的 token_uri 必须是 Google 官方 OAuth 地址。",
-    "Set GATEWAY_API_KEY to a random value of at least 16 characters": "请设置 16–512 个可见 ASCII 字符、不含空格的随机本地网关密钥，可用“生成随机密钥”。",
+    "Set GATEWAY_API_KEY to a random value of at least 16 characters": "强密钥模式需要 16–512 个可见 ASCII 字符、不含空格的密钥。可生成随机密钥，或切换为弱密钥／无密钥模式并确认。",
+    "Set GATEWAY_API_KEY to 1-512 visible ASCII characters without spaces": "请输入 1–512 个可见 ASCII 字符，不含空格，例如 123456。若不想设置密钥，请选择无密钥模式。",
+    "Invalid GATEWAY_KEY_MODE": "请选择强密钥、允许弱密钥或无密钥模式。",
+    "Confirm the risks before enabling weak-key or keyless access": "请在连接配置中勾选风险确认，再保存并应用新的密钥模式。",
     "GATEWAY_API_KEY must contain only visible ASCII characters": "本地网关密钥只能包含可见 ASCII 字符（英文字母、数字和半角符号），请检查是否混入中文引号或全角字符，并在连接配置中更换后保存。",
     "VERTEX_API_KEY must contain only visible ASCII characters": "Express API Key 只能包含可见 ASCII 字符，请检查是否混入中文引号或全角字符，并在连接配置中重新粘贴后保存。",
     "VERTEX_ACCESS_TOKEN must contain only visible ASCII characters": "OAuth Access Token 只能包含可见 ASCII 字符，请检查是否混入中文引号或全角字符，并在连接配置中重新粘贴后保存。",
@@ -191,11 +194,12 @@ function showLogin(expired) {
   setError("login-error", expired ? "登录已过期，请重新登录。" + (state.pendingDraft ? "未应用的修改会在登录后恢复，凭据需重新输入。" : "") : "");
   $("login-key").focus();
   // Setup may have finished in this tab since load, so ask again which key the card should request.
-  api("/api/session").then(session => loginCopy(session.setup)).catch(() => {});
+  api("/api/session").then(session => loginCopy(session.setup, session.keyless)).catch(() => {});
 }
-function loginCopy(setup) {
+function loginCopy(setup, keyless = false) {
   $("login-title").textContent = setup ? "首次设置" : "进入本地控制台";
-  $("login-description").textContent = setup ? "请打开启动终端中的首次设置链接，或输入链接中的设置密钥。" : "输入网关密钥，管理你的上游连接。";
+  $("login-description").textContent = keyless ? "已启用无密钥模式，可直接进入控制台。" : setup ? "请打开启动终端中的首次设置链接，或输入链接中的设置密钥。" : "输入网关密钥，管理你的上游连接。";
+  $("login-key").hidden = keyless; $("login-key-label").hidden = keyless; $("login-key").required = !keyless;
 }
 const credentialFields = { "service-account": ["serviceAccountJson", "服务账号 JSON"], express: ["apiKey", "Express API Key"], "access-token": ["accessToken", "OAuth 令牌"], custom: ["customApiKey", "自定义上游 API Key"] };
 // Other modes' credentials stored in settings.json. Before the first save they come from the
@@ -210,7 +214,8 @@ function draft() {
   return { authMode,
     serviceTier: document.querySelector('[name="serviceTier"]:checked').value,
     projectId: $("project-id").value.trim(), location: $("location").value.trim(),
-    gatewayKey: $("gateway-key").value.trim(), serviceAccountJson: credential("service-account", "service-account"),
+    gatewayKeyMode: $("gateway-key-mode").value,
+    gatewayKey: $("gateway-key-mode").value === "none" ? null : $("gateway-key").value.trim(), serviceAccountJson: credential("service-account", "service-account"),
     apiKey: credential("api-key", "express"), accessToken: credential("access-token", "access-token"),
     customBaseUrl: $("custom-base-url").value.trim(), customApiKey: credential("custom-api-key", "custom"),
     port: Number($("port").value), timeoutMs: Number($("timeout").value) * 1000, antiTruncation: true, models: state.models.map(m => ({ ...m })),
@@ -307,11 +312,29 @@ function updateDraft(dirty = true) {
   $("models-count").textContent = state.models.length + " 个版本";
   $("discard-button").disabled = !state.dirty;
   $("models-discard").disabled = !state.dirty;
+  updateGatewayAccess();
   updateRetryText();
   updateSelection();
 }
+function updateGatewayAccess() {
+  const mode = $("gateway-key-mode").value, keyless = mode === "none";
+  const needsConfirmation = mode !== "strict" && mode !== state.config.settings.gatewayKeyMode;
+  $("gateway-key-field").hidden = keyless;
+  for (const id of ["gateway-key", "generate-key", "copy-key"]) $(id).disabled = keyless;
+  $("gateway-key-help").textContent = (mode === "weak" ? "允许 1–512 个可见 ASCII 字符，不含空格，例如 123456。" : "需要 16–512 个可见 ASCII 字符，不含空格。") + "用于客户端接入和下次登录；已保存的密钥留空保留，不回显。";
+  if (!state.config.settings.gatewayKeySet) $("gateway-key").placeholder = mode === "weak" ? "例如 123456" : "至少 16 个可见 ASCII 字符，或生成随机密钥";
+  $("gateway-access-warning").hidden = mode === "strict";
+  $("gateway-access-risk").textContent = keyless
+    ? "无密钥模式会清除已保存的网关密钥。任何能访问服务的人都可调用模型、查看日志和修改配置，可能产生费用；打开控制台会直接进入。"
+    : "简单密钥容易被猜中。知道或猜中密钥的人可调用模型和管理配置，可能产生费用。";
+  $("gateway-access-confirm-row").hidden = !needsConfirmation;
+  $("gateway-access-confirm").required = needsConfirmation;
+  $("gateway-access-confirm-label").textContent = keyless ? "我已了解风险，确认 API 与控制台均免密" : "我已了解风险，确认允许弱密钥";
+}
 function fillConfig(c = state.config.settings) {
   const saved = state.config.settings;
+  $("gateway-key-mode").value = c.gatewayKeyMode || "strict";
+  $("gateway-access-confirm").checked = false;
   for (const name of ["authMode", "serviceTier"]) {
     // An unknown value (for example a mistyped VERTEX_SERVICE_TIER) falls back to the first option.
     const radios = [...document.querySelectorAll(`[name="${name}"]`)];
@@ -342,7 +365,7 @@ function fillConfig(c = state.config.settings) {
   state.forcedGlobal = false;
   updateDraft(false);
 }
-const isReady = c => Boolean(c.gatewayKeySet && c[credentialFields[c.authMode]?.[0] + "Set"]);
+const isReady = c => Boolean((c.gatewayKeyMode === "none" || c.gatewayKeySet) && c[credentialFields[c.authMode]?.[0] + "Set"]);
 function renderStatus() {
   const s = state.status, c = state.config.settings, current = s.active;
   $("account-status").textContent = s.accounts?.length ? "运行状态：" + s.accounts.map(a => `${a.name}：${a.cooldownRemainingMs > 0 ? `等待 ${Math.ceil(a.cooldownRemainingMs / 1000)} 秒` : "参与轮询"}，连续失败 ${a.failures} 次`).join("；") : "当前未启用轮询。";
@@ -352,6 +375,9 @@ function renderStatus() {
   $("metric-status").textContent = label; $("metric-active").textContent = s.running ? s.activeRequests + " 个进行中的请求" : "本地 API 尚未监听";
   $("metric-requests").textContent = s.requests; $("metric-restored").textContent = s.restored;
   const shown = current || c, custom = shown.authMode === "custom";
+  $("client-key-help").textContent = shown.gatewayKeyMode === "none"
+    ? "无密钥模式：API Key 可留空；客户端强制要求时可填任意占位值。控制台也无需密钥。刷新模型列表后选择保存的版本。"
+    : "API Key 使用本地网关密钥。" + (shown.gatewayKeyMode === "weak" ? "当前允许弱密钥。" : "") + "刷新客户端模型列表后，选择保存的版本。";
   $("metric-tier").textContent = custom ? "不适用" : tierNames[shown.serviceTier];
   $("metric-traffic").textContent = "最近实际上游：" + (s.lastTrafficType || "尚无记录");
   $("runtime-badge").textContent = s.running ? "●  API ONLINE" : "●  " + label;
@@ -537,13 +563,14 @@ document.querySelectorAll("[data-page],[data-go]").forEach(b => b.addEventListen
 document.querySelectorAll('[name="authMode"]').forEach(r => r.addEventListener("change", () => { $("clear-other").checked = false; }));
 $("settings-form").addEventListener("input", () => updateDraft());
 $("settings-form").addEventListener("change", () => updateDraft());
+$("gateway-key-mode").addEventListener("change", () => { $("gateway-access-confirm").checked = false; });
 $("add-account").addEventListener("click", () => {
   addAccount({ id: crypto.randomUUID(), name: "账号 " + ($("account-list").children.length + 2),
     authMode: document.querySelector('[name="authMode"]:checked').value, location: "global" });
   updateDraft(); $("account-list").lastElementChild.querySelector("input").focus();
 });
 async function saveConfiguration() {
-  const result = await api("/api/config", { settings: draft(), revision: state.config.revision });
+  const result = await api("/api/config", { settings: draft(), revision: state.config.revision, confirmGatewayAccess: $("gateway-access-confirm").checked });
   state.config = result; fillConfig(); await refresh(); toast("配置已保存并应用，网关正在运行。");
   setError("form-error", ""); setError("models-error", ""); setError("global-error", "");
   void checkUpstreamNames();
@@ -709,8 +736,9 @@ window.addEventListener("beforeunload", e => { if (state.dirty || state.probe) {
   if (setup) history.replaceState(null, "", location.pathname);
   try {
     const session = await api("/api/session");
-    loginCopy(session.setup);
+    loginCopy(session.setup, session.keyless);
     if (session.authenticated) { state.csrf = session.csrf; await enter(); }
+    else if (session.keyless) { state.csrf = (await api("/api/login", {})).csrf; await enter(); }
     else if (setup) { state.csrf = (await api("/api/login", { key: setup })).csrf; await enter(); }
   } catch (error) { setError("login-error", error.message); }
   // The login card starts hidden so a signed-in reload does not flash it.

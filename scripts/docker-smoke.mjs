@@ -110,6 +110,34 @@ try {
   const restored = await (await api("/api/config")).json();
   assert.equal(restored.revision, saved.revision); assert.equal(restored.settings.imageInput, "current-turn");
   assert.equal((await (await api("/api/status")).json()).running, true);
+  // Exercise the access-mode transitions in the shipped image, including keyless autostart.
+  const weak = { revision: restored.revision, settings: { gatewayKeyMode: "weak", gatewayKey: "123456" } };
+  assert.equal((await api("/api/config", weak)).status, 400);
+  const weakResponse = await api("/api/config", { ...weak, confirmGatewayAccess: true });
+  assert.equal(weakResponse.status, 200);
+  const weakSaved = await weakResponse.json();
+  assert.equal((await fetch(apiBase + "/v1/models")).status, 401);
+  assert.equal((await fetch(apiBase + "/v1/models", { headers: { authorization: "Bearer 123456" } })).status, 200);
+  await login("123456");
+  const keyless = { revision: weakSaved.revision, settings: { gatewayKeyMode: "none" } };
+  assert.equal((await api("/api/config", keyless)).status, 400);
+  const keylessResponse = await api("/api/config", { ...keyless, confirmGatewayAccess: true });
+  assert.equal(keylessResponse.status, 200);
+  assert.equal((await keylessResponse.json()).settings.gatewayKeySet, false);
+  await compose("up", "-d", "--no-build", "--force-recreate");
+  await ready(base + "/api/session"); cookie = null; csrf = null;
+  assert.equal((await (await api("/api/session")).json()).keyless, true);
+  await login();
+  const keylessRestored = await (await api("/api/config")).json();
+  assert.equal((await (await api("/api/status")).json()).running, true);
+  assert.equal(keylessRestored.settings.gatewayKeySet, false);
+  assert.equal((await fetch(apiBase + "/v1/models")).status, 200);
+  assert.equal((await fetch(apiBase + "/admin/events")).status, 200);
+  assert.equal((await api("/api/config", { revision: keylessRestored.revision,
+    settings: { gatewayKeyMode: "strict", gatewayKey } })).status, 200);
+  assert.equal((await api("/api/login", {})).status, 401);
+  assert.equal((await fetch(apiBase + "/v1/models")).status, 401);
+  await login(gatewayKey);
   const current = await compose("ps", "-q", "vertex-gateway");
   const deadline = Date.now() + 15000;
   while (await docker(["inspect", "--format", "{{.State.Health.Status}}", current]) !== "healthy") {
@@ -117,7 +145,7 @@ try {
   }
   await compose("stop");
   assert.equal(await docker(["inspect", "--format", "{{.State.ExitCode}}", current]), "0");
-  console.log("Docker smoke passed: setup, auth, mapped ports, persistence, health and graceful shutdown; no inference");
+  console.log("Docker smoke passed: setup, strict/weak/keyless auth, mapped ports, persistence, health and graceful shutdown; no inference");
 } catch (error) {
   console.error(await compose("ps", "-a"));
   console.error((await compose("logs", "--no-color", "--tail", "20")).replace(/#setup=[a-f0-9]+/g, "#setup=[redacted]"));

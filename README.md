@@ -33,7 +33,7 @@ https://raw.githubusercontent.com/ken050210/vertex-streaming-anti-truncation/mai
 
 也提供 **SillyTavern 原生 Vertex 面板集成**：UI 扩展与服务端插件配套安装后，直接在 Google Vertex AI 连接面板选择关闭、非流式或流式抗截断，复用酒馆凭据，无需另开网关进程。默认关闭；[安装与验证说明](docs/SILLYTAVERN.md)。
 
-SillyTavern 需要 1.19.x，有两种装法，只选一种：想在酒馆里跟随仓库更新，用 Git 装法；想一次装好两半，用一键安装包。Git 装法：在酒馆“安装扩展”的 Git URL 输入框填入 `https://github.com/ken050210/vertex-streaming-anti-truncation`，分支留空。**首次还需在酒馆根目录执行** `node plugins.js install https://github.com/ken050210/vertex-streaming-anti-truncation` 安装配套服务端插件，再在 `plugins/vertex-streaming-anti-truncation` 目录运行 `npm ci --ignore-scripts` 安装图片输入所需的渲染依赖，启用 `enableServerPlugins` 并重启酒馆。仅安装前端无法完成抗截断传输；已有手动安装请先阅读[迁移说明](docs/SILLYTAVERN.md#更新与已有手动安装)，避免重复加载。也可以从 [Release `sillytavern-v0.6.1`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.6.1) 下载[一键安装包](docs/SILLYTAVERN.md#一键安装包)，解压后运行其中的安装程序，一次装好前后端并开启服务端插件，不需要 Git。压缩包只在发版时更新；发版之后 `main` 上的新改动，可以用四条命令[从源码生成安装包并安装](docs/AGENT-INSTALL.md#sillytavern)。
+SillyTavern 需要 1.19.x，有两种装法，只选一种：想在酒馆里跟随仓库更新，用 Git 装法；想一次装好两半，用一键安装包。Git 装法：在酒馆“安装扩展”的 Git URL 输入框填入 `https://github.com/ken050210/vertex-streaming-anti-truncation`，分支留空。**首次还需在酒馆根目录执行** `node plugins.js install https://github.com/ken050210/vertex-streaming-anti-truncation` 安装配套服务端插件，再在 `plugins/vertex-streaming-anti-truncation` 目录运行 `npm ci --ignore-scripts` 安装图片输入所需的渲染依赖，启用 `enableServerPlugins` 并重启酒馆。仅安装前端无法完成抗截断传输；已有手动安装请先阅读[迁移说明](docs/SILLYTAVERN.md#更新与已有手动安装)，避免重复加载。也可以从 [Release `sillytavern-v0.6.2`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.6.2) 下载[一键安装包](docs/SILLYTAVERN.md#一键安装包)，解压后运行其中的安装程序，一次装好前后端并开启服务端插件，不需要 Git。压缩包只在发版时更新；发版之后 `main` 上的新改动，可以用四条命令[从源码生成安装包并安装](docs/AGENT-INSTALL.md#sillytavern)。
 
 **TauriTavern（TT 酒馆）适配版**：同一个 UI 扩展也适配了 [TauriTavern](https://github.com/Darkatse/TauriTavern)。它把酒馆的 Node.js 后台换成了 Rust，不能运行服务端插件，所以在 TauriTavern 里只装 UI 扩展：在“安装扩展”中填入上面的 Git URL、分支留空即可，不需要 Node.js、`plugins.js`、`npm ci` 和 `enableServerPlugins`。扩展检测到 TauriTavern 后自己完成抗截断的请求改写和回复还原，凭据与提示词转换仍由 TauriTavern 处理。支持非流式／流式抗截断、Unicode 转码和“继续”适配，不支持图片输入。随 SillyTavern 集成 0.4.0 发布；[安装、与插件版的差别和验收范围](docs/SILLYTAVERN.md#tauritavern)。
 
@@ -108,12 +108,12 @@ npm start
 
 - **连接配置**：填写项目 ID，粘贴或导入完整服务账号 JSON；也可切换到 Express API Key、短期 OAuth Token 或[自定义上游](#自定义上游)。服务账号 JSON 中的项目 ID 可自动填入，也可覆盖为另一个有权限访问的目标项目。Express API Key、访问令牌和上游 API Key 只能含可见 ASCII 字符，混入中文引号、全角字符时保存会被拒绝。
 - **服务等级**：显式选择 Standard、Flex 或 Priority。Express、Flex 和 Priority 的地区配置使用 `global`。Express 填写 API Key 所属的项目 ID 或项目编号后，请求地址会明确包含 `projects/{项目}/locations/global`；留空保留原有无项目端点，由 Express 决定实际地区。Gemini 4 Argon 必须填写项目，否则请求会在本地提示 `express_project_required`。
-- **本地网关**：设置 API 端口、超时和随机网关密钥（至少 16 个可见 ASCII 字符，不含空格）。复制生成的网关密钥后再保存，后续凭据不回显；空白凭据字段保留已有值。保存过配置后，若其他鉴权方式仍有已保存的凭据，连接配置会出现“保存时删除其他鉴权方式已保存的凭据”勾选项；勾选后保存即从 settings.json 删除这些凭据，切换鉴权方式会自动取消勾选。更换网关密钥会让其他已登录的控制台会话退出，其他保存不影响登录。
+- **本地网关**：设置 API 端口、超时和访问密钥模式。默认强密钥要求 16–512 个可见 ASCII 字符、不含空格；可选择**允许弱密钥**（1–512 字符，例如 `123456`）或**无密钥**（API 与控制台均免密）。切换到弱密钥或无密钥后，须勾选风险确认再保存并应用。无密钥会清除已保存的网关密钥，客户端 API Key 可留空或填任意占位值，打开控制台直接进入；任何能访问服务的人都可调用模型、查看日志和修改配置，可能产生费用。使用密钥时，复制生成的密钥后再保存，后续凭据不回显；空白凭据字段保留已有值。保存过配置后，若其他鉴权方式仍有已保存的凭据，连接配置会出现“保存时删除其他鉴权方式已保存的凭据”勾选项；勾选后保存即从 settings.json 删除这些凭据，切换鉴权方式会自动取消勾选。更换网关密钥或访问模式会让其他已登录的控制台会话退出，其他保存不影响登录。
 - **模型与版本**：拉取并搜索 Google 模型目录，批量添加所需版本；也可手动填写上游 ID。分别编辑客户端名称、上游模型与传输模式，最多保存 100 个版本。
 - **总览与日志**：启动/停止网关，复制客户端 URL，检查请求状态、正文还原、结束原因、请求档位/实际上游档位，以及 token 用量和[估算费用](#用量与费用估算)。记录仅保留最近 200 条。
 - **连接测试**：选择已保存的模型版本，勾选后手动发送一次最多 512 token 的测试，支持流式和普通响应、取消，以及流式正文到达统计。保存、校验、启动与拉取目录均不触发推理。
 
-配置保存到用户目录的 `~/.vertex-streaming-anti-truncation/settings.json`，可通过 `GATEWAY_STATE_DIR` 指定其他目录。凭据保存在本机明文文件中，请使用私人目录并限制文件访问。配置不会写进仓库或浏览器存储。保存采用版本检查和原子替换；端口冲突不会替换正在使用的配置；更换 API 端口后，客户端在旧端口上仍保持的连接会收到 `503 gateway_port_changed`，请改用新端口。新请求使用新设置，正在进行的回复继续使用原设置。重启控制台会读取保存的配置并启动网关。用已设置的网关密钥再次登录。
+配置保存到用户目录的 `~/.vertex-streaming-anti-truncation/settings.json`，可通过 `GATEWAY_STATE_DIR` 指定其他目录。凭据保存在本机明文文件中，请使用私人目录并限制文件访问。配置不会写进仓库或浏览器存储。保存采用版本检查和原子替换；端口冲突不会替换正在使用的配置；更换 API 端口后，客户端在旧端口上仍保持的连接会收到 `503 gateway_port_changed`，请改用新端口。新请求使用新设置，正在进行的回复继续使用原设置。重启控制台会读取保存的配置并启动网关；强密钥／弱密钥模式需用已设置的密钥登录，无密钥模式直接进入。切回密钥模式时须重新输入密钥；其他免密会话会失效。
 
 若恢复过期配置锁时进程意外退出，状态目录可能留下 `settings.lock.recovery`，使后续保存持续提示正在被其他进程编辑。先停止所有控制台及配置写入进程，备份 `settings.json`，再核对文件名并仅删除该目录中的 `settings.lock.recovery` 后重启。不要删除整个状态目录或配置文件。
 
@@ -174,7 +174,8 @@ npm start
 
 将 `.env.example` 复制为 `.env`：Windows PowerShell 使用 `Copy-Item .env.example .env`；Linux/macOS 使用 `cp .env.example .env`。然后填写：
 
-- `GATEWAY_API_KEY`：自己生成的随机本地访问密钥，至少 16 个可见 ASCII 字符，不含空格。
+- `GATEWAY_KEY_MODE`：默认 `strict`；显式设为 `weak` 表示确认使用简单密钥，设为 `none` 表示确认 API 与控制台均免密。无密钥模式下任何能访问服务的人都能调用模型并管理配置。
+- `GATEWAY_API_KEY`：`strict` 模式要求 16–512 个可见 ASCII 字符，不含空格；`weak` 模式接受 1–512 字符（如 `123456`）；`none` 模式忽略此值。
 - `VERTEX_PROJECT_ID`：Google Cloud 项目 ID。`VERTEX_LOCATION` 默认 `global`。
 - `GOOGLE_APPLICATION_CREDENTIALS`：`.env.example` 中这一行默认被注释。使用服务账号时删掉行首的 `#`，填写仓库之外的服务账号 JSON 路径。Windows 可写成 `C:/keys/service-account.json`。
 - 如需用短期 Google OAuth access token，保持上一项注释，改填 `VERTEX_ACCESS_TOKEN`。快速模式改填 `VERTEX_API_KEY`，不要求项目 ID。[自定义上游](#自定义上游)改填 `CUSTOM_UPSTREAM_URL` 和 `CUSTOM_UPSTREAM_API_KEY`，不要求项目 ID。这几种方式只能选一种；一种都没设置时，`npm run gateway` 会提示 `Configure one upstream authentication method: …` 并退出。
@@ -188,7 +189,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 npm run gateway
 ```
 
-直接运行时服务默认只监听 `127.0.0.1`；Docker 内监听 `0.0.0.0`，默认仅向宿主机本地发布端口。`GET /healthz` 检查进程状态；其余 API 接口都需要 `Authorization: Bearer <GATEWAY_API_KEY>`。服务账号私钥只在网关进程内签署 JWT，JWT 发给 Google OAuth 换取短期 access token，再用于模型请求。
+直接运行时服务默认只监听 `127.0.0.1`；Docker 内监听 `0.0.0.0`，默认仅向宿主机本地发布端口。`GET /healthz` 检查进程状态；其余 API 接口在强密钥／弱密钥模式下需要 `Authorization: Bearer <GATEWAY_API_KEY>`，无密钥模式不校验该标头（包括日志接口）。控制台仍保留会话、Host／Origin 和 CSRF 检查；这些检查不替代无密钥模式下已关闭的身份验证。服务账号私钥只在网关进程内签署 JWT，JWT 发给 Google OAuth 换取短期 access token，再用于模型请求。
 
 ### 通过代理访问 Google
 
@@ -215,7 +216,7 @@ NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7890 NO_PROXY=127.0.0.1,localh
 | 设置 | 值 |
 | --- | --- |
 | API URL | `http://127.0.0.1:4781/v1` |
-| API Key | GUI 中设置的本地网关密钥，或 `.env` 中的 `GATEWAY_API_KEY` |
+| API Key | GUI 中设置的本地网关密钥，或 `.env` 中的 `GATEWAY_API_KEY`；无密钥模式可留空，客户端强制要求时填任意占位值 |
 | 模型 | 刷新列表后选择保存的版本；默认 `gemini-3.7-flash-antitruncation` |
 | 流式传输 | 按需开启；非流式抗截断会等待完整回复 |
 

@@ -55,7 +55,7 @@ node dist/sillytavern/install.mjs ~/SillyTavern
 
 发现用 Git、扩展管理器或手动复制安装的副本（包括各用户自己的扩展目录）时，安装程序列出路径并停止，不覆盖也不删除，以免插件被加载两次。更新时下载新版安装包再运行一次；用安装包装的副本不是 Git 仓库，不会随酒馆的插件自动更新或扩展管理器更新。
 
-安装包在 [GitHub Release `sillytavern-v0.6.1`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.6.1) 下载 `vertex-anti-truncation-sillytavern-0.6.1.zip`，可用同页的 `SHA256.txt` 校验。压缩包只在发版时更新，版本号也只在发版时改变；发版之后 `main` 上的新改动不会进入已发布的压缩包。要装 `main` 的最新代码，在本仓库运行 `npm run package:sillytavern`，生成的 `dist/sillytavern` 就是安装包内容；打包不需要先安装依赖。
+安装包在 [GitHub Release `sillytavern-v0.6.2`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.6.2) 下载 `vertex-anti-truncation-sillytavern-0.6.2.zip`，可用同页的 `SHA256.txt` 校验。压缩包只在发版时更新，版本号也只在发版时改变；发版之后 `main` 上的新改动不会进入已发布的压缩包。要装 `main` 的最新代码，在本仓库运行 `npm run package:sillytavern`，生成的 `dist/sillytavern` 就是安装包内容；打包不需要先安装依赖。
 
 ## 从 GitHub 安装
 
@@ -136,7 +136,7 @@ npm run package:sillytavern
 
 复制后在 `plugins/vertex-anti-truncation` 目录运行 `npm ci --ignore-scripts` 安装图片渲染依赖。服务端需启用 `enableServerPlugins: true`，然后重启酒馆、刷新网页。
 
-当前 Release 为 [`sillytavern-v0.6.1`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.6.1)，ZIP 内含安装程序和上表两个目录。旧版 [`sillytavern-v0.5.0`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.5.0) 在工具执行后回传结果的请求会失败，请勿使用；[`sillytavern-v0.4.0`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.4.0) 遇到客户端工具时整次跳过抗截断；[`sillytavern-v0.3.1`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.3.1) 不含 Gemini 4 与 TauriTavern 适配；[`sillytavern-v0.1.0`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.1.0) 的 ZIP 不含 Unicode 与图片输入。
+当前 Release 为 [`sillytavern-v0.6.2`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.6.2)，ZIP 内含安装程序和上表两个目录。旧版 [`sillytavern-v0.5.0`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.5.0) 在工具执行后回传结果的请求会失败，请勿使用；[`sillytavern-v0.4.0`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.4.0) 遇到客户端工具时整次跳过抗截断；[`sillytavern-v0.3.1`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.3.1) 不含 Gemini 4 与 TauriTavern 适配；[`sillytavern-v0.1.0`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.1.0) 的 ZIP 不含 Unicode 与图片输入。
 
 ## 使用
 
@@ -237,6 +237,8 @@ Unicode 转码在浏览器中、抗截断分流之前执行；普通／旁路请
 
 ### 版本与验收
 
+0.6.2 将单楼层游戏卡的 Unicode 输入修复纳入安装包：没有真实用户楼层或最新用户楼层为空时，使用聊天变量“我的行动”；有用户楼层时继续使用楼层原文。独立网关同期发布 0.13.0，新增可选弱密钥与无密钥模式。
+
 0.6.1 缩短 Vertex 面板中自动续写开关下方的说明，功能不变；独立网关仍为 0.11.0。
 
 0.6.0 与独立网关 0.11.0 把抗截断的合成工具名固定为 `router_emit`，开启抗截断后也能命中 Vertex 隐式缓存；Gemini 4 Argon 的输出额度超过单次上限时改为按上限发送，不再报错，并新增可选的超长回复自动续写，见 [Gemini 4 输出上限与自动续写](GEMINI4.md#输出上限与自动续写)。准备过的 0.5.3 没有发布，其改动包含在 0.6.0 中。
@@ -247,4 +249,4 @@ Unicode 转码在浏览器中、抗截断分流之前执行；普通／旁路请
 
 版本号只在发版时更新。发版之后 `main` 上的改动在下一次发版前不改版本号，面板的版本检查分不出新旧；要确认装到的代码是否含某项改动，看它来自哪个提交。
 
-当前前端与服务端均为 0.6.1，对应标签／Release `sillytavern-v0.6.1`。0.5.0（标签 `sillytavern-v0.5.0`）首次让客户端工具经过抗截断，但回传工具结果会失败。0.4.0（标签 `sillytavern-v0.4.0`）包含 TauriTavern 与 Gemini 4 Argon 适配。0.3.1（标签 `sillytavern-v0.3.1`）包含“继续”适配、流式修复和一键安装包。建议前后端一起更新；版本检查的规则见“更新与已有手动安装”。0.3.0 对应标签 `sillytavern-v0.3.0`（与网关 `v0.7.0` 为同一提交）；0.2.0 未发布标签；上方 v0.1.0 标签／Release 不含 Unicode 与图片输入。Unicode 转码在 v0.2.0（当时为独立勾选框）时完成的短请求验收见[验收记录](UNICODE-INPUT-AUDIT.md)（英文）。0.4.0 与 0.3.1 的验证和剩余验收范围见[验收说明](VALIDATION.md)。
+当前前端与服务端均为 0.6.2，对应标签／Release `sillytavern-v0.6.2`。0.5.0（标签 `sillytavern-v0.5.0`）首次让客户端工具经过抗截断，但回传工具结果会失败。0.4.0（标签 `sillytavern-v0.4.0`）包含 TauriTavern 与 Gemini 4 Argon 适配。0.3.1（标签 `sillytavern-v0.3.1`）包含“继续”适配、流式修复和一键安装包。建议前后端一起更新；版本检查的规则见“更新与已有手动安装”。0.3.0 对应标签 `sillytavern-v0.3.0`（与网关 `v0.7.0` 为同一提交）；0.2.0 未发布标签；上方 v0.1.0 标签／Release 不含 Unicode 与图片输入。Unicode 转码在 v0.2.0（当时为独立勾选框）时完成的短请求验收见[验收记录](UNICODE-INPUT-AUDIT.md)（英文）。0.4.0 与 0.3.1 的验证和剩余验收范围见[验收说明](VALIDATION.md)。

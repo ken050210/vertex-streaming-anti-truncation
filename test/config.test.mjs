@@ -9,6 +9,24 @@ import { loadConfig, settingsFromEnv, MODEL_ID, buildConfig, DEFAULT_SETTINGS, p
 
 const env = { GATEWAY_API_KEY: "synthetic-local-key-for-tests", VERTEX_PROJECT_ID: "example-project", VERTEX_ACCESS_TOKEN: "synthetic-oauth-token" };
 
+test("gateway access defaults to strict and weak/keyless modes require an explicit configuration choice", async () => {
+  assert.equal((await loadConfig(env)).gatewayKeyMode, "strict");
+  for (const key of ["", "123456"]) await assert.rejects(loadConfig({ ...env, GATEWAY_API_KEY: key }), /at least 16/);
+  const weak = await loadConfig({ ...env, GATEWAY_KEY_MODE: "weak", GATEWAY_API_KEY: "123456" });
+  assert.equal(weak.gatewayKey, "123456");
+  assert.equal(weak.gatewayKeyMode, "weak");
+  for (const key of ["", "has space", "x".repeat(513), "中文", "a\u0001b"]) {
+    await assert.rejects(loadConfig({ ...env, GATEWAY_KEY_MODE: "weak", GATEWAY_API_KEY: key }));
+  }
+  await assert.rejects(loadConfig({ ...env, GATEWAY_KEY_MODE: "disabled" }), /GATEWAY_KEY_MODE/);
+  for (const key of ["", env.GATEWAY_API_KEY]) {
+    const settings = await settingsFromEnv({ ...env, GATEWAY_KEY_MODE: "none", GATEWAY_API_KEY: key });
+    assert.equal(settings.gatewayKey, "");
+    assert.equal(buildConfig(settings).gatewayKeyMode, "none");
+    assert.equal(publicSettings(settings).gatewayKeySet, false);
+  }
+});
+
 test("config fixes Google hosts, model and defaults while supporting regional endpoints", async () => {
   const config = await loadConfig(env);
   assert.equal(config.model, MODEL_ID);

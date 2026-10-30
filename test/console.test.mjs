@@ -64,6 +64,73 @@ async function fixture(t, options = {}) {
   return { app, store, directory, base, cookie, csrf, api, settings, requests };
 }
 
+test("weak and keyless access require confirmation, persist across restart and can be secured again", async t => {
+  for (const mode of ["weak", "none"]) await t.test(mode, async t => {
+    const f = await fixture(t);
+    const initial = await (await f.api("/api/config", { revision: "new", settings: f.settings })).json();
+    const settings = { gatewayKeyMode: mode, gatewayKey: mode === "weak" ? "123456" : null };
+    for (const confirmation of [undefined, false, "true"]) {
+      const denied = await f.api("/api/config", { revision: initial.revision, settings, confirmGatewayAccess: confirmation });
+      assert.equal(denied.status, 400);
+      assert.match((await denied.json()).error.message, /Confirm the risks/);
+      assert.equal((await f.store.load()).revision, initial.revision);
+      assert.equal((await fetch(`http://127.0.0.1:${f.settings.port}/v1/models`)).status, 401);
+    }
+    const applied = await f.api("/api/config", { revision: initial.revision, settings, confirmGatewayAccess: true });
+    assert.equal(applied.status, 200);
+    const saved = await applied.json();
+    assert.equal(saved.status.active.gatewayKeyMode, mode);
+    assert.equal(saved.settings.gatewayKeySet, mode !== "none");
+    assert.equal((await f.store.load()).settings.gatewayKey, mode === "none" ? "" : "123456");
+    assert.equal((await f.api("/api/config", { revision: saved.revision, settings: { timeoutMs: 120000 } })).status, 200);
+    await f.app.close();
+
+    const restarted = await createConsole({ store: f.store, fetchImpl: () => assert.fail("No inference") });
+    t.after(() => restarted.close()); await restarted.listen(0);
+    assert.equal(restarted.status().running, true);
+    assert.equal(restarted.bootstrapToken, null);
+    const base = `http://127.0.0.1:${restarted.server.address().port}`;
+    const post = (path, body, headers = {}) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+    const session = await (await fetch(base + "/api/session")).json();
+    assert.equal(session.setup, false);
+    assert.equal(session.keyless, mode === "none");
+    assert.equal((await post("/api/login", {})).status, mode === "none" ? 200 : 401);
+    const login = await post("/api/login", { key: mode === "none" ? "arbitrary-client-value" : "123456" });
+    assert.equal(login.status, 200);
+    const headers = { cookie: login.headers.get("set-cookie").split(";")[0], "x-csrf-token": (await login.json()).csrf };
+    const other = await post("/api/login", { key: "123456" });
+    const otherCookie = other.headers.get("set-cookie").split(";")[0];
+    const current = await (await fetch(base + "/api/config", { headers })).json();
+    const secure = { revision: current.revision, settings: { gatewayKeyMode: "strict", gatewayKey: f.settings.gatewayKey } };
+    assert.equal((await post("/api/config", secure, { cookie: headers.cookie })).status, 403);
+    assert.equal((await post("/api/login", {}, { origin: "https://evil.example" })).status, 403);
+    assert.equal((await post("/api/login", {}, { "sec-fetch-site": "cross-site" })).status, 403);
+    if (mode === "none") {
+      assert.equal((await post("/api/config", { revision: current.revision, settings: { gatewayKeyMode: "weak", gatewayKey: "123456" } }, headers)).status, 400);
+      assert.equal((await post("/api/config", { revision: current.revision, settings: { gatewayKeyMode: "strict" } }, headers)).status, 400);
+    }
+    assert.equal((await post("/api/config", secure, headers)).status, 200);
+    assert.equal((await fetch(base + "/api/config", { headers: { cookie: otherCookie } })).status, 401);
+    assert.equal((await fetch(base + "/api/config", { headers })).status, 200);
+    assert.equal((await post("/api/login", {})).status, 401);
+    assert.equal((await fetch(`http://127.0.0.1:${f.settings.port}/v1/models`)).status, 401);
+    assert.equal(f.requests.length, 0);
+  });
+});
+
+test("first setup can explicitly choose keyless access and an empty key alone never disables login", async t => {
+  const f = await fixture(t);
+  assert.equal((await fetch(f.base + "/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 401);
+  for (const gatewayKey of ["", null, "123456"]) {
+    assert.equal((await f.api("/api/config", { revision: "new", settings: { ...f.settings, gatewayKey } })).status, 400);
+  }
+  const result = await f.api("/api/config", { revision: "new", settings: { ...f.settings, gatewayKeyMode: "none", gatewayKey: null }, confirmGatewayAccess: true });
+  assert.equal(result.status, 200);
+  assert.equal((await (await fetch(f.base + "/api/session")).json()).setup, false);
+  assert.equal((await fetch(`http://127.0.0.1:${f.settings.port}/v1/models`)).status, 200);
+  assert.equal(f.requests.length, 0);
+});
+
 test("console saves account rotation, redacts nested credentials and preserves them across reloads", async t => {
   const f = await fixture(t);
   const account = { id: "backup", name: "Backup", authMode: "express", projectId: "backup-project", location: "global", credential: "synthetic-backup-key" };

@@ -2,9 +2,18 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
-## Unreleased — Unicode input for single-floor game cards
+## Standalone gateway 0.13.0 — optional weak and keyless access (2026-10-30)
 
-Not released yet; the UI extension still reports 0.6.1. Only the UI extension changes (TauriTavern runs the same extension); the server plugin, the standalone gateway and the gateway's floor bridge script are unchanged.
+Tag `gateway-v0.13.0`, Docker image `0.13.0`. The SillyTavern installer is released separately as `sillytavern-v0.6.2`.
+
+- Strict access remains the default. Explicitly select weak-key access (1–512 visible ASCII characters) or keyless access through the console or `GATEWAY_KEY_MODE`.
+- Console transitions to weak or keyless access require confirmation. Keyless mode opens both API and console access, clears the saved gateway key and accepts omitted or placeholder client keys. Anyone who can reach the service can call models, read logs and change settings.
+- Access-mode changes invalidate other console sessions. Settings survive restart; returning to keyed access requires a key. Host, Origin and CSRF checks remain active.
+- Updated bilingual setup, Docker and validation documentation. The Docker smoke test now exercises strict/weak/keyless transitions, keyless persistence after container replacement, and restoring strict authentication without model inference.
+
+## SillyTavern integration 0.6.2 — Unicode input for single-floor game cards (2026-10-30)
+
+Tag `sillytavern-v0.6.2`, including the one-step installer and SHA-256 checksums. Both halves report 0.6.2. The functional change is in the UI extension (TauriTavern runs the same extension); the gateway's floor bridge script is unchanged.
 
 - SillyTavern UI extension, Unicode input: when the chat has no real user floor (or the latest one is empty), the text of the chat variable 我的行动 is matched and encoded instead. Single-floor game cards such as 诡秘之主：第五纪 keep the whole game in message 0 and pass the player's input through their injections and the preset's `{{getvar::我的行动}}`; until now every generation stopped with "no real user floor". Chats that have a user floor still use only that floor's text.
 - The panel's option label, status lines and stop message now speak of "user input".

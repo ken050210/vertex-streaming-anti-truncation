@@ -40,6 +40,23 @@ async function fixture(t, upstream, override = {}) {
   return { events, requests, base, get, post };
 }
 
+test("weak keys still authenticate and explicit keyless mode accepts omitted or arbitrary client keys", async t => {
+  const weak = await fixture(t, () => assert.fail("No inference"), { gatewayKeyMode: "weak", gatewayKey: "123456" });
+  assert.equal((await weak.get("/v1/models", "123456")).status, 200);
+  for (const key of ["", "wrong"]) assert.equal((await weak.get("/v1/models", key)).status, 401);
+  const keyless = await fixture(t, () => Response.json(completion("reply")), { gatewayKeyMode: "none", gatewayKey: "" });
+  for (const key of ["", "arbitrary-client-value"]) {
+    assert.equal((await keyless.get("/v1/models", key)).status, 200);
+    assert.equal((await keyless.get("/admin/events", key)).status, 200);
+  }
+  const response = await fetch(keyless.base + "/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+  assert.equal(response.status, 200);
+  assert.equal(keyless.requests.length, 1);
+  assert.equal(keyless.requests[0].headers.authorization, "Bearer " + token);
+  const strict = await fixture(t, () => assert.fail("No inference"), { gatewayKey: "" });
+  assert.equal((await strict.get("/v1/models", "")).status, 401);
+});
+
 test("failed nonstream and buffered replies preserve terminal diagnostics without retry or private content", async t => {
   for (const [choice, reason, finishReason, outcome] of [
     [{ finish_reason: "stop" }, "missing_message", "stop", "error"],

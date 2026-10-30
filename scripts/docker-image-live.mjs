@@ -73,7 +73,7 @@ export async function imageProbe(request = fetch) {
 async function main() {
   const { values } = parseArgs({ options: {
     live: { type: "boolean" }, probe: { type: "boolean" }, credentials: { type: "string" },
-    image: { type: "string", default: "ghcr.io/ken050210/vertex-streaming-anti-truncation:0.12.0" },
+    image: { type: "string", default: "ghcr.io/ken050210/vertex-streaming-anti-truncation:0.13.0" },
     report: { type: "string" },
   } });
   assert.equal(values.live, true, "Pass --live to authorize exactly one request, max 512 output tokens, no retry");
