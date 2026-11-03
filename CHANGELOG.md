@@ -2,6 +2,15 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.13.1 / SillyTavern 0.6.3 — Transport prompt update (2026-11-03)
+
+Tags: `gateway-v0.13.1`, `sillytavern-v0.6.3`; Docker: `0.13.1` / `latest`.
+
+- Clarify that the transport carries the requested reply, preserving language, sections, formatting and markup without unsolicited transport, tool-selection or serialization commentary.
+- Finish the call when content is complete; avoid repetitive filler while preserving repetition explicitly requested by the task. Client tools, continuation, stable tool names and decoding remain unchanged.
+- Git-installed plugins, the installer ZIP, standalone gateway and Docker include the same core change. Update both Tavern components, restart the server and refresh the page; pull and recreate Docker containers while retaining their data volume.
+- No loop detector or user-preset changes. All 257 offline tests passed; real-model effectiveness remains unverified.
+
 ## Standalone gateway 0.13.0 — optional weak and keyless access (2026-10-30)
 
 Tag `gateway-v0.13.0`, Docker image `0.13.0`. The SillyTavern installer is released separately as `sillytavern-v0.6.2`.

@@ -64,12 +64,14 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
                 content: (callable
                     ? `Transport format for this reply: put all user-visible text, if any, in exactly one call of ${toolName}; its content string holds ${text}, preserving all requested formatting, markup, language and sections. ${toolName} only transports text and performs no external action. Call the other tools whenever the task needs them, with or without ${toolName}.`
                     : `Transport format for this reply: call ${toolName} exactly once. Put ${text} in its content string, preserving all requested formatting, markup, language and sections. The function only transports text and performs no external action.`)
+                    + " This transport does not change the task. Do not add unsolicited commentary about this transport, tool selection or serialization. Once the requested content is complete, end the call without repeating finished content or adding filler. Preserve repetition explicitly requested by the task."
                     + (continuation ? "\n" + CONTINUATION_INSTRUCTION : ""),
             }],
             tools: [...clientTools, { type: "function", function: {
                 name: toolName,
-                description: "Deliver the user-visible reply as text.",
-                parameters: { type: "object", properties: { content: { type: "string" } }, required: ["content"], additionalProperties: false },
+                description: "Deliver the complete user-visible reply as text; end the call when the requested content is complete.",
+                parameters: { type: "object", properties: { content: { type: "string",
+                    description: "The requested reply itself, preserving its language, sections, formatting and markup." } }, required: ["content"], additionalProperties: false },
             } }],
             tool_choice: callable ? "required" : { type: "function", function: { name: toolName } },
             ...(callable ? {} : { parallel_tool_calls: false }),
