@@ -15,6 +15,7 @@ const reasons = { "existing-tools": "旧版 functions 工具", "tool-choice": "�
 const errors = { unicode_floor_required: "找不到真实用户楼层，也没有聊天变量“我的行动”，已停止发送。请先输入消息，或关闭 Unicode 转码。",
   unicode_input_too_large: "转码后的请求超过大小限制，已停止发送。请缩短输入或关闭 Unicode 转码。",
   plugin_not_ready: "服务端插件未就绪或版本太旧，本次请求已停止发送。点“检查插件连接”查看原因和更新办法。",
+  tucao_stop_not_supported: "服务端插件不支持第二段 tucao 截停。请更新服务端插件并重启酒馆，或关闭此开关。",
   image_input_requires_supported_request: "图片输入不支持此请求，已停止发送，未改用明文。请去掉不支持的内容或换用支持的模型，或关闭图片输入。",
   image_input_unsupported_characters: "图片输入不支持 emoji、控制字符或字体缺字，已停止发送。请删除这些字符，或改用“图片·当前轮”/关闭图片输入。",
   image_input_too_large: "转成图片后超过大小或页数限制，已停止发送。请缩短对话，或改用“图片·当前轮”。",
@@ -133,6 +134,18 @@ function mount() {
   panel.append(label, select, inputLabel, input);
   // TauriTavern's own backend sends the request, so it cannot follow long-decode continuation tokens.
   if (!direct) {
+    const tucao = document.createElement("label");
+    tucao.className = "checkbox_label";
+    tucao.htmlFor = "vertex_tucao_stop";
+    const tucaoBox = Object.assign(document.createElement("input"), { type: "checkbox", id: tucao.htmlFor, checked: saved.tucaoStop === true });
+    tucaoBox.addEventListener("change", () => {
+      settings().tucaoStop = tucaoBox.checked;
+      context.saveSettingsDebounced();
+      showStatus();
+    });
+    tucao.append(tucaoBox, Object.assign(document.createElement("span"), { textContent: "第二段 tucao 结束后截停" }));
+    panel.append(tucao, Object.assign(document.createElement("small"), { textContent:
+      "默认关闭。抗截断开启时，保留第一段及后续正文，在本次回复的第二个完整 </tucao> 后结束；流式取消上游读取，非流式收到完整回复后裁剪。少于两个标签不截停。" }));
     const longDecode = document.createElement("label");
     longDecode.className = "checkbox_label";
     longDecode.htmlFor = "vertex_long_decode";
@@ -158,6 +171,7 @@ function mount() {
       getImageInput: () => direct ? "off" : settings().imageInput || "off",
       getUnicodeInput: () => settings().unicodeInput === true,
       getLongDecode: () => !direct && settings().longDecode === true,
+      getTucaoStop: () => !direct && settings().tucaoStop === true,
       getUserFloor: () => {
         const context = SillyTavern.getContext();
         return latestUserInput(context.chat, context.chatMetadata?.variables);

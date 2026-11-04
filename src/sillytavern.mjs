@@ -8,6 +8,7 @@ import { documentedUnsupported } from "./unsupported-params.mjs";
 import { isObject, protocolError, sseData, transformSse } from "./wire.mjs";
 import { bypassReason, BODY_LIMIT } from "../integrations/sillytavern/shared.js";
 import { isGemini4Argon, gemini4OutputLimit, gemini4ThinkingLevel, gemini4ToolMetadata } from "./gemini4.mjs";
+import { createTucaoStop } from "./tucao-stop.mjs";
 
 export const requestError = code => Object.assign(new Error(code), { status: 400, code });
 
@@ -78,7 +79,8 @@ export function prepareSillyTavernRequest(request, adapters) {
   if (outputLimit) config.maxOutputTokens = outputLimit.applied;
   // Streamed arguments are read only for the transport call alone; client tools arrive whole.
   if (upstreamStream && !clientTools) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
-  return { body: native, toolName: prepared.toolName, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit };
+  if (body.vertex_tucao_stop != null && typeof body.vertex_tucao_stop !== "boolean") throw requestError("invalid_tucao_stop");
+  return { body: native, toolName: prepared.toolName, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit, tucaoStop: body.vertex_tucao_stop === true };
 }
 
 const finishReasons = { stop: "STOP", length: "MAX_TOKENS", content_filter: "SAFETY", tool_calls: "STOP" };
@@ -108,7 +110,7 @@ function nativeUsage(usage) {
 
 // Vertex's ST streaming reader expects native candidates[].content.parts, while
 // its non-streaming reader expects choices[] plus responseContent. Match both.
-export function toSillyTavernStream(response, getNativeUsage = () => undefined, model) {
+export function toSillyTavernStream(response, getNativeUsage = () => undefined, model, getStopAfter = () => undefined) {
   return transformSse(response, ({ data }, emit) => {
     if (!data) return;
     if (data.trim() === "[DONE]") return emit(sseData("[DONE]"));
@@ -127,23 +129,24 @@ export function toSillyTavernStream(response, getNativeUsage = () => undefined, 
       if (choice.finish_reason != null) candidate.finishReason = choice.native_finish_reason ?? finishReasons[choice.finish_reason] ?? "OTHER";
       output.candidates.push(candidate);
     }
-    if (parsed.usage) { output.usage = parsed.usage; output.usageMetadata = getNativeUsage() ?? nativeUsage(parsed.usage); }
+    if (parsed.usage && !getStopAfter()) { output.usage = parsed.usage; output.usageMetadata = getNativeUsage() ?? nativeUsage(parsed.usage); }
     if (parsed.router_anti_truncation) output.vertexAntiTruncation = parsed.router_anti_truncation;
+    if (getStopAfter()) output.vertexStopAfter = getStopAfter();
     emit(sseData(output));
   });
 }
 
 // A checked, complete reply in the shape ST asked for. Also used in a WebView,
 // where older WebKit has no Response.json.
-export function completedSillyTavernResponse(completion, prepared, usageMetadata) {
+export function completedSillyTavernResponse(completion, prepared, usageMetadata, stopAfter) {
   const message = completion.choices[0].message;
-  if (prepared.stream) return toSillyTavernStream(guardCompletionStream(completionStream(completion, true), () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model);
+  if (prepared.stream) return toSillyTavernStream(guardCompletionStream(completionStream(completion, true), () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stopAfter);
   const parts = [];
   if (message.reasoning_content) parts.push({ thought: true, text: message.reasoning_content });
   if (message.content) parts.push({ text: message.content });
   for (const call of message.tool_calls ?? []) parts.push(functionCallPart(call, prepared.model));
   return new Response(JSON.stringify({ ...completion, responseContent: { role: "model", parts }, usageMetadata,
-    vertexAntiTruncation: completion.router_anti_truncation }), { headers: { "content-type": "application/json" } });
+    vertexAntiTruncation: completion.router_anti_truncation, ...(stopAfter ? { vertexStopAfter: stopAfter } : {}) }), { headers: { "content-type": "application/json" } });
 }
 
 async function readJson(response) {
@@ -163,15 +166,18 @@ export async function restoreSillyTavernResponse(upstream, prepared) {
     await upstream.body?.cancel();
     throw Object.assign(new Error("vertex_upstream_http_error"), { status: upstream.status, code: "vertex_upstream_http_error" });
   }
+  const stop = prepared.toolName && prepared.tucaoStop ? createTucaoStop(prepared.toolName) : null;
   if (prepared.upstreamStream) {
     if (!upstream.body) throw protocolError("empty_upstream_stream");
+    if (stop) upstream = stop.stream(upstream);
     let usageMetadata;
     const translated = prepared.clientTools ? wrapNativeStream(upstream, prepared.model)
       : wrapNativeTextStream(upstream, prepared.toolName, prepared.model, usage => { usageMetadata = usage; });
     const restored = wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools);
-    return toSillyTavernStream(guardCompletionStream(restored, () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model);
+    return toSillyTavernStream(guardCompletionStream(restored, () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stop?.marker());
   }
   const raw = await readJson(upstream);
+  stop?.process(raw);
   if (raw.candidates?.length > 1) throw protocolError("unexpected_candidates");
   const translated = translateNativeCompletion(raw, prepared.model);
   const inspected = inspectCompletion(translated);
@@ -179,5 +185,5 @@ export async function restoreSillyTavernResponse(upstream, prepared) {
   const completion = prepared.toolName ? restoreAntiTruncationCompletion(translated, prepared.toolName) : translated;
   const restored = inspectCompletion(completion);
   if (!restored.valid) throw protocolError(restored.reason);
-  return completedSillyTavernResponse(completion, prepared, raw.usageMetadata);
+  return completedSillyTavernResponse(completion, prepared, raw.usageMetadata, stop?.marker());
 }

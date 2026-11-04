@@ -1,6 +1,6 @@
 import { supportsNativeTextStream } from "./vertex-native.mjs";
 // Restoration failures describe one reply, not the connection, and keep their code.
-import { isObject, protocolError as failure, trafficType, transformSse } from "./wire.mjs";
+import { isObject, protocolError as failure, sseData, trafficType, transformSse } from "./wire.mjs";
 
 const auditTransports = new Set(["disabled", "existing-tools", "tool-choice", "structured-output", "multiple-candidates",
     "tool-history", "tool-transport", "tool-transport-buffered", "tool-transport-buffered-fields", "tool-transport-native-streaming"]);
@@ -104,6 +104,7 @@ class ContentDecoder {
             return;
         }
         if (this.stringKind !== 'content') return;
+        this.stop?.clip(ch, "tool");
         const code = ch.charCodeAt(0);
         if (this.high) {
             this.out += this.high;
@@ -135,9 +136,10 @@ class ContentDecoder {
             this.token = ch;
         } else this.fail();
     }
-    feed(text) {
+    feed(text, stop) {
+        this.stop = stop;
         this.out = '';
-        for (let i = 0; i < text.length && !this.invalid; i++) {
+        for (let i = 0; i < text.length && !this.invalid && !stop?.marker(); i++) {
             const ch = text[i];
             if (this.mode === 'string') {
                 if (this.hex !== null) {
@@ -227,20 +229,23 @@ class ContentDecoder {
 
 const cutShort = reason => reason === "length" || reason === "content_filter";
 
-export function restoreAntiTruncationCompletion(completion, toolName) {
+export function restoreAntiTruncationCompletion(completion, toolName, stop) {
     if (!toolName) return completion;
     let restored = false;
     const choices = completion.choices.map(choice => {
         const message = choice.message;
-        if (!Array.isArray(message?.tool_calls)) return choice;
-        const owned = message.tool_calls.filter(call => call.function?.name === toolName);
-        if (!owned.length) return choice;
+        const owned = Array.isArray(message?.tool_calls) ? message.tool_calls.filter(call => call.function?.name === toolName) : [];
+        if (!owned.length) {
+            if (!stop || typeof message?.content !== "string") return choice;
+            const content = stop.clip(message.content, "plain");
+            return { ...choice, message: { ...message, content }, finish_reason: stop.marker() ? "stop" : choice.finish_reason };
+        }
         if (owned.length !== 1) throw failure("anti_truncation_multiple_calls");
         const decoder = new ContentDecoder();
         const args = owned[0].function.arguments;
         if (typeof args !== "string") throw failure("anti_truncation_invalid_arguments");
-        const text = decoder.feed(args);
-        if (decoder.invalid || (!decoder.valid && !cutShort(choice.finish_reason))) {
+        const text = decoder.feed(args, stop);
+        if (decoder.invalid || (!decoder.valid && !stop?.marker() && !cutShort(choice.finish_reason))) {
             throw failure("anti_truncation_incomplete_arguments");
         }
         const real = message.tool_calls.filter(call => call.function?.name !== toolName);
@@ -249,21 +254,24 @@ export function restoreAntiTruncationCompletion(completion, toolName) {
         else delete result.tool_calls;
         restored ||= decoder.found;
         return { ...choice, message: result, finish_reason:
-            choice.finish_reason === "tool_calls" && decoder.valid && !real.length ? "stop" : choice.finish_reason };
+            stop?.marker() ? (real.length ? "tool_calls" : "stop") : choice.finish_reason === "tool_calls" && decoder.valid && !real.length ? "stop" : choice.finish_reason };
     });
-    return { ...completion, choices, router_anti_truncation: { restored } };
+    const result = { ...completion, choices, router_anti_truncation: { restored } };
+    if (stop?.marker()) { delete result.usage; result.router_stop_after = stop.marker(); }
+    return result;
 }
 
 // Per-choice state retains only the JSON grammar and undecided tool metadata.
 // Ordinary text is streamed immediately. The first nonempty text channel wins;
 // later ordinary/synthetic text is suppressed instead of duplicated.
 class StreamRestorer {
-    constructor(toolName, tools) {
+    constructor(toolName, tools, stop) {
         this.toolName = toolName;
         this.tools = new Set(tools.map(tool => tool?.function?.name));
         this.choices = new Map();
         this.restored = false;
         this.failed = false;
+        this.stop = stop;
     }
     state(index) {
         if (!this.choices.has(index)) {
@@ -307,7 +315,8 @@ class StreamRestorer {
         for (const delta of pending) {
             const args = delta.function?.arguments;
             if (args != null && typeof args !== "string") throw failure("anti_truncation_invalid_arguments");
-            if (args) text += slot.decoder.feed(args);
+            if (args) text += slot.decoder.feed(args, state.channel === "plain" ? undefined : this.stop);
+            if (this.stop?.marker()) break;
         }
         if (slot.decoder.invalid) throw failure("anti_truncation_invalid_arguments");
         if (text) {
@@ -343,20 +352,29 @@ class StreamRestorer {
                 if (typeof delta.content === "string" && delta.content) {
                     state.channel ??= "plain";
                     if (state.channel !== "plain") delete delta.content;
+                    else if (this.stop) delta.content = this.stop.clip(delta.content, "plain");
                 }
-                if (Array.isArray(delta.tool_calls)) {
+                if (this.stop?.marker()) delete delta.tool_calls;
+                else if (Array.isArray(delta.tool_calls)) {
                     const kept = [];
                     for (const [callIndex, call] of delta.tool_calls.entries()) {
                         const output = this.tool(state, call, callIndex);
                         kept.push(...output.kept);
                         text += output.text;
+                        if (this.stop?.marker()) break;
                     }
                     if (kept.length) delta.tool_calls = kept;
                     else delete delta.tool_calls;
                 }
                 if (text) delta.content = text;
             }
-            if (choice.finish_reason != null) choice.finish_reason = this.finish(state, choice.finish_reason);
+            if (this.stop?.marker()) {
+                state.terminal = true;
+                choice.finish_reason = state.real ? "tool_calls" : "stop";
+                delete choice.native_finish_reason;
+                delete chunk.usage;
+                chunk.router_stop_after = this.stop.marker();
+            } else if (choice.finish_reason != null) choice.finish_reason = this.finish(state, choice.finish_reason);
         }
         return chunk;
     }
@@ -365,9 +383,9 @@ class StreamRestorer {
     }
 }
 
-export function wrapAntiTruncationStream(response, toolName, onMetadata = () => {}, tools = []) {
+export function wrapAntiTruncationStream(response, toolName, onMetadata = () => {}, tools = [], stop) {
     if (!toolName || !response.ok || !response.body) return response;
-    const processor = new StreamRestorer(toolName, tools);
+    const processor = new StreamRestorer(toolName, tools, stop);
     let done = false;
     return transformSse(response, ({ raw, lines, data, event }, emit) => {
         if (!data) { emit(raw + "\n\n"); return; }
@@ -402,6 +420,12 @@ export function wrapAntiTruncationStream(response, toolName, onMetadata = () => 
             }
             return [line];
         }).join("\n") + "\n\n");
+        if (stop?.marker()) {
+            onMetadata({ restored: processor.restored, streamDone: true, usage: undefined });
+            emit(sseData("[DONE]"));
+            done = true;
+            return false;
+        }
     }, () => {
         if (!done && !processor.failed) throw failure("anti_truncation_stream_interrupted");
     });

@@ -4,6 +4,8 @@
 
 为 Vertex AI / Gemini 提供本地模型管理与工具调用抗截断传输。每个上游模型可保存正常、非流式抗截断和流式抗截断版本，可接入 SillyTavern 的自定义 OpenAI 连接。
 
+可选的**第二段 tucao 截停**：默认关闭。网关控制台勾选“第二段 tucao 结束后截停”（CLI：`TUCAO_STOP=true`）；酒馆在 Vertex 抗截断面板勾选同名开关。仅在抗截断生效时，保留本次回复的第二个完整、大小写精确的 `</tucao>`，丢弃其后内容；第一个标签后的正文继续输出。支持标签跨流式分块，流式会取消上游读取，非流式收到完整回复后裁剪。思考和业务工具参数不计数；少于两个标签、正常模式及旁路请求不截停。每次请求重新计数，包括“继续”，不计入聊天历史；仅适用于约定每轮有两段 tucao 的预设。截停时不伪造最终 token 用量；已产生的上游费用不会撤销。SillyTavern 前后端需一起更新；TauriTavern 暂不提供此开关。
+
 ## 安装哪一种
 
 本仓库有三种用法，先按自己的情况选一种：
@@ -33,7 +35,7 @@ https://raw.githubusercontent.com/ken050210/vertex-streaming-anti-truncation/mai
 
 也提供 **SillyTavern 原生 Vertex 面板集成**：UI 扩展与服务端插件配套安装后，直接在 Google Vertex AI 连接面板选择关闭、非流式或流式抗截断，复用酒馆凭据，无需另开网关进程。默认关闭；[安装与验证说明](docs/SILLYTAVERN.md)。
 
-SillyTavern 需要 1.19.x，有两种装法，只选一种：想在酒馆里跟随仓库更新，用 Git 装法；想一次装好两半，用一键安装包。Git 装法：在酒馆“安装扩展”的 Git URL 输入框填入 `https://github.com/ken050210/vertex-streaming-anti-truncation`，分支留空。**首次还需在酒馆根目录执行** `node plugins.js install https://github.com/ken050210/vertex-streaming-anti-truncation` 安装配套服务端插件，再在 `plugins/vertex-streaming-anti-truncation` 目录运行 `npm ci --ignore-scripts` 安装图片输入所需的渲染依赖，启用 `enableServerPlugins` 并重启酒馆。仅安装前端无法完成抗截断传输；已有手动安装请先阅读[迁移说明](docs/SILLYTAVERN.md#更新与已有手动安装)，避免重复加载。也可以从 [Release `sillytavern-v0.6.3`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.6.3) 下载[一键安装包](docs/SILLYTAVERN.md#一键安装包)，解压后运行其中的安装程序，一次装好前后端并开启服务端插件，不需要 Git。压缩包只在发版时更新；发版之后 `main` 上的新改动，可以用四条命令[从源码生成安装包并安装](docs/AGENT-INSTALL.md#sillytavern)。
+SillyTavern 需要 1.19.x，有两种装法，只选一种：想在酒馆里跟随仓库更新，用 Git 装法；想一次装好两半，用一键安装包。Git 装法：在酒馆“安装扩展”的 Git URL 输入框填入 `https://github.com/ken050210/vertex-streaming-anti-truncation`，分支留空。**首次还需在酒馆根目录执行** `node plugins.js install https://github.com/ken050210/vertex-streaming-anti-truncation` 安装配套服务端插件，再在 `plugins/vertex-streaming-anti-truncation` 目录运行 `npm ci --ignore-scripts` 安装图片输入所需的渲染依赖，启用 `enableServerPlugins` 并重启酒馆。仅安装前端无法完成抗截断传输；已有手动安装请先阅读[迁移说明](docs/SILLYTAVERN.md#更新与已有手动安装)，避免重复加载。也可以从 [Release `sillytavern-v0.7.0`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.7.0) 下载[一键安装包](docs/SILLYTAVERN.md#一键安装包)，解压后运行其中的安装程序，一次装好前后端并开启服务端插件，不需要 Git。压缩包只在发版时更新；发版之后 `main` 上的新改动，可以用四条命令[从源码生成安装包并安装](docs/AGENT-INSTALL.md#sillytavern)。
 
 **TauriTavern（TT 酒馆）适配版**：同一个 UI 扩展也适配了 [TauriTavern](https://github.com/Darkatse/TauriTavern)。它把酒馆的 Node.js 后台换成了 Rust，不能运行服务端插件，所以在 TauriTavern 里只装 UI 扩展：在“安装扩展”中填入上面的 Git URL、分支留空即可，不需要 Node.js、`plugins.js`、`npm ci` 和 `enableServerPlugins`。扩展检测到 TauriTavern 后自己完成抗截断的请求改写和回复还原，凭据与提示词转换仍由 TauriTavern 处理。支持非流式／流式抗截断、Unicode 转码和“继续”适配，不支持图片输入。随 SillyTavern 集成 0.4.0 发布；[安装、与插件版的差别和验收范围](docs/SILLYTAVERN.md#tauritavern)。
 

@@ -2,6 +2,12 @@
 
 [中文](VALIDATION.md) | English
 
+## Gateway 0.14.0 / SillyTavern 0.7.0 — Optional second-tucao stop (2026-11-04)
+
+271 offline tests passed, covering native and compatible upstreams, streaming and buffered replies, split tags, same-chunk trailing noise, unfinished tool arguments, continuation after the first tag, cutoff after the second, upstream cancellation and no further long-decode hop. The switch defaults off and survives settings save/reload. Isolated Docker acceptance passed. The package installed into a synthetic SillyTavern 1.19.0 directory with dependencies, configuration backup and 49 matching installed-file hashes. Browser validation confirmed default-off, enable/save and persistence after reload.
+
+No real model was called. These results validate cutoff mechanics and deployment compatibility, not the generation quality of a particular preset.
+
 ## Gateway 0.13.1 / SillyTavern 0.6.3 — Transport prompt update (2026-11-03)
 
 Tags: `gateway-v0.13.1`, `sillytavern-v0.6.3`; Docker: `0.13.1` / `latest`.

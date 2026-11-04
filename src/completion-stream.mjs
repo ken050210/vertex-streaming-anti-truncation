@@ -16,7 +16,7 @@ export function completionStream(completion, includeUsage) {
 // Native converters already use the selected alias. Compatible streams need
 // the same mapping, including normal profiles that don't use a restorer.
 // Without keepUsage, an empty-choices usage chunk is read but not passed on.
-export function aliasStream(response, model, onMetadata = () => {}, keepUsage = true) {
+export function aliasStream(response, model, onMetadata = () => {}, keepUsage = true, getStop = () => undefined) {
   if (!response.body) return response;
   let done = false;
   return transformSse(response, ({ raw, lines, data, event }, emit) => {
@@ -33,7 +33,10 @@ export function aliasStream(response, model, onMetadata = () => {}, keepUsage = 
       if (!keepUsage && Array.isArray(parsed.choices) && !parsed.choices.length) return;
     }
     const finishReason = parsed.choices?.find(c => c.index === 0)?.finish_reason;
-    if (finishReason != null) onMetadata({ finishReason });
+    if (finishReason != null) {
+      onMetadata({ finishReason });
+      if (getStop()) parsed.router_stop_after = getStop();
+    }
     emit([...lines.filter(l => l !== "data" && !l.startsWith("data:")), "data: " + JSON.stringify(parsed)].join("\n") + "\n\n");
   }, () => { if (!done) throw new Error("Upstream stream closed before DONE"); });
 }

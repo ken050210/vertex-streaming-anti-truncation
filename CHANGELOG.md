@@ -2,6 +2,11 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.14.0 / SillyTavern 0.7.0 — Optional second-tucao stop (2026-11-04)
+
+Optional **stop after the second tucao section**: off by default. Enable it in the gateway console (`TUCAO_STOP=true` for CLI), or in the SillyTavern Vertex panel. When anti-truncation is active, keep the second complete, case-sensitive `</tucao>` and discard what follows; text after the first tag continues normally. Tags may span streaming chunks. Streaming cancels upstream reading; non-streaming clips after the full reply arrives. Thoughts and real-tool arguments do not count. Fewer than two tags, normal profiles and bypassed requests are unchanged. Counting starts anew for each request, including Continue; history is excluded. Use only for presets with two tucao sections per reply. A local stop does not fabricate final token usage or reverse upstream charges. Update both SillyTavern components; this switch is not available in TauriTavern.
+
+
 ## Gateway 0.13.1 / SillyTavern 0.6.3 — Transport prompt update (2026-11-03)
 
 Tags: `gateway-v0.13.1`, `sillytavern-v0.6.3`; Docker: `0.13.1` / `latest`.

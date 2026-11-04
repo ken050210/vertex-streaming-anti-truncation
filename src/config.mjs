@@ -7,7 +7,7 @@ import { MAX_RETRY_TEXT_BYTES } from "./gemini-compat.mjs";
 export { MODEL_ID, UPSTREAM_MODEL };
 export const DEFAULT_SETTINGS = Object.freeze({
   projectId: "", location: "global", authMode: "service-account", serviceTier: "standard",
-  port: 4781, timeoutMs: 600000, antiTruncation: true, models: null,
+  port: 4781, timeoutMs: 600000, antiTruncation: true, tucaoStop: false, models: null,
   hideUnavailableModels: true, geminiPrefillToUser: true, geminiLongDecode: false, unicodeInput: false, imageInput: "off",
   geminiPromptRetryEnabled: false, geminiPromptRetryText: "", geminiPromptRetryMatches: null, customBaseUrl: "",
   gatewayKeyMode: "strict", gatewayKey: "", serviceAccountJson: "", apiKey: "", accessToken: "", customApiKey: "",
@@ -84,6 +84,7 @@ export async function settingsFromEnv(env = process.env) {
     port: integer(env.PORT, 4781, 1, 65535, "PORT"),
     timeoutMs: integer(env.UPSTREAM_TIMEOUT_MS, 600000, 1000, 1800000, "UPSTREAM_TIMEOUT_MS"),
     antiTruncation: env.ANTI_TRUNCATION !== "false",
+    tucaoStop: toggle("TUCAO_STOP", false),
     unicodeInput: toggle("UNICODE_INPUT", false), imageInput: env.IMAGE_INPUT || "off",
     hideUnavailableModels: toggle("HIDE_UNAVAILABLE_MODELS", true),
     geminiPrefillToUser: toggle("GEMINI_PREFILL_TO_USER", true), geminiLongDecode: toggle("GEMINI_LONG_DECODE", false),
@@ -167,7 +168,7 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
   if (!["off", "current-turn", "all"].includes(s.imageInput)) throw new Error("Invalid image input mode");
   if (s.unicodeInput && s.imageInput !== "off") throw new Error("Unicode and image input are mutually exclusive");
   if (typeof s.antiTruncation !== "boolean") throw new Error("Invalid anti-truncation setting");
-  for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiLongDecode", "geminiPromptRetryEnabled", "unicodeInput", "accountRotationEnabled"]) {
+  for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiLongDecode", "geminiPromptRetryEnabled", "unicodeInput", "accountRotationEnabled", "tucaoStop"]) {
     if (typeof s[name] !== "boolean") throw new Error("Invalid compatibility toggle");
   }
   if (typeof s.geminiPromptRetryText !== "string" || Buffer.byteLength(s.geminiPromptRetryText) > MAX_RETRY_TEXT_BYTES) {
@@ -192,7 +193,7 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
     geminiPromptRetry: { enabled: s.geminiPromptRetryEnabled, text: s.geminiPromptRetryText, ...(matches ? { errorMatches: matches } : {}) },
     // Legacy fields remain available to CLI integrations; profiles own behavior.
     model: models[0]?.id || MODEL_ID, upstreamModel: models[0]?.upstreamModel || UPSTREAM_MODEL,
-    antiTruncation: s.models == null ? s.antiTruncation : true,
+    antiTruncation: s.models == null ? s.antiTruncation : true, tucaoStop: s.tucaoStop,
     port: integer(s.port, 4781, 1, 65535, "PORT"),
     timeoutMs: integer(s.timeoutMs, 600000, 1000, 1800000, "UPSTREAM_TIMEOUT_MS"),
     bodyLimitBytes: 8 * 1024 * 1024,

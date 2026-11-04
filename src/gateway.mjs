@@ -19,6 +19,7 @@ import { documentedUnsupported, dropParams } from "./unsupported-params.mjs";
 import { googleErrorDetail, trafficType, upstreamErrorLogFields } from "./wire.mjs";
 import { waitWithSignal } from "./abort.mjs";
 import { createAccountPool } from "./account-pool.mjs";
+import { createTucaoStop } from "./tucao-stop.mjs";
 
 class Problem extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -65,7 +66,7 @@ function readRequest(request, limit, signal) {
     signal.addEventListener("abort", abort, { once: true });
   });
 }
-async function readCompletion(response, limit, native = false, model) {
+async function readCompletion(response, limit, native, model, toolName, stop) {
   const chunks = [];
   let total = 0;
   for await (const bytes of response.body ?? []) {
@@ -77,12 +78,22 @@ async function readCompletion(response, limit, native = false, model) {
   try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
   catch { throw new Problem(502, "invalid_upstream_json"); }
   if (parsed?.error) throw new Problem(502, "upstream_error_object");
-  if (native) parsed = translateNativeCompletion(parsed, model);
+  if (native) { stop?.process(parsed); parsed = translateNativeCompletion(parsed, model); }
   if (!parsed || parsed.error || !Array.isArray(parsed.choices) || !parsed.choices.length) {
     throw new Problem(502, "invalid_upstream_completion");
   }
-  const inspected = inspectCompletion(parsed);
-  if (!inspected.valid) throw Object.assign(new Problem(502, inspected.reason), { integrity: inspected.integrity });
+  // With a local stop, the synthetic arguments may intentionally end before their
+  // JSON closes. Restore up to the boundary before checking the resulting reply.
+  if (!stop) {
+    const inspected = inspectCompletion(parsed);
+    if (!inspected.valid) throw Object.assign(new Problem(502, inspected.reason), { integrity: inspected.integrity });
+  }
+  parsed = restoreAntiTruncationCompletion(parsed, toolName, native ? undefined : stop);
+  if (stop?.marker()) { delete parsed.usage; parsed.router_stop_after = stop.marker(); }
+  if (stop) {
+    const inspected = inspectCompletion(parsed);
+    if (!inspected.valid) throw Object.assign(new Problem(502, inspected.reason), { integrity: inspected.integrity });
+  }
   return parsed;
 }
 // A bounded prefix of a provider error body, reduced to its fixed fields. The status
@@ -163,7 +174,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     let pathname;
     try { pathname = new URL(request.url, "http://localhost").pathname; }
     catch { return send(response, 400, { error: { code: "invalid_path" } }); }
-    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.13.1" });
+    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.14.0" });
     if (config.gatewayKeyMode !== "none" && !authorized(request, config.gatewayKey)) return send(response, 401, { error: { code: "unauthorized" } });
     if (request.method === "GET" && pathname === "/v1/models") return send(response, 200, {
       object: "list", data: availability(config).filter(model => !model.hidden).map(model => ({ id: model.id, object: "model", owned_by: "vertex-streaming-anti-truncation" })),
@@ -243,6 +254,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           payload = dropParams(payload, unsupported);
           if (droppedParams.length) response.setHeader("x-gemini-dropped-params", droppedParams.join(","));
           const transport = prepareAntiTruncation(payload, route.mode !== "normal" && config.antiTruncation !== false, route.mode === "streaming", { native: !custom });
+          const stop = config.tucaoStop && transport.toolName ? createTucaoStop(transport.toolName) : null;
           const buffered = route.mode === "buffered" && Boolean(transport.toolName);
           const upstreamStream = stream && !buffered;
           if (buffered) transport.reason = "tool-transport-buffered";
@@ -319,7 +331,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           status = upstream.status;
           // A complete upstream reply, restored and attributed to the selected alias.
           const readReply = async reply => {
-            const completion = restoreAntiTruncationCompletion(await readCompletion(reply, config.bodyLimitBytes, native, route.id), transport.toolName);
+            const completion = await readCompletion(reply, config.bodyLimitBytes, native, route.id, transport.toolName, stop);
             completion.model = route.id;
             audit.trafficType = trafficType(completion.usage);
             audit.usage = completion.usage;
@@ -333,10 +345,11 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
             if (buffered) {
               upstream = completionStream(await readReply(upstream), includeUsage);
             } else {
+              if (native && stop) upstream = stop.stream(upstream);
               if (transport.nativeStreaming) upstream = wrapNativeTextStream(upstream, transport.toolName, route.id, usage => { audit.trafficType = usage?.trafficType; audit.usage = translateUsage(usage); }, includeUsage);
               else if (native) upstream = wrapNativeStream(upstream, route.id, usage => { audit.trafficType = usage?.traffic_type; audit.usage = usage; }, includeUsage);
-              upstream = aliasStream(upstream, route.id, metadata => Object.assign(audit, metadata), includeUsage);
-              upstream = wrapAntiTruncationStream(upstream, transport.toolName, metadata => Object.assign(audit, metadata), transport.payload.tools);
+              upstream = wrapAntiTruncationStream(upstream, transport.toolName, metadata => Object.assign(audit, metadata), transport.payload.tools, native ? undefined : stop);
+              upstream = aliasStream(upstream, route.id, metadata => Object.assign(audit, metadata), includeUsage, () => stop?.marker());
             }
             upstream = guardCompletionStream(upstream, metadata => { integrity = metadata; }, expectation, config.bodyLimitBytes);
             if (!upstream.body) throw new Problem(502, "empty_upstream_stream");
@@ -352,6 +365,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
             if (!received) throw new Problem(502, "empty_upstream_stream");
             if (response.destroyed) throw new Problem(499, "client_disconnected");
             response.end();
+            if (stop?.marker()) audit.usage = undefined;
             if (buffered) audit.streamDone = true;
           } else {
             const completion = await readReply(upstream);
