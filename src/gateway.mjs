@@ -19,7 +19,7 @@ import { documentedUnsupported, dropParams } from "./unsupported-params.mjs";
 import { googleErrorDetail, trafficType, upstreamErrorLogFields } from "./wire.mjs";
 import { waitWithSignal } from "./abort.mjs";
 import { createAccountPool } from "./account-pool.mjs";
-import { createTucaoStop } from "./tucao-stop.mjs";
+import { createTagStop } from "./tag-stop.mjs";
 
 class Problem extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -254,7 +254,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           payload = dropParams(payload, unsupported);
           if (droppedParams.length) response.setHeader("x-gemini-dropped-params", droppedParams.join(","));
           const transport = prepareAntiTruncation(payload, route.mode !== "normal" && config.antiTruncation !== false, route.mode === "streaming", { native: !custom });
-          const stop = config.tucaoStop && transport.toolName ? createTucaoStop(transport.toolName) : null;
+          const stop = config.tucaoStop && transport.toolName ? createTagStop(transport.toolName, config.stopTag, config.stopCount) : null;
           const buffered = route.mode === "buffered" && Boolean(transport.toolName);
           const upstreamStream = stream && !buffered;
           if (buffered) transport.reason = "tool-transport-buffered";

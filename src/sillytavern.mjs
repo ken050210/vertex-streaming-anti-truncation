@@ -8,7 +8,8 @@ import { documentedUnsupported } from "./unsupported-params.mjs";
 import { isObject, protocolError, sseData, transformSse } from "./wire.mjs";
 import { bypassReason, BODY_LIMIT } from "../integrations/sillytavern/shared.js";
 import { isGemini4Argon, gemini4OutputLimit, gemini4ThinkingLevel, gemini4ToolMetadata } from "./gemini4.mjs";
-import { createTucaoStop } from "./tucao-stop.mjs";
+import { createTagStop } from "./tag-stop.mjs";
+import { validateTagStopRule } from "./tag-stop-rule.mjs";
 
 export const requestError = code => Object.assign(new Error(code), { status: 400, code });
 
@@ -80,7 +81,9 @@ export function prepareSillyTavernRequest(request, adapters) {
   // Streamed arguments are read only for the transport call alone; client tools arrive whole.
   if (upstreamStream && !clientTools) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   if (body.vertex_tucao_stop != null && typeof body.vertex_tucao_stop !== "boolean") throw requestError("invalid_tucao_stop");
-  return { body: native, toolName: prepared.toolName, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit, tucaoStop: body.vertex_tucao_stop === true };
+  const tagStop = body.vertex_tag_stop == null ? null : validateTagStopRule(body.vertex_tag_stop);
+  return { body: native, toolName: prepared.toolName, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit,
+    tucaoStop: tagStop !== null || body.vertex_tucao_stop === true, stopTag: tagStop?.tag, stopCount: tagStop?.count };
 }
 
 const finishReasons = { stop: "STOP", length: "MAX_TOKENS", content_filter: "SAFETY", tool_calls: "STOP" };
@@ -166,7 +169,7 @@ export async function restoreSillyTavernResponse(upstream, prepared) {
     await upstream.body?.cancel();
     throw Object.assign(new Error("vertex_upstream_http_error"), { status: upstream.status, code: "vertex_upstream_http_error" });
   }
-  const stop = prepared.toolName && prepared.tucaoStop ? createTucaoStop(prepared.toolName) : null;
+  const stop = prepared.toolName && prepared.tucaoStop ? createTagStop(prepared.toolName, prepared.stopTag, prepared.stopCount) : null;
   if (prepared.upstreamStream) {
     if (!upstream.body) throw protocolError("empty_upstream_stream");
     if (stop) upstream = stop.stream(upstream);

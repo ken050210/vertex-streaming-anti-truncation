@@ -104,15 +104,15 @@ test("plain streaming fallback clips the second tag; anti-truncation-off respons
   assert.equal(off.choices[0].message.content, body + noise);
 });
 
-test("the HTTP plugin ends cleanly at the second tag without waiting for upstream finish", { timeout: 5000 }, async t => {
-  const body = "<tucao>开场</tucao>正文<tucao>结尾" + tag;
-  let cancelled = false;
+test("the HTTP plugin validates custom rules and stops after one complete A pair without waiting for upstream finish", { timeout: 5000 }, async t => {
+  const body = "<A>正文</A>";
+  let cancelled = false, calls = 0;
   const handler = createGenerateHandler({
     getPromptNames: () => ({}),
     convertGooglePrompt: messages => ({ contents: messages.map(x => ({ role: "user", parts: [{ text: x.content }] })) }),
     safetySettings: [], SECRET_KEYS: { VERTEXAI: "fixture" }, readSecret: () => "fixture-key",
   }, { fetchImpl: async () => new Response(new ReadableStream({
-    start(controller) { controller.enqueue(new TextEncoder().encode(start() + part(body + noise))); },
+    start(controller) { calls++; controller.enqueue(new TextEncoder().encode(start() + part(body + noise))); },
     cancel() { cancelled = true; },
   })) });
   const server = http.createServer(async (req, res) => {
@@ -123,16 +123,33 @@ test("the HTTP plugin ends cleanly at the second tag without waiting for upstrea
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   t.after(() => { server.closeAllConnections(); server.close(); });
-  const response = await fetch(`http://127.0.0.1:${server.address().port}`, { method: "POST", body: JSON.stringify({
+  const post = rule => fetch(`http://127.0.0.1:${server.address().port}`, { method: "POST", body: JSON.stringify({
     chat_completion_source: "vertexai", model: "gemini-4-argon", stream: true, vertex_anti_truncation: "streaming",
     vertexai_auth_mode: "express", vertexai_region: "global", vertexai_express_project_id: "fixture-project", max_tokens: 2048,
-    messages: [{ role: "user", content: "合成输入" }], vertex_tucao_stop: true,
+    messages: [{ role: "user", content: "合成输入" }], vertex_tag_stop: rule,
   }) });
+  const invalid = await post({ tag: "A", count: 0 });
+  assert.equal(invalid.status, 400);
+  assert.equal(calls, 0);
+  const response = await post({ tag: "A", count: 1 });
   assert.equal(response.status, 200);
   const output = await response.text();
   assert.equal(text(output), body);
   assert.ok(!output.includes('"error"'));
   assert.equal(output.split("data: [DONE]").length - 1, 1);
   assert.equal(cancelled, true);
+  const repeated = await post({ tag: "A", count: 1 });
+  assert.equal(text(await repeated.text()), body);
+  assert.equal(calls, 2);
   assert.equal(compareVersions("0.7.0", "0.6.3"), 1);
+});
+
+test("buffered SillyTavern replies honor a custom tag and count", async () => {
+  const body = "<A>正文</A>";
+  const raw = frame([{ functionCall: { name, args: { content: body + noise } } }]);
+  const result = await (await restoreSillyTavernResponse(Response.json(raw), {
+    ...prepared, stopTag: "A", stopCount: 1, stream: false, upstreamStream: false,
+  })).json();
+  assert.equal(result.choices[0].message.content, body);
+  assert.equal(result.vertexStopAfter, "</A>");
 });

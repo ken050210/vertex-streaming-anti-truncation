@@ -222,7 +222,7 @@ function draft() {
     accountRotationEnabled: $("account-rotation").checked, accounts: accountDraft(),
     accountTimeoutMs: Number($("account-timeout").value) * 1000, accountFailureThreshold: Number($("account-failures").value), accountCooldownMs: Number($("account-cooldown").value) * 1000,
     unicodeInput: $("unicode-input").checked, imageInput: $("image-input").value, hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
-    geminiLongDecode: $("long-decode").checked, tucaoStop: $("tucao-stop").checked, geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
+    geminiLongDecode: $("long-decode").checked, tucaoStop: $("tucao-stop").checked, stopTag: $("stop-tag").value.trim(), stopCount: Number($("stop-count").value), geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
     geminiPromptRetryMatches: retryMatches() };
 }
 function accountDraft() {
@@ -353,7 +353,9 @@ function fillConfig(c = state.config.settings) {
   $("hide-unavailable").checked = c.hideUnavailableModels !== false;
   $("prefill-to-user").checked = c.geminiPrefillToUser !== false;
   $("long-decode").checked = c.geminiLongDecode === true;
-  $("tucao-stop").checked = c.tucaoStop === true;
+  $("tucao-stop").checked = c.tucaoStop ?? true;
+  $("stop-tag").value = c.stopTag ?? "tucao";
+  $("stop-count").value = c.stopCount ?? 2;
   $("prompt-retry-enabled").checked = c.geminiPromptRetryEnabled === true;
   $("prompt-retry-text").value = c.geminiPromptRetryText || "";
   $("prompt-retry-matches").value = (c.geminiPromptRetryMatches || []).join("\n");

@@ -1,7 +1,8 @@
 import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
+import { validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.7.0";
+export const PLUGIN_VERSION = "0.8.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -10,7 +11,8 @@ export const MIN_SERVER_VERSION = "0.3.1";
 // server without "client-tools" rejects client tools and tool history; those keep ST's own route.
 export const TOOLS_FEATURE = "client-tools";
 export const TUCAO_FEATURE = "stop-after-second-tucao";
-export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE];
+export const TAG_STOP_FEATURE = "stop-after-tag-pairs";
+export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE];
 export const MODES = ["off", "buffered", "streaming"];
 export const GENERATE_PATH = "/api/backends/chat-completions/generate";
 export const PLUGIN_PATH = `/api/plugins/${PLUGIN_ID}`;
@@ -78,7 +80,7 @@ export function bypassReason(body, mode) {
 
 // ST 1.19 exposes a settings event, but not a generation-URL override. Intercept
 // only its same-origin Vertex POST; preserve the original fetch for everything else.
-export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getTucaoStop = () => false, getUserFloor = () => "", ensureBackend = async () => true, onStatus = () => {}, direct }) {
+export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getTagStop = () => null, getUserFloor = () => "", ensureBackend = async () => true, onStatus = () => {}, direct }) {
   return async function vertexFetch(input, init) {
     let url;
     try { url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, origin); }
@@ -107,10 +109,15 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     }
     let reason = bypassReason(body, imageEnabled && mode === "off" ? "buffered" : mode);
     if (!reason && !direct && usesTools(body) && !await ensureBackend(TOOLS_FEATURE)) reason = "server-tools";
-    const tucaoStop = !direct && getTucaoStop() === true && mode !== "off";
+    const tagStop = !direct && mode !== "off" ? getTagStop() : null;
     delete body.vertex_tucao_stop;
-    if (!reason && tucaoStop && !await ensureBackend(TUCAO_FEATURE)) {
-      onStatus({ error: "tucao_stop_not_supported" }); throw new Error("tucao_stop_not_supported");
+    delete body.vertex_tag_stop;
+    if (!reason && tagStop) {
+      try { validateTagStopRule(tagStop); }
+      catch (error) { onStatus({ error: error.code }); throw error; }
+      if (!await ensureBackend(TAG_STOP_FEATURE)) {
+        onStatus({ error: "tag_stop_not_supported" }); throw new Error("tag_stop_not_supported");
+      }
     }
     if (imageEnabled) {
       if (!["current-turn", "all"].includes(imageMode) || reason) { onStatus({ error: "image_input_requires_supported_request", bypass: reason }); throw new Error("image_input_requires_supported_request"); }
@@ -125,7 +132,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
       reason = prepared.bypass ?? null;
     }
     let payload = reason ? null : JSON.stringify(prepared?.body ??
-      { ...body, vertex_anti_truncation: mode, ...(tucaoStop ? { vertex_tucao_stop: true } : {}), ...(getLongDecode() === true ? { vertex_long_decode: true } : {}) });
+      { ...body, vertex_anti_truncation: mode, ...(tagStop ? { vertex_tag_stop: tagStop } : {}), ...(getLongDecode() === true ? { vertex_long_decode: true } : {}) });
     // The plugin rejects bodies over its limit; keep ST's own route for plain
     // anti-truncation. Image input never falls back to plaintext.
     if (payload && !imageEnabled && new TextEncoder().encode(payload).length > BODY_LIMIT) reason = "too-large";

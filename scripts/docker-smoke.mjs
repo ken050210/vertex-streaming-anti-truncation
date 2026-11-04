@@ -74,8 +74,12 @@ try {
   const token = /#setup=([a-f0-9]+)/.exec(await compose("logs", "--no-color"))?.[1];
   assert.ok(token, "fresh volume supplies a bootstrap link");
   await login(token);
+  const defaults = (await (await api("/api/config")).json()).settings;
+  assert.equal(defaults.tucaoStop, true);
+  assert.equal(defaults.stopTag, "tucao");
+  assert.equal(defaults.stopCount, 2);
   const response = await api("/api/config", { revision: "new", settings: {
-    authMode: "express", apiKey: "docker-fixture-api-key", gatewayKey, port: 4781, imageInput: "current-turn",
+    authMode: "express", apiKey: "docker-fixture-api-key", gatewayKey, port: 4781, imageInput: "current-turn", stopTag: "A", stopCount: 1,
   } });
   assert.equal(response.status, 200);
   const saved = await response.json(); assert.equal(saved.status.running, true);
@@ -88,6 +92,11 @@ try {
   const rendering = `import assert from 'node:assert/strict';
     import { stat, access } from 'node:fs/promises';
     import { prepareImageInput } from './src/image-input.mjs';
+    import { createTagStop } from './src/tag-stop.mjs';
+    const stop = createTagStop('router_emit', 'A', 1);
+    assert.equal(stop.clip('</A><A>正文</', 'plain'), '</A><A>正文</');
+    assert.equal(stop.clip('A>不要输出', 'plain'), 'A>');
+    assert.equal(stop.marker(), '</A>');
     assert.notEqual(process.getuid(), 0);
     assert.equal((await stat('/data/settings.json')).mode & 0o777, 0o600);
     for (const path of ['/app/.env', '/app/.git', '/app/runtime']) await assert.rejects(access(path));
@@ -109,6 +118,9 @@ try {
   await login(gatewayKey);
   const restored = await (await api("/api/config")).json();
   assert.equal(restored.revision, saved.revision); assert.equal(restored.settings.imageInput, "current-turn");
+  assert.equal(restored.settings.tucaoStop, true);
+  assert.equal(restored.settings.stopTag, "A");
+  assert.equal(restored.settings.stopCount, 1);
   assert.equal((await (await api("/api/status")).json()).running, true);
   // Exercise the access-mode transitions in the shipped image, including keyless autostart.
   const weak = { revision: restored.revision, settings: { gatewayKeyMode: "weak", gatewayKey: "123456" } };
@@ -145,7 +157,7 @@ try {
   }
   await compose("stop");
   assert.equal(await docker(["inspect", "--format", "{{.State.ExitCode}}", current]), "0");
-  console.log("Docker smoke passed: setup, strict/weak/keyless auth, mapped ports, persistence, health and graceful shutdown; no inference");
+  console.log("Docker smoke passed: custom tag-stop defaults/persistence/stream splits, setup, strict/weak/keyless auth, mapped ports, persistence, health and graceful shutdown; no inference");
 } catch (error) {
   console.error(await compose("ps", "-a"));
   console.error((await compose("logs", "--no-color", "--tail", "20")).replace(/#setup=[a-f0-9]+/g, "#setup=[redacted]"));

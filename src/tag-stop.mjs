@@ -1,24 +1,34 @@
 import { createSseParser, sseData } from "./wire.mjs";
+import { DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT } from "./tag-stop-rule.mjs";
 
-export const TUCAO_STOP = "</tucao>";
-
-// Treat the second complete closing tag in this reply's visible text as a local
-// stop. The preceding tag prefix can span any number of events.
+// Count complete outermost tag pairs in this reply's visible text. Exact opening
+// and closing tags can span any number of events; unmatched closings do not count.
 // Inspect native string values before their unfinished tool JSON is reconstructed.
-export function createTucaoStop(toolName) {
-  let tail = "", channel, currentTool, matched = false, closingTags = 0;
+export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_STOP_COUNT) {
+  const opening = `<${tag}>`, closing = `</${tag}>`;
+  let tail = "", channel, currentTool, matched = false, depth = 0, pairs = 0;
   const clip = (text, kind) => {
+    if (matched) return "";
     if (!text) return text;
     channel ??= kind;
     if (channel !== kind) return text;
     const joined = tail + text;
-    for (let index = joined.indexOf(TUCAO_STOP); index >= 0; index = joined.indexOf(TUCAO_STOP, index + TUCAO_STOP.length)) {
-      if (++closingTags === 2) {
+    let cursor = 0;
+    for (;;) {
+      const start = joined.indexOf(opening, cursor), end = joined.indexOf(closing, cursor);
+      if (start < 0 && end < 0) break;
+      if (start >= 0 && (end < 0 || start < end)) {
+        depth++;
+        cursor = start + opening.length;
+        continue;
+      }
+      cursor = end + closing.length;
+      if (depth > 0 && --depth === 0 && ++pairs === count) {
         matched = true;
-        return text.slice(0, index + TUCAO_STOP.length - tail.length);
+        return text.slice(0, cursor - tail.length);
       }
     }
-    tail = joined.slice(-(TUCAO_STOP.length - 1));
+    tail = joined.slice(cursor).slice(-(closing.length - 1));
     return text;
   };
   const process = frame => {
@@ -61,7 +71,7 @@ export function createTucaoStop(toolName) {
   return {
     clip,
     process,
-    marker: () => matched ? TUCAO_STOP : undefined,
+    marker: () => matched ? closing : undefined,
     stream(response) {
       const encoder = new TextEncoder();
       let controller;

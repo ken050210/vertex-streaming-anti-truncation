@@ -103,7 +103,12 @@
                 <label class="field">图片输入（实验）<select id="image-input" aria-describedby="image-input-help"><option value="off">关闭</option><option value="current-turn">当前轮转图</option><option value="all">全部会话转图</option></select></label><p id="image-input-help" class="hint">与 Unicode 互斥。文字转图片（无损 WebP）会增加用量，图片会触发抗截断缓冲回退。超限或不支持的字符会报错。</p>
                 <label class="toggle-row"><span>Unicode 输入转码（所有模型）<small>独立于抗截断，仅编码最新真实用户楼层的匹配文本。客户端须传递楼层原文；默认关闭，可能增加 token 用量。</small></span><input id="unicode-input" type="checkbox"></label>
                 <label class="toggle-row"><span>Gemini 3.7 / 3.8 Flash、4 Argon 预填充转为 USER<small>将末尾纯文本 assistant 消息改为 user，保留原文；工具和思考历史保持原样。转换不保证模型会接着预填充续写。</small></span><input id="prefill-to-user" type="checkbox" checked></label>
-                <label class="toggle-row"><span>第二段 tucao 结束后截停<small>默认关闭。仅用于抗截断回复；保留第二个完整 &lt;/tucao&gt;，丢弃其后内容。流式取消上游读取，非流式收到完整回复后裁剪；少于两个标签不截停。</small></span><input id="tucao-stop" type="checkbox"></label>
+                <label class="toggle-row"><span>自定义标签截停<small>默认开启，完整 &lt;tucao&gt;…&lt;/tucao&gt; 出现 2 次后停止。保留结束标签，丢弃后续所有内容（包括其后的 MVU 更新块）。仅用于抗截断回复。</small></span><input id="tucao-stop" type="checkbox" checked></label>
+                <div class="form-grid">
+                  <label class="field">截停标签名（不含尖括号）<input id="stop-tag" value="tucao" maxlength="64" placeholder="tucao 或 A" aria-describedby="tag-stop-help"></label>
+                  <label class="field">完整出现次数<input id="stop-count" type="number" min="1" step="1" value="2" aria-describedby="tag-stop-help"></label>
+                </div>
+                <p id="tag-stop-help" class="hint">例如 A + 1 次，在完整 &lt;A&gt;…&lt;/A&gt; 后停止。精确区分大小写，不匹配带属性的标签；每次请求重新计数，思考和业务工具参数不计入。流式取消上游读取，非流式收到完整回复后裁剪。</p>
                 <label class="toggle-row"><span>Gemini 4 Argon 超长回复自动续写（long decode，实验）<small>关闭时：输出额度超过单次上限（流式 65,536、非流式 32,768 token，含思考）会按单次上限发送，不再报错；回复真写满就停止并标记为长度截断，非流式抗截断写满时可能拿不到正文。自定义上游一律按 32,768 发送。开启后：直连 Google 时改用 v1beta1 原生接口，写满后自动续写并拼成一条回复，最多写到客户端设置的额度（不超过 1,048,576）。只有真写超单次上限才会追加请求；每续写一段都重发完整上下文，费用和等待时间随之增加，整次请求仍受上游超时限制。与抗截断工具传输及 Express、Flex、Priority 的配合尚未用真实超长输出验证，可能中途失败。自定义上游开启后额度原样转发，由上游决定。</small></span><input id="long-decode" type="checkbox"></label>
                 <label class="toggle-row"><span>提示词提交失败后重试一次<small>匹配下方列出的上游错误（默认 “The prompt could not be submitted”）。仅在输出开始前重试，使用相同模型与档位。</small></span><input id="prompt-retry-enabled" type="checkbox" aria-describedby="retry-text-help retry-text-error"></label>
                 <div class="field retry-text-field"><label for="prompt-retry-text">重试时插入的 USER 文本</label><textarea id="prompt-retry-text" rows="8" spellcheck="false" aria-describedby="retry-text-help retry-text-count retry-text-error" placeholder="填写你准备的文本，建议约 7000 tokens。不会自动补齐、重复或截断。"></textarea>

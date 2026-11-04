@@ -7,10 +7,10 @@ import { createSettingsStore } from "../src/settings-store.mjs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFetchInterceptor, GENERATE_PATH, TUCAO_FEATURE } from "../integrations/sillytavern/shared.js";
+import { createFetchInterceptor, GENERATE_PATH, TAG_STOP_FEATURE } from "../integrations/sillytavern/shared.js";
 import { sseData } from "../src/wire.mjs";
 import { wrapAntiTruncationStream } from "../src/anti-truncation.mjs";
-import { createTucaoStop } from "../src/tucao-stop.mjs";
+import { createTagStop } from "../src/tag-stop.mjs";
 
 const name = "router_emit", tag = "</tucao>";
 const first = "<tucao>开场" + tag, body = first + "正文😀<tucao>结束" + tag, noise = "!} unwanted tail";
@@ -91,7 +91,7 @@ test("compatible cutoff decodes JSON escapes and leaves thoughts, real tools, no
   const normal = await fixture(t, false, () => Response.json({ choices: [{ index: 0, message: { role: "assistant", content: body + noise }, finish_reason: "stop" }] }),
     { models: [{ id: "fixture", upstreamModel: "gemini-4-argon", mode: "normal" }] });
   assert.equal((await (await normal.post({ stream: false })).json()).choices[0].message.content, body + noise);
-  const unfinished = wrapAntiTruncationStream(new Response(compatibleStart + compatiblePart('{"content":' + JSON.stringify(first).slice(0, -1))), name, () => {}, [], createTucaoStop(name));
+  const unfinished = wrapAntiTruncationStream(new Response(compatibleStart + compatiblePart('{"content":' + JSON.stringify(first).slice(0, -1))), name, () => {}, [], createTagStop(name));
   await assert.rejects(unfinished.text(), /anti_truncation_stream_interrupted/);
 });
 
@@ -113,34 +113,67 @@ test("a native local stop cancels long-decode before another inference hop", asy
   }
 });
 
-test("the toggle defaults off, validates boolean input and persists through the settings store", async t => {
-  assert.equal((await loadConfig(env)).tucaoStop, false);
+test("tag stop defaults on, preserves legacy opt-outs and persists custom rules through the settings store", async t => {
+  const defaults = await loadConfig(env);
+  assert.equal(defaults.tucaoStop, true);
+  assert.equal(defaults.stopTag, "tucao");
+  assert.equal(defaults.stopCount, 2);
   assert.equal((await loadConfig({ ...env, TUCAO_STOP: "true" })).tucaoStop, true);
+  assert.equal((await loadConfig({ ...env, TUCAO_STOP: "false" })).tucaoStop, false);
+  assert.equal((await loadConfig({ ...env, TUCAO_STOP: "true", TAG_STOP: "false" })).tucaoStop, false);
+  const custom = await loadConfig({ ...env, TAG_STOP: "true", STOP_TAG: "A", STOP_COUNT: "1" });
+  assert.equal(custom.stopTag, "A");
+  assert.equal(custom.stopCount, 1);
   await assert.rejects(loadConfig({ ...env, TUCAO_STOP: "yes" }), /TUCAO_STOP/);
+  await assert.rejects(loadConfig({ ...env, STOP_COUNT: "1.5" }), /STOP_COUNT/);
+  await assert.rejects(loadConfig({ ...env, STOP_TAG: "<A>" }), { code: "invalid_tag_stop" });
   assert.throws(() => buildConfig({ tucaoStop: "true", gatewayKeyMode: "none" }), /toggle/);
   const directory = await mkdtemp(join(tmpdir(), "tucao-settings-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = createSettingsStore({ directory, env });
   const initial = await store.load();
-  const saved = await store.save({ ...initial.settings, tucaoStop: true }, initial.revision);
+  const saved = await store.save({ ...initial.settings, tucaoStop: true, stopTag: "A", stopCount: 1 }, initial.revision);
   assert.equal((await store.load()).settings.tucaoStop, true);
-  await store.save({ ...initial.settings, tucaoStop: false }, saved.revision);
-  assert.equal((await store.load()).settings.tucaoStop, false);
+  assert.equal((await store.load()).settings.stopTag, "A");
+  assert.equal((await store.load()).settings.stopCount, 1);
+  const { stopTag, stopCount, ...legacy } = initial.settings;
+  await store.save({ ...legacy, tucaoStop: false }, saved.revision);
+  const migrated = (await store.load()).settings;
+  assert.equal(migrated.tucaoStop, false);
+  assert.equal(migrated.stopTag, "tucao");
+  assert.equal(migrated.stopCount, 2);
 });
 
 test("the extension requires the cutoff feature only when opted in and sends the explicit setting", async () => {
   let enabled = false, supported = false, sent, count = 0;
   const intercept = createFetchInterceptor(async (_url, init) => { sent = JSON.parse(init.body); count++; return new Response('{}'); }, {
-    origin: "https://fixture.invalid", getMode: () => "streaming", getTucaoStop: () => enabled,
-    ensureBackend: async feature => { assert.equal(feature, TUCAO_FEATURE); return supported; },
+    origin: "https://fixture.invalid", getMode: () => "streaming", getTagStop: () => enabled ? { tag: "A", count: 1 } : null,
+    ensureBackend: async feature => { assert.equal(feature, TAG_STOP_FEATURE); return supported; },
   });
   const init = { method: "POST", body: JSON.stringify({ chat_completion_source: "vertexai", model: "gemini-4-argon", messages: [] }) };
   await intercept(GENERATE_PATH, init);
-  assert.equal(sent.vertex_tucao_stop, undefined);
+  assert.equal(sent.vertex_tag_stop, undefined);
   enabled = true;
-  await assert.rejects(intercept(GENERATE_PATH, init), /tucao_stop_not_supported/);
+  await assert.rejects(intercept(GENERATE_PATH, init), /tag_stop_not_supported/);
   assert.equal(count, 1);
   supported = true;
   await intercept(GENERATE_PATH, init);
-  assert.equal(sent.vertex_tucao_stop, true);
+  assert.deepEqual(sent.vertex_tag_stop, { tag: "A", count: 1 });
+  assert.equal(sent.vertex_tucao_stop, undefined);
+});
+
+test("gateway applies custom tag/count to native and compatible streaming and buffered replies", async t => {
+  const prefix = "</A><a>wrong case</a><A>正文</A>";
+  for (const native of [true, false]) for (const stream of [true, false]) {
+    const f = await fixture(t, native, () => stream ? new Response(native
+      ? nativeCall({ name, willContinue: true }) + [...prefix + noise].map(nativePart).join("")
+      : compatibleStart + [...JSON.stringify({ content: prefix + noise })].map(compatiblePart).join(""))
+      : Response.json(native
+        ? { candidates: [{ content: { parts: [{ functionCall: { name, args: { content: prefix + noise } } }] }, finishReason: "STOP" }] }
+        : { choices: [{ message: { role: "assistant", content: prefix + noise }, finish_reason: "stop" }] }),
+    { stopTag: "A", stopCount: 1, models: [{ id: "fixture", upstreamModel: "gemini-4-argon", mode: stream ? "streaming" : "buffered" }] });
+    const response = await f.post({ stream });
+    assert.equal(response.status, 200);
+    assert.equal(stream ? visible(await response.text()) : (await response.json()).choices[0].message.content, prefix);
+  }
 });

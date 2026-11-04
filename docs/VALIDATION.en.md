@@ -2,6 +2,12 @@
 
 [中文](VALIDATION.md) | English
 
+## Gateway 0.15.0 / SillyTavern 0.8.0 — Custom tag stop (2026-11-04)
+
+All 275 offline tests pass, covering custom A / 1, tucao / 2, higher counts, split tags, complete pairs, unmatched closings, same-name nesting, case sensitivity, native/compatible upstreams, streaming/buffered replies, per-request resets, validation, legacy opt-outs and package contents. A clean staged-source snapshot passed syntax and sensitive-data checks for 125 release files. Isolated Docker acceptance passed: enabled tucao / 2 defaults, A / 1 settings persistence across container recreation, split-tag pairing in the container, service-name routing, non-root execution, CJK rendering, health checks and graceful shutdown.
+
+An isolated console browser check confirmed the enabled tucao / 2 default and saving/reloading A / 1. The SillyTavern package was regenerated. These are offline and isolated-environment results; no real model was called and preset-specific generation or MVU writeback is not covered.
+
 ## Gateway 0.14.0 / SillyTavern 0.7.0 — Optional second-tucao stop (2026-11-04)
 
 271 offline tests passed, covering native and compatible upstreams, streaming and buffered replies, split tags, same-chunk trailing noise, unfinished tool arguments, continuation after the first tag, cutoff after the second, upstream cancellation and no further long-decode hop. The switch defaults off and survives settings save/reload. Isolated Docker acceptance passed. The package installed into a synthetic SillyTavern 1.19.0 directory with dependencies, configuration backup and 49 matching installed-file hashes. Browser validation confirmed default-off, enable/save and persistence after reload.

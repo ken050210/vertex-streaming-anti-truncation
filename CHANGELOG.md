@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.15.0 / SillyTavern 0.8.0 — Custom tag stop
+
+**Custom tag stop**: enabled by default with tag name `tucao` and count `2`. Edit the tag name and count in the gateway console or SillyTavern Vertex panel; for example, `A` + `1` stops after a complete `<A>…</A>` pair. CLI: `TAG_STOP=true`, `STOP_TAG=tucao`, `STOP_COUNT=2`; set `TAG_STOP=false` to disable. Legacy `TUCAO_STOP` remains a toggle alias, and existing explicit opt-outs stay off. Matching is exact, case-sensitive, and requires tags without attributes. Unmatched closing tags do not count; same-name nesting counts as one outermost pair. Only anti-truncation replies are affected. Keep the matched closing tag and discard everything after it, **including any later MVU update block**. Counting resets per request, including Continue, and excludes history, thoughts and real-tool arguments. Replies below the count, normal profiles and bypassed requests are unchanged. Tags may span streaming chunks; streaming cancels upstream reading, while non-streaming clips after the full reply arrives. No final usage is fabricated and incurred charges remain. Update both SillyTavern components; TauriTavern does not offer this feature.
+
 ## Gateway 0.14.0 / SillyTavern 0.7.0 — Optional second-tucao stop (2026-11-04)
 
 Optional **stop after the second tucao section**: off by default. Enable it in the gateway console (`TUCAO_STOP=true` for CLI), or in the SillyTavern Vertex panel. When anti-truncation is active, keep the second complete, case-sensitive `</tucao>` and discard what follows; text after the first tag continues normally. Tags may span streaming chunks. Streaming cancels upstream reading; non-streaming clips after the full reply arrives. Thoughts and real-tool arguments do not count. Fewer than two tags, normal profiles and bypassed requests are unchanged. Counting starts anew for each request, including Continue; history is excluded. Use only for presets with two tucao sections per reply. A local stop does not fabricate final token usage or reverse upstream charges. Update both SillyTavern components; this switch is not available in TauriTavern.
