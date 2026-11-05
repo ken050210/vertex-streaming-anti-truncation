@@ -2,7 +2,9 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
-## Gateway 0.16.0 / SillyTavern 0.9.0 — Streaming anti-truncation with client tools (2026-11-05)
+## Gateway 0.16.1 / SillyTavern 0.9.1 — Streaming anti-truncation with client tools (2026-11-05)
+
+The 0.16.1 / 0.9.1 patch isolates the browser-metadata regression test from Node 22 HTTP globals; runtime behavior is unchanged from the initial 0.16.0 / 0.9.0 tags.
 
 - Native argument streaming carries text and client calls together: text is restored progressively, while complete client calls retain thought signatures, Gemini 4 call IDs and tool-result linkage. Repeated calls to the same tool, nested objects, arrays and scalar arguments are supported; unfinished calls are never delivered for execution.
 - Translatable image, tool and tool-history requests can use the gateway's native argument stream. SillyTavern and TauriTavern also support streaming text beside client tools. TT retains its own media/history conversion and requires a version that replays native tool history.

@@ -2,7 +2,7 @@
 
 [中文](VALIDATION.md) | English
 
-## Gateway 0.16.0 / SillyTavern 0.9.0 — Multi-tool argument streaming (2026-11-05)
+## Gateway 0.16.1 / SillyTavern 0.9.1 — Multi-tool argument streaming (2026-11-05)
 
 All 284 offline tests passed. Release checks use a clean staging directory containing tracked source and the two new files, excluding existing browser traces that trigger the private-path check in the working directory. All 127 source files passed syntax and sensitive-data checks, and the SillyTavern installer directories packaged successfully.
 

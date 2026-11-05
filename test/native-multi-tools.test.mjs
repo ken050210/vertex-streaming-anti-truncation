@@ -9,6 +9,7 @@ import { prepareSillyTavernRequest, restoreSillyTavernResponse } from "../src/si
 import { createGatewayServer } from "../src/gateway.mjs";
 import { buildConfig, DEFAULT_SETTINGS } from "../src/config.mjs";
 import { sseData } from "../src/wire.mjs";
+import { encodeGemini4ToolId, gemini4ToolMetadata } from "../src/gemini4.mjs";
 
 const tool = { type: "function", function: { name: "lookup", parameters: { type: "object", properties: {} } } };
 const tools = [tool];
@@ -133,23 +134,20 @@ test("TT buffered responses keep tools, and the next request preserves native hi
   assert.equal(JSON.parse(next.body.custom_include_body).toolConfig.functionCallingConfig.streamFunctionCallArguments, true);
 });
 
-test("TT Argon tool metadata works in a WebView without Buffer or process", async () => {
-  const prepared = prepareTauriTavernRequest(body, "streaming");
-  const source = new Response(realStart() + realEnd() + finish());
+test("Argon tool metadata round-trips without Buffer or process", () => {
   const originalBuffer = globalThis.Buffer, originalProcess = globalThis.process;
   let result;
   try {
     globalThis.Buffer = undefined;
     globalThis.process = undefined;
-    const reader = (await restoreTauriTavernResponse(source, prepared)).body.getReader();
-    const decoder = new TextDecoder();
-    result = "";
-    for (let read = await reader.read(); !read.done; read = await reader.read()) result += decoder.decode(read.value);
+    // Node 22's Response itself needs Buffer. Exercise the browser-safe codec
+    // synchronously here; the tests above cover its integration with TT streams.
+    result = gemini4ToolMetadata(encodeGemini4ToolId({ functionCall: { id: "调用-1" }, thoughtSignature: "签名😀" }));
   } finally {
     globalThis.Buffer = originalBuffer;
     globalThis.process = originalProcess;
   }
-  assert.deepEqual(nativeParts(result).filter(part => part.functionCall), [realPart]);
+  assert.deepEqual(result, { id: "调用-1", signature: "签名😀" });
 });
 
 test("gateway native streaming keeps images and tool results through an aliased Argon model", async t => {
