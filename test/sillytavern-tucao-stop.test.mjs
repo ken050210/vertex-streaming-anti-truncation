@@ -64,10 +64,12 @@ test("wire bytes and tag characters may all arrive separately, while ordinary te
 
 test("thoughts and real-tool arguments do not trigger the visible reply boundary", async () => {
   const raw = sseData(frame([{ text: "思考里的" + tag + tag, thought: true }]))
-    + call({ name: "lookup", args: { content: "查询里的" + tag + tag } })
+    + call({ name: "lookup", partialArgs: [{ jsonPath: "$.content", stringValue: "查询里的" + tag, willContinue: true }], willContinue: true })
+    + call({ partialArgs: [{ jsonPath: "$.content", stringValue: tag }] })
     + call({ name, args: { content: "正常正文，只有一个结束标签" + tag } })
     + sseData({ candidates: [{ finishReason: "STOP" }] });
-  const output = await (await restoreSillyTavernResponse(new Response(raw), { ...prepared, clientTools: true })).text();
+  const output = await (await restoreSillyTavernResponse(new Response(raw), { ...prepared, clientTools: true,
+    tools: [{ type: "function", function: { name: "lookup" } }] })).text();
   assert.equal(text(output), "正常正文，只有一个结束标签" + tag);
   assert.equal(events(output).some(x => x.vertexStopAfter), false);
   assert.ok(output.includes('"name":"lookup"'));

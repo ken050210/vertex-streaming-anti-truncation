@@ -5,7 +5,7 @@ import { guardCompletionStream } from "./completion-integrity.mjs";
 import { capGemini4Output, outputLimitHeaders } from "./gemini4.mjs";
 import { completedSillyTavernResponse, toSillyTavernStream } from "./sillytavern.mjs";
 import { createSseParser, isObject, sseData, transformSse } from "./wire.mjs";
-import { BODY_LIMIT, usesTools } from "../integrations/sillytavern/shared.js";
+import { BODY_LIMIT } from "../integrations/sillytavern/shared.js";
 
 // TauriTavern replaces SillyTavern's Node server with a Rust backend, so no
 // server plugin can run there. The UI extension does the whole job in the
@@ -26,9 +26,6 @@ function includedBody(value) {
 }
 
 export function prepareTauriTavernRequest(body, mode) {
-  // How TauriTavern's own backend converts tool history and forwards real calls here
-  // has not been checked, so tool requests keep its plain route.
-  if (usesTools(body)) return { bypass: "tauri-tools" };
   const included = includedBody(body.custom_include_body);
   if (!included) return { bypass: "additional-parameters" };
   // The upstream request is always streamGenerateContent here, and TauriTavern's backend
@@ -37,13 +34,13 @@ export function prepareTauriTavernRequest(body, mode) {
   body = payload;
   const continuation = body.type === "continue";
   const upstreamStream = mode === "streaming" && body.stream === true;
-  const prepared = prepareAntiTruncation({ messages: body.messages }, true, false, { continuation });
+  const prepared = prepareAntiTruncation({ messages: body.messages, tools: body.tools, tool_choice: body.tool_choice }, true, false, { continuation });
   const native = nativeRequestBody({ ...prepared.payload, messages: [] });
   if (upstreamStream) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   return {
     body: { ...body, messages: prepared.payload.messages, stream: true,
       custom_include_body: JSON.stringify({ ...included, tools: native.tools, toolConfig: native.toolConfig }) },
-    toolName: prepared.toolName, model: body.model, stream: body.stream === true, upstreamStream, continuation, outputLimit,
+    toolName: prepared.toolName, tools: prepared.payload.tools, model: body.model, stream: body.stream === true, upstreamStream, continuation, outputLimit,
   };
 }
 
@@ -77,6 +74,8 @@ async function collectCompletion(response, model) {
     for (const { delta, finish_reason, native_finish_reason } of chunk.choices ?? []) {
       if (delta?.content) message.content += delta.content;
       if (delta?.reasoning_content) message.reasoning_content = (message.reasoning_content ?? "") + delta.reasoning_content;
+      // The native adapter emits client calls only after all arguments arrive.
+      for (const { index, ...call } of delta?.tool_calls ?? []) (message.tool_calls ??= []).push(call);
       if (finish_reason != null) Object.assign(choice, { finish_reason, native_finish_reason });
     }
     if (chunk.usage) completion.usage = chunk.usage;
@@ -116,10 +115,10 @@ export async function restoreTauriTavernResponse(response, prepared, signal) {
   if (!response.ok || !response.body) return response;
   let usageMetadata;
   const restored = guardCompletionStream(wrapAntiTruncationStream(wrapNativeTextStream(endHostError(response), prepared.toolName,
-    prepared.model, usage => { usageMetadata = usage; }), prepared.toolName), () => {}, null, BODY_LIMIT);
+    prepared.model, usage => { usageMetadata = usage; }, true, prepared.tools), prepared.toolName, () => {}, prepared.tools), () => {}, null, BODY_LIMIT);
   const headers = { ...(prepared.continuation ? { "x-vertex-continuation": "suffix" } : {}), ...outputLimitHeaders(prepared.outputLimit) };
   if (prepared.upstreamStream) {
-    return new Response(reportStreamFailure(toSillyTavernStream(restored, () => usageMetadata).body, signal),
+    return new Response(reportStreamFailure(toSillyTavernStream(restored, () => usageMetadata, prepared.model).body, signal),
       { headers: { ...headers, "content-type": "text/event-stream; charset=utf-8" } });
   }
   let delivered;

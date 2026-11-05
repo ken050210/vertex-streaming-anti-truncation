@@ -259,13 +259,14 @@ test("ST tool history reaches ST's converter, and client tools are declared befo
     assert.deepEqual(declarations[0], { name: "lookup", description: "Look something up.",
       parametersJsonSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } });
     assert.deepEqual(declarations.map(declaration => declaration.name), ["lookup", prepared.toolName]);
-    // Real calls arrive whole: argument streaming stays off even in streaming mode.
-    assert.deepEqual(prepared.body.toolConfig, { functionCallingConfig: { mode: "ANY" } });
+    // Real calls arrive whole at ST while the transport text streams progressively.
+    assert.deepEqual(prepared.body.toolConfig, { functionCallingConfig: { mode: "ANY",
+      ...(mode === "streaming" && stream ? { streamFunctionCallArguments: true } : {}) } });
     assert.equal(prepared.upstreamStream, mode === "streaming" && stream);
     assert.equal(prepared.clientTools, true);
   }
   const none = prepareSillyTavernRequest(request({ tools: [lookupTool], tool_choice: "none" }), adapters);
-  assert.deepEqual(none.body.toolConfig.functionCallingConfig, { mode: "ANY", allowedFunctionNames: [none.toolName] });
+  assert.deepEqual(none.body.toolConfig.functionCallingConfig, { mode: "ANY", allowedFunctionNames: [none.toolName], streamFunctionCallArguments: true });
   // History without declared tools keeps the transport call's argument stream.
   const history = prepareSillyTavernRequest(request({ messages: [...body.messages, ...toolHistory] }), adapters);
   assert.equal(history.body.toolConfig.functionCallingConfig.streamFunctionCallArguments, true);

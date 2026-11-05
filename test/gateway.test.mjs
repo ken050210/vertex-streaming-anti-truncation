@@ -332,14 +332,15 @@ test("client tool calls pass through beside the restored text on compatible and 
       if (nativeOnly) {
         const names = request.json.tools[0].functionDeclarations.map(declaration => declaration.name);
         assert.equal(names[0], "get_weather");
-        assert.deepEqual(request.json.toolConfig, { functionCallingConfig: { mode: "ANY" } });
+        assert.deepEqual(request.json.toolConfig, { functionCallingConfig: { mode: "ANY",
+          ...(request.url.includes("streamGenerateContent") ? { streamFunctionCallArguments: true } : {}) } });
         const native = { candidates: [{ content: { role: "model", parts: [{ functionCall: { name: names[1], args: { content: "checking" } } },
           { functionCall: { name: "get_weather", args: { city: "Paris" } }, thoughtSignature: "sig" }] }, finishReason: "STOP" }] };
         return request.url.includes("streamGenerateContent") ? new Response(line(native)) : Response.json(native);
       }
       assert.deepEqual(request.json.tools.slice(0, 1), tools);
       assert.equal(request.json.tool_choice, "required");
-      assert.equal(request.json.parallel_tool_calls, undefined);
+      assert.equal(request.json.parallel_tool_calls, request.json.stream ? false : undefined);
       const calls = [{ id: "transport-id", type: "function", function: { name: request.json.tools[1].function.name, arguments: '{"content":"checking"}' } },
         { id: "weather-id", type: "function", function: weather }];
       if (!request.json.stream) return Response.json({ choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: calls }, finish_reason: "tool_calls" }] });
@@ -354,17 +355,18 @@ test("client tool calls pass through beside the restored text on compatible and 
     assert.deepEqual(data.choices[0].message.tool_calls, [{ id, type: "function", function: weather }]);
     assert.equal(data.choices[0].finish_reason, "tool_calls");
     assert.deepEqual(f.events.at(-1).antiTruncation, { transport: "tool-transport", restored: true, finishReason: "tool_calls", streamDone: null });
-    // The native progressive stream carries only the transport call, so client tools use the fallback.
-    const streamed = await f.post({ ...payload, tools, stream: true });
-    assert.equal(streamed.headers.get("x-anti-truncation-transport"), "tool-transport-buffered-fields");
+    // An explicit parallel-call setting still needs the compatible route.
+    const transport = nativeOnly ? "tool-transport-native-streaming" : "tool-transport-buffered-fields";
+    const streamed = await f.post({ ...payload, tools, stream: true, ...(nativeOnly ? {} : { parallel_tool_calls: false }) });
+    assert.equal(streamed.headers.get("x-anti-truncation-transport"), transport);
     const wire = await streamed.text();
     const deltas = records(wire).map(record => record.choices?.[0]).filter(Boolean);
     assert.equal(visible(wire), "checking");
     assert.deepEqual(deltas.flatMap(choice => choice.delta?.tool_calls ?? []), [{ index: 0, id, type: "function", function: weather }]);
     assert.equal(deltas.at(-1).finish_reason, "tool_calls");
     assert.equal(wire.includes("router_emit"), false);
-    assert.equal(f.requests.at(-1).json.toolConfig?.functionCallingConfig?.streamFunctionCallArguments, undefined);
-    assert.deepEqual(f.events.at(-1).antiTruncation, { transport: "tool-transport-buffered-fields", restored: true, finishReason: "tool_calls", streamDone: true });
+    assert.equal(f.requests.at(-1).json.toolConfig?.functionCallingConfig?.streamFunctionCallArguments, nativeOnly ? true : undefined);
+    assert.deepEqual(f.events.at(-1).antiTruncation, { transport, restored: true, finishReason: "tool_calls", streamDone: true });
   }
 });
 
@@ -377,7 +379,7 @@ test("a streamed client tool named like the start of the transport tool still pa
     return new Response(line({ choices: [{ index: 0, delta: { role: "assistant", tool_calls: calls.map((call, index) => ({ index, ...call })) }, finish_reason: null }] }) +
       line({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }) + "data: [DONE]\n\n");
   });
-  const wire = await (await f.post({ ...payload, tools: [{ type: "function", function: { name: "router" } }], stream: true })).text();
+  const wire = await (await f.post({ ...payload, tools: [{ type: "function", function: { name: "router" } }], stream: true, parallel_tool_calls: false })).text();
   const deltas = records(wire).map(record => record.choices?.[0]).filter(Boolean);
   assert.equal(visible(wire), "checking");
   assert.deepEqual(deltas.flatMap(choice => choice.delta?.tool_calls ?? []), [{ index: 0, id: "router-id", type: "function", function: router }]);
@@ -463,13 +465,14 @@ test("non-streaming image input keeps JSON tool transport for a streaming alias"
  assert.ok(f.requests[0].json.messages[0].content[0].image_url);
 });
 
-test("streaming image fallback restores a complete SSE response and keeps diagnostics private",async t=>{
+test("streaming image input restores native SSE and keeps diagnostics private",async t=>{
  const f=await fixture(t,req=>{
-  const name=req.json.tools[0].function.name;
-  return new Response('data: '+JSON.stringify({choices:[{index:0,delta:{tool_calls:[{index:0,id:'call_test',type:'function',function:{name,arguments:JSON.stringify({content:'OK'})}}]},finish_reason:null}]})+'\n\ndata: '+JSON.stringify({choices:[{index:0,delta:{},finish_reason:'tool_calls'}]})+'\n\ndata: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}});
+  const name=req.json.tools[0].functionDeclarations[0].name;
+  assert.equal(req.json.toolConfig.functionCallingConfig.streamFunctionCallArguments,true);
+  return new Response('data: '+JSON.stringify({candidates:[{content:{parts:[{functionCall:{name,args:{content:'OK'}}}]},finishReason:'STOP'}]})+'\n\n',{headers:{'content-type':'text/event-stream'}});
  },{imageInput:'current-turn'});
  const response=await f.post({...payload,stream:true});assert.equal(response.status,200);
- assert.equal(response.headers.get('x-anti-truncation-transport'),'tool-transport-buffered-fields');
+ assert.equal(response.headers.get('x-anti-truncation-transport'),'tool-transport-native-streaming');
  const wire=await response.text();assert.equal(visible(wire),'OK');assert.ok(wire.includes('[DONE]'));
  assert.equal(f.events[0].antiTruncation.restored,true);assert.equal(f.events[0].imageInput.pages,1);
 });

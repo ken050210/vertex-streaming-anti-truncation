@@ -71,8 +71,10 @@ export const outputLimitHeaders = limit => limit ? { "x-gemini-output-tokens-req
 // Preserve both the native function-call ID and thought signature inside the
 // opaque OpenAI tool-call ID; tool results must echo the native ID on Gemini 4.
 export function encodeGemini4ToolId(part) {
-  return "vtx4." + Buffer.from(JSON.stringify({ id: part.functionCall.id,
-    ...(part.thoughtSignature ? { signature: part.thoughtSignature } : {}) })).toString("base64url");
+  const bytes = new TextEncoder().encode(JSON.stringify({ id: part.functionCall.id,
+    ...(part.thoughtSignature ? { signature: part.thoughtSignature } : {}) }));
+  return "vtx4." + btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join(""))
+    .replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
 export function gemini4ToolMetadata(id) {
@@ -83,7 +85,8 @@ export function gemini4ToolMetadata(id) {
   };
   if (typeof id !== "string" || !id.startsWith("vtx4.")) return { id };
   try {
-    const value = JSON.parse(Buffer.from(id.slice(5), "base64url").toString("utf8"));
+    const value = JSON.parse(new TextDecoder().decode(Uint8Array.from(
+      atob(id.slice(5).replaceAll("-", "+").replaceAll("_", "/")), char => char.charCodeAt(0))));
     if (!value || typeof value.id !== "string" || !value.id || (value.signature != null && typeof value.signature !== "string")) throw new Error();
     return value;
   } catch {

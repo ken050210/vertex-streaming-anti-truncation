@@ -1,6 +1,6 @@
 import { CONTINUATION_INSTRUCTION, prepareAntiTruncation, restoreAntiTruncationCompletion, wrapAntiTruncationStream } from "./anti-truncation.mjs";
 import { SIGNATURE_ID_PREFIX, nativeRequestBody } from "./vertex-native.mjs";
-import { translateNativeCompletion, wrapNativeStream } from "./vertex-protocol.mjs";
+import { translateNativeCompletion } from "./vertex-protocol.mjs";
 import { wrapNativeTextStream } from "./vertex-text-stream.mjs";
 import { inspectCompletion, guardCompletionStream } from "./completion-integrity.mjs";
 import { completionStream } from "./completion-stream.mjs";
@@ -78,8 +78,7 @@ export function prepareSillyTavernRequest(request, adapters) {
   const upstreamStream = mode === "streaming" && body.stream === true && !(body.vertex_image_input && body.vertex_image_input !== "off");
   const outputLimit = gemini4OutputLimit(config.maxOutputTokens, body.model, { stream: upstreamStream, longDecode: body.vertex_long_decode === true });
   if (outputLimit) config.maxOutputTokens = outputLimit.applied;
-  // Streamed arguments are read only for the transport call alone; client tools arrive whole.
-  if (upstreamStream && !clientTools) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
+  if (upstreamStream) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   if (body.vertex_tucao_stop != null && typeof body.vertex_tucao_stop !== "boolean") throw requestError("invalid_tucao_stop");
   const tagStop = body.vertex_tag_stop == null ? null : validateTagStopRule(body.vertex_tag_stop);
   return { body: native, toolName: prepared.toolName, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit,
@@ -174,8 +173,8 @@ export async function restoreSillyTavernResponse(upstream, prepared) {
     if (!upstream.body) throw protocolError("empty_upstream_stream");
     if (stop) upstream = stop.stream(upstream);
     let usageMetadata;
-    const translated = prepared.clientTools ? wrapNativeStream(upstream, prepared.model)
-      : wrapNativeTextStream(upstream, prepared.toolName, prepared.model, usage => { usageMetadata = usage; });
+    const translated = wrapNativeTextStream(upstream, prepared.toolName, prepared.model,
+      usage => { usageMetadata = usage; }, true, prepared.tools);
     const restored = wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools);
     return toSillyTavernStream(guardCompletionStream(restored, () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stop?.marker());
   }

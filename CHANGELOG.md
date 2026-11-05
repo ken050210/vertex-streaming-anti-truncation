@@ -2,6 +2,12 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.16.0 / SillyTavern 0.9.0 — Streaming anti-truncation with client tools (2026-11-05)
+
+- Native argument streaming carries text and client calls together: text is restored progressively, while complete client calls retain thought signatures, Gemini 4 call IDs and tool-result linkage. Repeated calls to the same tool, nested objects, arrays and scalar arguments are supported; unfinished calls are never delivered for execution.
+- Translatable image, tool and tool-history requests can use the gateway's native argument stream. SillyTavern and TauriTavern also support streaming text beside client tools. TT retains its own media/history conversion and requires a version that replays native tool history.
+- Verified with 284 offline tests and two live Gemini 4 Argon requests through the official TT 2.4.0 Rust backend: inline image, progressive text, two executed fixture tools and result replay. WebView UI, existing character workflows and arbitrary third-party tools remain untested. Native web search and untranslatable requests retain their existing bypass rules. Progressive delivery through custom upstreams still depends on the upstream.
+
 ## Gateway 0.15.0 / SillyTavern 0.8.0 — Custom tag stop
 
 **Custom tag stop**: enabled by default with tag name `tucao` and count `2`. Edit the tag name and count in the gateway console or SillyTavern Vertex panel; for example, `A` + `1` stops after a complete `<A>…</A>` pair. CLI: `TAG_STOP=true`, `STOP_TAG=tucao`, `STOP_COUNT=2`; set `TAG_STOP=false` to disable. Legacy `TUCAO_STOP` remains a toggle alias, and existing explicit opt-outs stay off. Matching is exact, case-sensitive, and requires tags without attributes. Unmatched closing tags do not count; same-name nesting counts as one outermost pair. Only anti-truncation replies are affected. Keep the matched closing tag and discard everything after it, **including any later MVU update block**. Counting resets per request, including Continue, and excludes history, thoughts and real-tool arguments. Replies below the count, normal profiles and bypassed requests are unchanged. Tags may span streaming chunks; streaming cancels upstream reading, while non-streaming clips after the full reply arrives. No final usage is fabricated and incurred charges remain. Update both SillyTavern components; TauriTavern does not offer this feature.

@@ -9,7 +9,7 @@ const context = SillyTavern.getContext();
 const events = context.eventTypes ?? context.event_types;
 const labels = { off: "关闭（普通 Vertex）", buffered: "非流式抗截断", streaming: "流式抗截断" };
 const reasons = { "existing-tools": "旧版 functions 工具", "tool-choice": "请求指定必须调用工具", "tool-schema": "工具定义无法转为 Vertex 原生格式",
-  "server-tools": "服务端插件较旧，不支持工具调用；更新服务端插件后重启酒馆", "tauri-tools": "TauriTavern 下工具调用暂不经过抗截断",
+  "server-tools": "服务端插件较旧，不支持工具调用；更新服务端插件后重启酒馆",
   "structured-output": "结构化输出", "multiple-candidates": "多个候选回复",
   "tool-history": "旧版 function 工具历史", "web-search": "联网搜索", "image-generation": "图片生成", "reverse-proxy": "反向代理",
   model: "此模型不适用", "too-large": "请求超过 8 MiB", "additional-parameters": "Vertex 附加参数不是 JSON 对象，无法合并" };

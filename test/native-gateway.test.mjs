@@ -215,7 +215,7 @@ test("native JSON output bypasses the wrapper, real tools ride beside it; plain 
   const wire = await (await tool.post({ tools: [{ type: "function", function: { name: "real_tool", parameters: { type: "object" } } }] })).text();
   assert.match(wire, /real_tool/); assert.match(wire, /tool_calls/); assert.match(wire, /\[DONE\]/);
   assert.equal(tool.requests[0].body.tools[0].functionDeclarations.length, 2);
-  assert.deepEqual(tool.requests[0].body.toolConfig, { functionCallingConfig: { mode: "ANY" } });
+  assert.deepEqual(tool.requests[0].body.toolConfig, { functionCallingConfig: { mode: "ANY", streamFunctionCallArguments: true } });
   const plain = await fixture(t, "express", "standard", true, { antiTruncation: false });
   const plainWire = await (await plain.post({})).text();
   assert.match(plainWire, /content/); assert.match(plainWire, /\[DONE\]/);

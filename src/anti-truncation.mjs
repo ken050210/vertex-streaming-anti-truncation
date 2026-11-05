@@ -1,4 +1,4 @@
-import { supportsNativeTextStream } from "./vertex-native.mjs";
+import { supportsNativeRequest } from "./vertex-native.mjs";
 // Restoration failures describe one reply, not the connection, and keep their code.
 import { isObject, protocolError as failure, sseData, trafficType, transformSse } from "./wire.mjs";
 
@@ -39,9 +39,9 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
     if (payload.messages.some(message => message.role === "function" || message.function_call)) return skip("tool-history");
     const clientTools = Array.isArray(payload.tools) ? payload.tools : [];
     const requested = streamArguments && payload.stream === true;
-    // The native stream only carries the synthetic text call; client tools, and upstreams
-    // without Vertex's native API, use the fallback.
-    const nativeStreaming = requested && native && !clientTools.length && supportsNativeTextStream(payload);
+    // Native argument streaming carries both the text transport and client calls.
+    // Keep the compatible fallback when native translation would discard fields.
+    const nativeStreaming = requested && native && supportsNativeRequest(payload);
     // Restoration claims calls by name, and a streamed name as soon as its fragments spell the
     // synthetic one, so a client tool named router_emit or router_emit... would be swallowed.
     // Such a request takes a random name instead and only loses caching; "router_" plus hex

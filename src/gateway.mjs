@@ -346,7 +346,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
               upstream = completionStream(await readReply(upstream), includeUsage);
             } else {
               if (native && stop) upstream = stop.stream(upstream);
-              if (transport.nativeStreaming) upstream = wrapNativeTextStream(upstream, transport.toolName, route.id, usage => { audit.trafficType = usage?.trafficType; audit.usage = translateUsage(usage); }, includeUsage);
+              if (transport.nativeStreaming) upstream = wrapNativeTextStream(upstream, transport.toolName, route.upstreamModel, usage => { audit.trafficType = usage?.trafficType; audit.usage = translateUsage(usage); }, includeUsage, transport.payload.tools);
               else if (native) upstream = wrapNativeStream(upstream, route.id, usage => { audit.trafficType = usage?.traffic_type; audit.usage = usage; }, includeUsage);
               upstream = wrapAntiTruncationStream(upstream, transport.toolName, metadata => Object.assign(audit, metadata), transport.payload.tools, native ? undefined : stop);
               upstream = aliasStream(upstream, route.id, metadata => Object.assign(audit, metadata), includeUsage, () => stop?.marker());

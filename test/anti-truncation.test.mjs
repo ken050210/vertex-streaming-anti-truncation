@@ -155,17 +155,20 @@ test("experimental streaming selects native only for translatable text requests 
   assert.equal(prepareAntiTruncation({ ...request, stream: false }, true, true).nativeStreaming, false);
   const bypass = { ...request, response_format: { type: "json_object" } };
   assert.equal(prepareAntiTruncation(bypass, true, true).payload, bypass);
-  // The native stream carries only the synthetic call, so client tools and tool history fall back.
+  // Native conversion still falls back for fields it cannot preserve.
   for (const extra of [{ custom: { preserved: true } }, { extra_body: [] }, { extra_body: { google: "invalid" } },
-    { messages: [{ role: "user", name: "Name", content: "test" }] },
-    { tools: [{ type: "function", function: { name: "client_tool" } }] },
-    { tools: [{ type: "function", function: { name: "client_tool" } }], tool_choice: "none" },
-    { messages: [{ role: "assistant", tool_calls: [call("{}", "client_tool")] }, { role: "tool", tool_call_id: "call-test", content: "done" }] }]) {
+    { messages: [{ role: "user", name: "Name", content: "test" }] }, { parallel_tool_calls: false }]) {
     const fallback = { ...request, ...extra };
     const result = prepareAntiTruncation(fallback, true, true);
     assert.equal(result.nativeStreaming, false);
     assert.equal(result.reason, "tool-transport-buffered-fields");
     for (const key of Object.keys(extra).filter(k => !["messages", "tools", "tool_choice"].includes(k))) assert.equal(result.payload[key], fallback[key]);
+  }
+  for (const extra of [{ tools: [{ type: "function", function: { name: "client_tool" } }] },
+    { tools: [{ type: "function", function: { name: "client_tool" } }], tool_choice: "none" },
+    { messages: [{ role: "assistant", tool_calls: [{ id: "call-test", type: "function", function: { name: "client_tool", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "call-test", content: "done" }] }]) {
+    assert.equal(prepareAntiTruncation({ ...request, ...extra }, true, true).nativeStreaming, true);
   }
 });
 
