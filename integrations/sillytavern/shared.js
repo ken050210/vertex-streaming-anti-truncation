@@ -2,7 +2,7 @@ import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
 import { validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.9.1";
+export const PLUGIN_VERSION = "0.10.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -169,13 +169,12 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
       onStatus(typeof code === "string" && code ? { error: code, status: response.status } : { error: response.status });
     } else if (!reason && (imageEnabled || body.type === "continue" || outputLimit)) {
       // The plugin reports whether any text was converted; "no-text" was sent as plain text.
-      // stream says whether ST asked to stream, since the plugin buffers every image request.
       onStatus({ mode,
         ...(unicode ? { unicode } : {}),
         ...(outputLimit ? { outputLimit } : {}),
         ...(response.headers.get("x-vertex-continuation") === "suffix" ? { continuation: true } : {}),
         ...(imageEnabled ? { image: { mode: imageMode, reason: response.headers.get("x-image-input"),
-          pages: Number(response.headers.get("x-image-input-pages")) || 0, stream: body.stream === true } } : {}) });
+          pages: Number(response.headers.get("x-image-input-pages")) || 0, transport: response.headers.get("x-anti-truncation-transport") } } : {}) });
     }
     // Never resubmit to the original route after a failed plugin request.
     return response;

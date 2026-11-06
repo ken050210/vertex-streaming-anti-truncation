@@ -33,9 +33,9 @@ https://raw.githubusercontent.com/ken050210/vertex-streaming-anti-truncation/mai
 
 已适配 **Gemini 4 Argon**（`gemini-4-argon`）：支持三种传输版本，处理思考等级、采样参数和预填充兼容；[添加方式、Express 快速 key、自定义上游的范围，以及输出上限与可选的自动续写](docs/GEMINI4.md)。酒馆插件部分随 SillyTavern 集成 0.4.0（`sillytavern-v0.4.0`）发布；独立网关部分随网关 0.8.0 发布，支持源码和 Docker 部署。
 
-也提供 **SillyTavern 原生 Vertex 面板集成**：UI 扩展与服务端插件配套安装后，直接在 Google Vertex AI 连接面板选择关闭、非流式或流式抗截断，复用酒馆凭据，无需另开网关进程。默认关闭；[安装与验证说明](docs/SILLYTAVERN.md)。
+也提供 **SillyTavern 原生 Vertex 面板集成**：UI 扩展与服务端插件配套安装后，直接在 Google Vertex AI 连接面板选择关闭、非流式或流式抗截断，复用酒馆凭据，无需另开网关进程。0.10.0 起，开启酒馆流式输出并选择「流式抗截断」后，「图片·当前轮」和「图片·全部会话」都支持逐段接收正文。插件默认关闭。[安装与验证说明](docs/SILLYTAVERN.md)
 
-SillyTavern 需要 1.19.x，有两种装法，只选一种：想在酒馆里跟随仓库更新，用 Git 装法；想一次装好两半，用一键安装包。Git 装法：在酒馆“安装扩展”的 Git URL 输入框填入 `https://github.com/ken050210/vertex-streaming-anti-truncation`，分支留空。**首次还需在酒馆根目录执行** `node plugins.js install https://github.com/ken050210/vertex-streaming-anti-truncation` 安装配套服务端插件，再在 `plugins/vertex-streaming-anti-truncation` 目录运行 `npm ci --ignore-scripts` 安装图片输入所需的渲染依赖，启用 `enableServerPlugins` 并重启酒馆。仅安装前端无法完成抗截断传输；已有手动安装请先阅读[迁移说明](docs/SILLYTAVERN.md#更新与已有手动安装)，避免重复加载。也可以从 [Release `sillytavern-v0.9.1`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.9.1) 下载[一键安装包](docs/SILLYTAVERN.md#一键安装包)，解压后运行其中的安装程序，一次装好前后端并开启服务端插件，不需要 Git。压缩包只在发版时更新；发版之后 `main` 上的新改动，可以用四条命令[从源码生成安装包并安装](docs/AGENT-INSTALL.md#sillytavern)。
+SillyTavern 需要 1.19.x，有两种装法，只选一种：想在酒馆里跟随仓库更新，用 Git 装法；想一次装好两半，用一键安装包。Git 装法：在酒馆“安装扩展”的 Git URL 输入框填入 `https://github.com/ken050210/vertex-streaming-anti-truncation`，分支留空。**首次还需在酒馆根目录执行** `node plugins.js install https://github.com/ken050210/vertex-streaming-anti-truncation` 安装配套服务端插件，再在 `plugins/vertex-streaming-anti-truncation` 目录运行 `npm ci --ignore-scripts` 安装图片输入所需的渲染依赖，启用 `enableServerPlugins` 并重启酒馆。仅安装前端无法完成抗截断传输；已有手动安装请先阅读[迁移说明](docs/SILLYTAVERN.md#更新与已有手动安装)，避免重复加载。也可以从 [Release `sillytavern-v0.10.0`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.10.0) 下载[一键安装包](docs/SILLYTAVERN.md#一键安装包)，解压后运行其中的安装程序，一次装好前后端并开启服务端插件，不需要 Git。压缩包只在发版时更新；发版之后 `main` 上的新改动，可以用四条命令[从源码生成安装包并安装](docs/AGENT-INSTALL.md#sillytavern)。
 
 **TauriTavern（TT 酒馆）适配版**：同一个 UI 扩展也适配了 [TauriTavern](https://github.com/Darkatse/TauriTavern)。它把酒馆的 Node.js 后台换成了 Rust，不能运行服务端插件，所以在 TauriTavern 里只装 UI 扩展：在“安装扩展”中填入上面的 Git URL、分支留空即可，不需要 Node.js、`plugins.js`、`npm ci` 和 `enableServerPlugins`。扩展检测到 TauriTavern 后自己完成抗截断的请求改写和回复还原，凭据与提示词转换仍由 TauriTavern 处理。支持非流式／流式抗截断、Unicode 转码和“继续”适配，不支持图片输入。随 SillyTavern 集成 0.4.0 发布；[安装、与插件版的差别和验收范围](docs/SILLYTAVERN.md#tauritavern)。
 
@@ -336,7 +336,7 @@ npm run verify
 npm run smoke -- --live
 ```
 
-烟测检查的是 Vertex 原生参数流，只适用于 Vertex 连接；接自定义上游时会直接停下并说明原因，请改用控制台的连接测试。烟测默认使用已保存的 GUI 配置，没有保存配置时使用环境变量；仅命令行服务可加 `--env` 强制使用 `.env`。默认测试第一个流式抗截断版本，也可加 `--model 你的模型名称` 指定；正常和非流式版本可在 GUI 测试页验证。图片输入开启时烟测会在发送前停止，因为图片请求走兼容缓冲回退，无法验证流式渐进输出；请先关闭图片输入。
+烟测检查的是 Vertex 原生参数流，只适用于 Vertex 连接；接自定义上游时会直接停下并说明原因，请改用控制台的连接测试。烟测默认使用已保存的 GUI 配置，没有保存配置时使用环境变量；仅命令行服务可加 `--env` 强制使用 `.env`。默认测试第一个流式抗截断版本，也可加 `--model 你的模型名称` 指定；正常和非流式版本可在 GUI 测试页验证。此命令只测纯文本输入，开启图片输入时会在发送前停止。运行此项烟测时请先关闭图片输入。
 
 默认测试使用本地模拟数据，不需要真实凭据，也不产生推理费用。烟测会统计正文到达次数和时间跨度，并用响应请求 ID 核对日志。验证范围见 [docs/VALIDATION.md](docs/VALIDATION.md)。
 
@@ -366,7 +366,7 @@ npm run smoke -- --live
 
 这项功能参考 Antigravity experimental 分支的 imagectx（修订 004067b），但保留系统指令为文字，不采用超限自动回退明文。每页最多 36 行，每请求最多 100 页、150000 UTF-16 单元；每条 user/assistant 消息（每个文本片段）至少单独占一页，因此“全部会话转图”最多约 100 条含文字的消息，长聊天请改用当前轮转图。图片经 base64 后还须放入网关固定的 8 MiB 请求体，请求中其余文字内容也占用这一额度：图片合计约 6 MiB；中文约 2.4–4.5 万字（约 20–28 页），带分段的英文约 8 万字符（约 36 页），不分段的英文正文可达 150000 单元上限（约 41 页），视内容和换行而定。超限返回 413 `image_input_too_large`；emoji/控制字符等当前不支持的输入返回 400（♥ © ™ 这类文字样式符号只要字体覆盖就正常渲染，ZWSP、ZWNJ、WJ、BOM、VS15 这类不可见格式字符不影响发送）；缺失渲染依赖或字体返回 503 `image_renderer_unavailable`，渲染或编码失败返回 503 `image_render_failed`。制表符展开为四个空格，换行归一；视觉识别不保证逐字保真。
 
-图片会触发现有抗截断的兼容层缓冲回退，不能保证渐进输出。可能增加 token、延迟和 OCR 错误，不承诺减少内容过滤。图片与正文只在内存中处理；日志仅记录模式、状态和页数/字节/消息计数。验收范围见[图片输入验收记录](docs/IMAGE-INPUT-VALIDATION.md)（英文）。
+独立网关使用 Vertex 原生参数流时，转图后也可逐段接收正文；自定义上游的交付方式取决于中转。可能增加 token、延迟和 OCR 错误，不承诺减少内容过滤。图片与正文只在内存中处理；日志仅记录模式、状态和页数/字节/消息计数。验收范围见[图片输入验收记录](docs/IMAGE-INPUT-VALIDATION.md)（英文）。
 
 安装或更新后在项目目录运行 `npm ci --ignore-scripts`。离线部署须包含对应平台的 @napi-rs/canvas 二进制以及 `assets/fonts`；普通输入不会加载渲染器。
 

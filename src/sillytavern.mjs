@@ -75,7 +75,7 @@ export function prepareSillyTavernRequest(request, adapters) {
     if (Number.isInteger(budget)) config.thinkingConfig.thinkingBudget = budget;
     else if (typeof budget === "string" && budget) config.thinkingConfig.thinkingLevel = budget;
   }
-  const upstreamStream = mode === "streaming" && body.stream === true && !(body.vertex_image_input && body.vertex_image_input !== "off");
+  const upstreamStream = mode === "streaming" && body.stream === true;
   const outputLimit = gemini4OutputLimit(config.maxOutputTokens, body.model, { stream: upstreamStream, longDecode: body.vertex_long_decode === true });
   if (outputLimit) config.maxOutputTokens = outputLimit.applied;
   if (upstreamStream) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;

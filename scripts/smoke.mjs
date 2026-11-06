@@ -10,7 +10,7 @@ const settings = loaded ? loaded.settings : await settingsFromEnv();
 // The checks below need Vertex's native argument stream, which a custom upstream does not have.
 if (settings.authMode === "custom") throw new Error("The live smoke test checks Vertex's native argument stream, which a custom upstream does not have; use the console's connection test instead");
 // Image input forces the buffered fallback, so the native streaming check below could never pass.
-if (settings.imageInput !== "off") throw new Error("Image input forces tool-transport-buffered-fields; set it to off before running the streaming smoke test");
+if (settings.imageInput !== "off") throw new Error("This smoke test uses a text-only prompt. Turn image input off for this test.");
 const requested = process.argv.includes("--model") ? process.argv[process.argv.indexOf("--model") + 1] : null;
 if (process.argv.includes("--model") && (!requested || requested.startsWith("--"))) throw new Error("--model requires a saved streaming alias");
 const models = modelProfiles(settings.models, settings.antiTruncation, { custom: settings.authMode === "custom" });

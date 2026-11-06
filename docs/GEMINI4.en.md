@@ -47,7 +47,7 @@ Long decode is off by default. A larger output limit is sent as the limit of the
 | --- | --- |
 | Standalone gateway to Google (native or compatible API) | 65,536 when the request to Google streams, otherwise 32,768. Buffered anti-truncation is a unary request even when the client asks for SSE |
 | Standalone gateway, custom upstream | Always 32,768, since the gateway cannot see how the relay calls Google |
-| Requests the Tavern plugin takes | Same as direct. Connection tests, background generations (summaries, expression classification and similar extensions), streaming turned off, buffered mode and image input are unary: 32,768 |
+| Requests the Tavern plugin takes | 65,536 when Tavern requests streaming and the plugin uses streaming anti-truncation, including text-to-image input. Non-streaming requests (such as connection tests), buffered mode and image-only mode use 32,768 |
 | TauriTavern | 65,536 (it always streams) |
 | Requests the plugin leaves to Tavern's own route | Unchanged |
 

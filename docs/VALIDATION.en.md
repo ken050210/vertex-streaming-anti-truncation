@@ -2,6 +2,17 @@
 
 [中文](VALIDATION.md) | English
 
+## SillyTavern 0.10.0 — Streaming after text-to-image conversion (2026-11-06)
+
+Two synthetic requests reached the plugin over loopback HTTP using SillyTavern 1.19.0 prompt conversion, credential lookup, Express and compression middleware. The plugin sent lossless WebP pages to Vertex `gemini-4-argon`. The model read back the random ticket numbers present only in the images. Both replies contained streamed function arguments, restored visible text, a `STOP` finish and one `[DONE]`.
+
+| Image mode | WebP pages | HTTP reads with visible text | First visible text | Upstream finish | Lead |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Current turn | 1 | 13 | 17.847 s | 23.362 s | 5.515 s |
+| All turns | 3 | 12 | 5.326 s | 11.529 s | 6.203 s |
+
+Timings start at each request. The client observed visible text over HTTP while the backend independently recorded the original Google finish event. Offline regression cases also cover client tools alongside rendered text, Continue with no new text to render, non-streaming requests, older servers that buffer, and Gemini 4 output limits.
+
 ## Gateway 0.16.1 / SillyTavern 0.9.1 — Multi-tool argument streaming (2026-11-05)
 
 All 284 offline tests passed. Release checks use a clean staging directory containing tracked source and the two new files, excluding existing browser traces that trigger the private-path check in the working directory. All 127 source files passed syntax and sensitive-data checks, and the SillyTavern installer directories packaged successfully.

@@ -2,6 +2,12 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.16.2 / SillyTavern 0.10.0 — Stream replies after rendering text to images (2026-11-06)
+
+In the SillyTavern Vertex panel, select streaming anti-truncation and either text-to-image option, then enable streaming in Tavern. Once the plugin renders the selected text as WebP pages, Vertex streams the answer and Tavern receives each restored text fragment as it arrives. The panel reports the transport used by the server. Buffered and image-only requests still deliver complete replies.
+
+Both image modes passed live tests through the SillyTavern 1.19.0 plugin backend with Gemini 4 Argon. See the [timings and readback results](docs/VALIDATION.en.md).
+
 ## Gateway 0.16.1 / SillyTavern 0.9.1 — Streaming anti-truncation with client tools (2026-11-05)
 
 The 0.16.1 / 0.9.1 patch isolates the browser-metadata regression test from Node 22 HTTP globals; runtime behavior is unchanged from the initial 0.16.0 / 0.9.0 tags.

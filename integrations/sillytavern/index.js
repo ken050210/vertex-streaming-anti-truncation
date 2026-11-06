@@ -51,14 +51,15 @@ function updateStatus(result) {
     ? "图片·当前轮：最后一条 AI 消息之后没有可转换的文本（如点击“继续”或以 AI 消息结尾的预填充），本次按原文发送。"
     : "图片·全部会话：没有可转换的文本，本次按原文发送。";
   const image = result.image ? { encoded: `已将文本转为图片发送${result.image.pages ? `（${result.image.pages} 页）` : ""}。`,
-    "no-text": noText + (result.image.stream && result.mode !== "buffered" ? "图片输入请求仍按非流式交付。" : "") }[result.image.reason] || "" : "";
+    "no-text": noText }[result.image.reason] || "" : "";
+  const delivery = result.image && { "native-streaming": "正文按流式接收。", buffered: "正文整段返回。" }[result.image.transport];
   const bypass = result.bypass && result.bypass !== "disabled" ? `本次使用普通 Vertex：${reasons[result.bypass] ?? result.bypass}。` : "";
   const continuation = result.continuation ? "本次“继续”已请求仅生成新增续文，由酒馆追加到原消息。" : "";
   const limit = result.outputLimit, tokens = value => value.toLocaleString("en-US");
   const output = !limit ? "" : limit.longDecode
     ? `本次输出上限 ${tokens(limit.applied)} token（含思考）超过单次上限，写满后自动续写。`
     : `本次输出上限按单次上限 ${tokens(limit.applied)} token（含思考）发送，预设未改动；写满会停止并标记为长度截断。`;
-  showStatus([unicode, image, bypass, continuation, output].filter(Boolean).join(" "));
+  showStatus([unicode, image, delivery, bypass, continuation, output].filter(Boolean).join(" "));
 }
 
 async function checkBackend(silent = false) {

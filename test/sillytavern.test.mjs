@@ -48,12 +48,12 @@ test("SillyTavern Gemini 4 uses thinking levels without relying on older Tavern 
 });
 
 test("SillyTavern caps Gemini 4 output by the actual upstream request, or keeps it for long decode", () => {
-  for (const mode of ["buffered", "streaming"]) for (const stream of [false, true]) for (const image of ["off", "current-turn"]) {
+  for (const mode of ["buffered", "streaming"]) for (const stream of [false, true]) for (const image of ["off", "current-turn", "all"]) {
     // A quiet request, such as the connection test, is never streamed.
     const input = request({ model: "gemini-4-argon", max_tokens: 100000, vertex_anti_truncation: mode,
       type: stream ? "normal" : "quiet", messages: [{ role: "user", content: "Hi" }], stream, vertex_image_input: image });
     const original = structuredClone(input);
-    const upstreamStream = mode === "streaming" && stream && image === "off";
+    const upstreamStream = mode === "streaming" && stream;
     const applied = upstreamStream ? 65536 : 32768;
     const prepared = prepareSillyTavernRequest(input, adapters);
     assert.equal(prepared.body.generationConfig.maxOutputTokens, applied);
@@ -622,20 +622,21 @@ test("single-floor card: Unicode encodes every copy of the 我的行动 text and
   assert.equal(statuses.at(-1).unicode.occurrences, 2);
 });
 
-test("image option forwards only eligible plugin requests and forces buffered image transport",async()=>{
- const calls=[],statuses=[];
- const intercept=createFetchInterceptor(async(...args)=>{calls.push(args);return new Response('OK');},{origin:'http://localhost',getMode:()=> 'streaming',getImageInput:()=> 'current-turn',onStatus:s=>statuses.push(s)});
- await intercept(GENERATE_PATH,{method:'POST',body:JSON.stringify(body)});
- assert.equal(JSON.parse(calls[0][1].body).vertex_image_input,'current-turn');
- // The refusal names the actual cause so the panel does not guess.
- await assert.rejects(intercept(GENERATE_PATH,{method:'POST',body:JSON.stringify({...body,model:'gemini-3-pro-image'})}),/image_input_requires/);
- assert.deepEqual(statuses.at(-1),{error:'image_input_requires_supported_request',bypass:'model'});
- const {prepareImageInput}=await import('../src/image-input.mjs');
- const converted=await prepareImageInput(body,'current-turn');
- const prepared=prepareSillyTavernRequest(request({...converted.payload,vertex_image_input:'current-turn'}),adapters);
- assert.equal(prepared.upstreamStream,false);
- await assert.rejects(intercept(GENERATE_PATH,{method:'POST',body:JSON.stringify({...body,tools:[{type:'function'}]})}),/image_input_requires/);
- assert.equal(calls.length,1);
+test("image option forwards eligible plugin requests with the selected streaming mode", async () => {
+  const calls = [], statuses = [];
+  const intercept = createFetchInterceptor(async (...args) => { calls.push(args); return new Response("OK"); }, {
+    origin: "http://localhost", getMode: () => "streaming", getImageInput: () => "current-turn", onStatus: s => statuses.push(s),
+  });
+  const post = payload => intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify(payload) });
+  await post(body);
+  const forwarded = JSON.parse(calls[0][1].body);
+  assert.equal(forwarded.vertex_image_input, "current-turn");
+  assert.equal(forwarded.stream, true);
+  assert.equal(forwarded.vertex_anti_truncation, "streaming");
+  await assert.rejects(post({ ...body, model: "gemini-3-pro-image" }), /image_input_requires/);
+  assert.deepEqual(statuses.at(-1), { error: "image_input_requires_supported_request", bypass: "model" });
+  await assert.rejects(post({ ...body, tools: [{ type: "function" }] }), /image_input_requires/);
+  assert.equal(calls.length, 1);
 });
 
 test("image-only plugin mode is independent from anti-truncation and restores native text",async()=>{
@@ -738,17 +739,18 @@ test("image conversion failures are labelled as image input, not anti-truncation
 
 test("image requests report the plugin's conversion outcome, including text sent unchanged", async t => {
   const statuses = [];
-  let headers = { "x-image-input": "no-text", "x-image-input-pages": "0" };
+  let headers = { "x-image-input": "no-text", "x-image-input-pages": "0", "x-anti-truncation-transport": "native-streaming" };
   const intercept = createFetchInterceptor(async () => new Response("OK", { headers }), { origin: "http://localhost",
     getMode: () => "streaming", getImageInput: () => "current-turn", onStatus: s => statuses.push(s) });
   await intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify(body) });
-  assert.deepEqual(statuses.at(-1), { mode: "streaming", image: { mode: "current-turn", reason: "no-text", pages: 0, stream: true } });
-  headers = { "x-image-input": "encoded", "x-image-input-pages": "2" };
+  assert.deepEqual(statuses.at(-1), { mode: "streaming", image: { mode: "current-turn", reason: "no-text", pages: 0, transport: "native-streaming" } });
+  headers = { "x-image-input": "encoded", "x-image-input-pages": "2", "x-anti-truncation-transport": "native-streaming" };
   await intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify(body) });
-  assert.deepEqual(statuses.at(-1).image, { mode: "current-turn", reason: "encoded", pages: 2, stream: true });
-  // The panel's buffering note depends on whether ST itself asked to stream.
-  await intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify({ ...body, stream: false }) });
-  assert.equal(statuses.at(-1).image.stream, false);
+  assert.deepEqual(statuses.at(-1).image, { mode: "current-turn", reason: "encoded", pages: 2, transport: "native-streaming" });
+  // An older backend may still buffer a request that ST wanted to stream.
+  headers["x-anti-truncation-transport"] = "buffered";
+  await intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify(body) });
+  assert.equal(statuses.at(-1).image.transport, "buffered");
 
   const sent = [];
   const handler = createGenerateHandler(adapters, { fetchImpl: async (url, init) => {
@@ -810,12 +812,13 @@ test("Continue delivers only the upstream suffix in one request across stream, b
   const post = extra => fetch(`http://127.0.0.1:${server.address().port}`, { method: "POST", body: JSON.stringify({
     ...body, type: "continue", messages: [...body.messages, { role: "assistant", content: "<正文>他推开门，看到" }], ...extra,
   }) });
-  for (const [mode, image] of [["streaming", "off"], ["buffered", "off"], ["off", "current-turn"], ["off", "all"], ["streaming", "all"]]) {
+  for (const [mode, image] of [["streaming", "off"], ["buffered", "off"], ["off", "current-turn"], ["off", "all"], ["streaming", "all"], ["streaming", "current-turn"]]) {
     for (const stream of [false, true]) {
       const count = sent.length;
       const response = await post({ vertex_anti_truncation: mode, vertex_image_input: image, stream });
       assert.equal(response.status, 200);
       assert.equal(response.headers.get("x-vertex-continuation"), "suffix");
+      assert.equal(response.headers.get("x-anti-truncation-transport"), stream && mode === "streaming" ? "native-streaming" : "buffered");
       if (stream) {
         const wire = await response.text();
         assert.equal(contents(wire), suffix);

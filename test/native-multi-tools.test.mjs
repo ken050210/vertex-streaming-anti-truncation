@@ -10,6 +10,7 @@ import { createGatewayServer } from "../src/gateway.mjs";
 import { buildConfig, DEFAULT_SETTINGS } from "../src/config.mjs";
 import { sseData } from "../src/wire.mjs";
 import { encodeGemini4ToolId, gemini4ToolMetadata } from "../src/gemini4.mjs";
+import { prepareImageInput } from "../src/image-input.mjs";
 
 const tool = { type: "function", function: { name: "lookup", parameters: { type: "object", properties: {} } } };
 const tools = [tool];
@@ -95,13 +96,16 @@ const body = { chat_completion_source: "vertexai", model, stream: true, tools, t
   messages: [{ role: "user", content: [{ type: "text", text: "看图查资料" }, { type: "image_url", image_url: { url: "data:image/png;base64,AA==" } }] }] };
 const adapters = { getPromptNames: () => ({}), safetySettings: [], convertGooglePrompt: messages => ({ contents: nativeRequestBody({ model, messages }).contents }) };
 
-for (const host of ["ST", "TT"]) test(`${host} delivers body text before a client tool completes, then preserves its complete native part`, async () => {
-  const prepared = host === "TT" ? prepareTauriTavernRequest(body, "streaming") : prepareSillyTavernRequest({ body }, adapters);
+for (const [host, imageMode] of [["ST", "off"], ["ST", "current-turn"], ["TT", "off"]]) test(`${host} (text-to-image: ${imageMode}) delivers text before a client tool completes, then preserves its complete native part`, async () => {
+  const { payload } = await prepareImageInput(body, imageMode);
+  const prepared = host === "TT" ? prepareTauriTavernRequest(body, "streaming")
+    : prepareSillyTavernRequest({ body: { ...payload, vertex_image_input: imageMode } }, adapters);
   const sent = host === "TT" ? JSON.parse(prepared.body.custom_include_body) : prepared.body;
   assert.equal(sent.toolConfig.functionCallingConfig.streamFunctionCallArguments, true);
   assert.deepEqual(sent.tools[0].functionDeclarations.map(tool => tool.name), ["lookup", prepared.toolName]);
   if (host === "TT") assert.deepEqual(prepared.body.messages[0], body.messages[0]);
-  else assert.equal(sent.contents[0].parts[1].inlineData.mimeType, "image/png");
+  else assert.deepEqual(sent.contents[0].parts.filter(part => part.inlineData).map(part => part.inlineData.mimeType),
+    imageMode === "off" ? ["image/png"] : ["image/webp", "image/png"]);
   let source;
   const upstream = new Response(new ReadableStream({ start(controller) { source = controller; } }));
   const encoder = new TextEncoder();
