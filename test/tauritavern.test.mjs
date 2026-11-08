@@ -20,7 +20,8 @@ const finish = (finishReason = "STOP") => google({ finishReason }, { usageMetada
 const partial = (name, pieces) => call({ name, willContinue: true }) +
   pieces.map((stringValue, index) => call({ partialArgs: [{ jsonPath: "$.content", stringValue, willContinue: index < pieces.length - 1 }], willContinue: true })).join("") +
   call({});
-const hostError = sseData({ candidates: [{ index: 0, content: { parts: [{ text: "[API Error]\nHTTP 401" }] } }] });
+const errorText = "[API Error]\nHTTP 401 <tucao>1</tucao><tucao>2</tucao> details";
+const hostError = sseData({ candidates: [{ index: 0, content: { parts: [{ text: errorText }] } }] });
 const done = sseData("[DONE]");
 const events = text => text.split("\n").filter(line => line.startsWith("data:") && !line.includes("[DONE]")).map(line => JSON.parse(line.slice(5)));
 const contents = text => events(text).flatMap(event => event.candidates ?? []).flatMap(candidate => candidate.content?.parts ?? [])
@@ -33,10 +34,11 @@ function host(wire, calls = []) {
     const sent = JSON.parse(init.body);
     calls.push({ input, init, sent });
     if (typeof wire !== "function") return wire instanceof Response ? wire : new Response(wire);
-    return wire(JSON.parse(sent.custom_include_body).tools[0].functionDeclarations[0].name, sent);
+    return wire(JSON.parse(sent.custom_include_body).tools[0].functionDeclarations.at(-1).name, sent);
   }, { calls });
 }
-const intercept = (original, mode, extra = {}) => createFetchInterceptor(original, { origin: "http://tauri.localhost", getMode: () => mode, direct, ...extra });
+const intercept = (original, mode, extra = {}) => createFetchInterceptor(original, { origin: "http://tauri.localhost", getMode: () => mode,
+  getTagStop: () => ({ tag: "tucao", count: 2 }), ensureBackend: () => assert.fail("TT has no server plugin"), direct, ...extra });
 const send = (wrapped, patch = {}, init = {}) => wrapped(GENERATE_PATH, { method: "POST", headers: { "x-csrf-token": "fixture" }, body: JSON.stringify({ ...body, ...patch }), ...init });
 
 test("TauriTavern requests keep ST's own route and carry the transport in body overrides", async () => {
@@ -54,6 +56,7 @@ test("TauriTavern requests keep ST's own route and carry the transport in body o
       assert.deepEqual(sent[key], body[key]);
     }
     assert.equal(sent.vertex_anti_truncation, undefined);
+    assert.equal(sent.vertex_tag_stop, undefined);
     assert.equal(sent.stream, true);
     assert.deepEqual(sent.messages.slice(0, 2), body.messages);
     assert.equal(sent.messages.length, 3);
@@ -125,6 +128,89 @@ test("buffered mode delivers a checked, complete reply in the shape ST asked for
   assert.ok(events(streamed).some(event => event.candidates?.[0]?.finishReason === "STOP"));
 });
 
+test("TT stops at a split tag, preserves earlier client tools and cancels the open host stream", { timeout: 5000 }, async () => {
+  const first = "<tucao>一</tucao>正文<tucao>二</tu";
+  const ignored = "<tucao>1</tucao><tucao>2</tucao>";
+  const piece = stringValue => call({ partialArgs: [{ jsonPath: "$.content", stringValue, willContinue: true }], willContinue: true });
+  let upstream, cancelled = false;
+  const encoder = new TextEncoder();
+  const original = host(name => new Response(new ReadableStream({
+    start(controller) {
+      upstream = controller;
+      controller.enqueue(encoder.encode(google({ content: { role: "model", parts: [{ thought: true, text: ignored }] } }, { usageMetadata })
+        + call({ name: "lookup", args: { content: ignored } }) + call({ name, willContinue: true }) + piece(first)));
+    },
+    cancel() { cancelled = true; },
+  })));
+  const response = await send(intercept(original, "streaming"), { tools: [{ type: "function", function: { name: "lookup" } }] });
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  let wire = "";
+  while (!contents(wire)) wire += decoder.decode((await reader.read()).value, { stream: true });
+  assert.equal(contents(wire), first);
+  upstream.enqueue(encoder.encode(piece("cao><UpdateVariable>later</UpdateVariable>") + "data: malformed after stop\n\n"));
+  for (let read = await reader.read(); !read.done; read = await reader.read()) wire += decoder.decode(read.value, { stream: true });
+  assert.equal(contents(wire), first + "cao>");
+  const frames = events(wire);
+  const parts = frames.flatMap(e => e.candidates ?? []).flatMap(c => c.content.parts);
+  assert.deepEqual(parts.find(p => p.thought), { thought: true, text: ignored });
+  assert.deepEqual(parts.find(p => p.functionCall).functionCall, { name: "lookup", args: { content: ignored } });
+  assert.deepEqual(frames.flatMap(e => e.candidates ?? []).map(c => c.finishReason).filter(Boolean), ["STOP"]);
+  assert.ok(frames.some(e => e.vertexStopAfter === "</tucao>"));
+  assert.ok(frames.every(e => !e.usage && !e.usageMetadata && !e.error));
+  assert.equal(wire.split("data: [DONE]").length - 1, 1);
+  assert.equal(cancelled, true);
+  assert.equal(original.calls.length, 1);
+});
+
+test("TT buffered delivery clips complete tool arguments and plain text in both response formats", async () => {
+  const prefix = "</A><a>skip</a><A>保留</A>", content = prefix + "尾部";
+  for (const [mode, stream] of [["buffered", false], ["buffered", true], ["streaming", false]]) {
+    for (const plain of [false, true]) {
+      const original = host(name => new Response(sseData({ usageMetadata }) + google({ content: { role: "model",
+        parts: [plain ? { text: content } : { functionCall: { name, args: { content } } }] } }) + finish() + done));
+      const response = await send(intercept(original, mode, { getTagStop: () => ({ tag: "A", count: 1 }) }), { stream });
+      if (stream) {
+        const wire = await response.text();
+        assert.equal(contents(wire), prefix);
+        assert.ok(events(wire).some(e => e.vertexStopAfter === "</A>"));
+        assert.ok(events(wire).every(e => !e.usage && !e.usageMetadata));
+      } else {
+        const result = await response.json();
+        assert.equal(result.choices[0].message.content, prefix);
+        assert.equal(result.choices[0].finish_reason, "stop");
+        assert.deepEqual(result.responseContent.parts, [{ text: prefix }]);
+        assert.equal(result.vertexStopAfter, "</A>");
+        assert.equal(result.usage, undefined);
+        assert.equal(result.usageMetadata, undefined);
+      }
+    }
+  }
+});
+
+test("TT counts each Continue separately, honors opt-out and validates only eligible requests", async () => {
+  const content = "<tucao>1</tucao><tucao>2</tucao><A>一</A>尾部";
+  let rule = { tag: "A", count: 2 };
+  const original = host(name => new Response(call({ name, args: { content } }) + finish() + done));
+  const statuses = [];
+  const wrapped = intercept(original, "buffered", { getTagStop: () => rule, onStatus: s => statuses.push(s) });
+  const patch = { stream: false, type: "continue", messages: [...body.messages, { role: "assistant", content }] };
+  for (const setting of [rule, rule, null]) {
+    rule = setting;
+    const result = await (await send(wrapped, patch)).json();
+    assert.equal(result.choices[0].message.content, content);
+    assert.equal(result.vertexStopAfter, undefined);
+    assert.deepEqual(result.usageMetadata, usageMetadata);
+  }
+  rule = { tag: "A", count: 0 };
+  await assert.rejects(send(wrapped), { code: "invalid_tag_stop" });
+  assert.equal(original.calls.length, 3);
+  assert.deepEqual(statuses.at(-1), { error: "invalid_tag_stop" });
+  const bypass = host(new Response("ordinary TT reply"));
+  const response = await send(intercept(bypass, "buffered", { getTagStop: () => rule }), { custom_include_body: "labels:\n  team: a" });
+  assert.equal(await response.text(), "ordinary TT reply");
+  assert.equal(bypass.calls[0].sent.custom_include_body, "labels:\n  team: a");
+});
+
 test("cut-short, interrupted and malformed replies are never reported as complete", async () => {
   const statuses = [];
   const cut = name => call({ name, willContinue: true }) + call({ partialArgs: [{ jsonPath: "$.content", stringValue: "不完整", willContinue: true }], willContinue: true });
@@ -152,9 +238,11 @@ test("cut-short, interrupted and malformed replies are never reported as complet
 test("TauriTavern's own error text and quiet-request errors pass through", async () => {
   for (const mode of ["streaming", "buffered"]) {
     const streamed = await (await send(intercept(host(hostError + done), mode))).text();
-    assert.equal(contents(streamed), "[API Error]\nHTTP 401");
+    assert.equal(contents(streamed), errorText);
+    assert.ok(events(streamed).every(e => !e.vertexStopAfter));
     const completion = await (await send(intercept(host(hostError + done), mode), { stream: false })).json();
-    assert.equal(completion.choices[0].message.content, "[API Error]\nHTTP 401");
+    assert.equal(completion.choices[0].message.content, errorText);
+    assert.equal(completion.vertexStopAfter, undefined);
     assert.equal(completion.vertexAntiTruncation.restored, false);
   }
   // The same text after Google's own events is model output without an ending, not a host error.
@@ -182,7 +270,7 @@ test("a cancelled request stops without an error event or a failure response", a
 test("Continue asks for the suffix only and is confirmed without a server plugin", async () => {
   const statuses = [];
   const original = host(name => new Response(call({ name, args: { content: "续文" } }) + finish() + done));
-  const wrapped = intercept(original, "streaming", { ensureBackend: async () => true, onStatus: status => statuses.push(status) });
+  const wrapped = intercept(original, "streaming", { onStatus: status => statuses.push(status) });
   const patch = { type: "continue", messages: [...body.messages, { role: "assistant", content: "已有正文" }] };
   const response = await send(wrapped, patch);
   assert.equal(contents(await response.text()), "续文");

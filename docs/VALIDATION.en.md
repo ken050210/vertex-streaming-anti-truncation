@@ -2,6 +2,12 @@
 
 [中文](VALIDATION.md) | English
 
+## SillyTavern 0.11.0 / TauriTavern tag stop (2026-11-08)
+
+All 288 offline tests passed. The TT cases covered a closing tag split across chunks, cancellation of an open host stream, clipping of full tool arguments and plain text, omitted final usage, and a fresh count on Continue. They also checked client tools before the stop, native thoughts, TT error text, the disabled switch and bypassed requests. [TT tests](../test/tauritavern.test.mjs)
+
+An isolated Chrome page loaded the extension and TT 2.4.0's JavaScript generation route. The fixture saved panel settings in local storage and simulated the native backend's response events. The default rule kept the second `</tucao>`, the custom rule kept the first `</A>`, and disabling the switch delivered the full suffix. Reloading the page preserved the custom rule and the opt-out. Writing settings in the native app, running on mobile and stopping a live model reply still need separate checks. [TT route revision](https://github.com/Darkatse/TauriTavern/blob/fff9af0333be97697be2313981699ab0ce35c236/src/tauri/main/routes/ai-routes.js)
+
 ## SillyTavern 0.10.0 — Streaming after text-to-image conversion (2026-11-06)
 
 Two synthetic requests reached the plugin over loopback HTTP using SillyTavern 1.19.0 prompt conversion, credential lookup, Express and compression middleware. The plugin sent lossless WebP pages to Vertex `gemini-4-argon`. The model read back the random ticket numbers present only in the images. Both replies contained streamed function arguments, restored visible text, a `STOP` finish and one `[DONE]`.

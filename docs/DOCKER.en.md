@@ -15,7 +15,7 @@ docker compose up -d
 docker compose logs vertex-gateway
 ```
 
-Open the first-time setup link in the logs, including `#setup=...`. The console defaults to `http://127.0.0.1:4780/`. Enter Google credentials (or a [custom upstream](../README.en.md#custom-upstream)'s URL and API key), models and a gateway key, then save. The API starts at `http://127.0.0.1:4781/v1`. Strict keys are the default; the access-mode selector also offers weak keys (e.g. `123456`) or keyless access to both API and console, with a risk-confirmation checkbox before saving. Keyless mode opens the console directly; the other modes require the saved key. Anyone who can reach a keyless service can call models, read logs and change settings, potentially incurring charges; port publishing determines who can reach it. Keep bootstrap links private.
+Open the first-time setup link in the logs, including `#setup=...`. The console defaults to `http://127.0.0.1:4780/`. Enter Google credentials (or a [custom upstream](GATEWAY.en.md#custom-upstream)'s URL and API key), models and a gateway key, then save. The API starts at `http://127.0.0.1:4781/v1`. Strict keys are the default; the access-mode selector also offers weak keys (e.g. `123456`) or keyless access to both API and console, with a risk-confirmation checkbox before saving. Keyless mode opens the console directly; the other modes require the saved key. Anyone who can reach a keyless service can call models, read logs and change settings, potentially incurring charges; port publishing determines who can reach it. Keep bootstrap links private.
 
 No registry login, source checkout, host Node.js or `.env` is needed. You can also download the Compose file manually from the [release](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/gateway-v0.15.0). Compose does not automatically pass host Google credentials into the container. Startup, saving and health checks never invoke a model; the console's manual connection test uses your Google billing account, or a custom upstream's own billing.
 
@@ -76,7 +76,7 @@ Keep the existing data volume, run `docker compose pull`, then `docker compose u
 
 Existing keys keep strict mode after upgrading. To allow a simple key or keyless access, select the mode in Connection settings → 本地网关, confirm the risk and save. Keyless mode opens both API and console access and clears the previous gateway key.
 
-The existing connection remains the primary account and rotation stays off. In Connection settings → 多账号轮询, add accounts, enable rotation and save. The per-account timeout, failure threshold and cooldown are configurable without rebuilding the container. All accounts are stored in the same volume's `settings.json`; protect it like the original credentials. See [rotation rules and limitations](../README.en.md#account-rotation-standalone-gateway).
+The existing connection remains the primary account and rotation stays off. In Connection settings → 多账号轮询, add accounts, enable rotation and save. The per-account timeout, failure threshold and cooldown are configurable without rebuilding the container. All accounts are stored in the same volume's `settings.json`; protect it like the original credentials. See [rotation rules and limitations](GATEWAY.en.md#account-rotation-standalone-gateway).
 
 ## Data and credentials
 

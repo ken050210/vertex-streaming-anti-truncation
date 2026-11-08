@@ -2,6 +2,7 @@ import { prepareAntiTruncation, wrapAntiTruncationStream } from "./anti-truncati
 import { nativeRequestBody } from "./vertex-native.mjs";
 import { wrapNativeTextStream } from "./vertex-text-stream.mjs";
 import { guardCompletionStream } from "./completion-integrity.mjs";
+import { createTagStop } from "./tag-stop.mjs";
 import { capGemini4Output, outputLimitHeaders } from "./gemini4.mjs";
 import { completedSillyTavernResponse, toSillyTavernStream } from "./sillytavern.mjs";
 import { createSseParser, isObject, sseData, transformSse } from "./wire.mjs";
@@ -25,7 +26,7 @@ function includedBody(value) {
   } catch { return null; }
 }
 
-export function prepareTauriTavernRequest(body, mode) {
+export function prepareTauriTavernRequest(body, mode, tagStop) {
   const included = includedBody(body.custom_include_body);
   if (!included) return { bypass: "additional-parameters" };
   // The upstream request is always streamGenerateContent here, and TauriTavern's backend
@@ -40,7 +41,7 @@ export function prepareTauriTavernRequest(body, mode) {
   return {
     body: { ...body, messages: prepared.payload.messages, stream: true,
       custom_include_body: JSON.stringify({ ...included, tools: native.tools, toolConfig: native.toolConfig }) },
-    toolName: prepared.toolName, tools: prepared.payload.tools, model: body.model, stream: body.stream === true, upstreamStream, continuation, outputLimit,
+    toolName: prepared.toolName, tools: prepared.payload.tools, model: body.model, stream: body.stream === true, upstreamStream, continuation, outputLimit, tagStop,
   };
 }
 
@@ -49,14 +50,21 @@ export function prepareTauriTavernRequest(body, mode) {
 // ids, usage or finishReason. Give it an ending so its text arrives as written
 // instead of as an interrupted reply.
 const only = (value, ...allowed) => isObject(value) && Object.keys(value).every(key => allowed.includes(key));
-function endHostError(response) {
+function normalizeTauriStream(response, stop) {
   return transformSse(response, ({ raw, data }, emit) => {
     let parsed;
     try { parsed = JSON.parse(data); } catch { return emit(raw + "\n\n"); }
     const candidate = only(parsed, "candidates") && parsed.candidates?.length === 1 ? parsed.candidates[0] : null;
     const part = only(candidate, "index", "content") && only(candidate.content, "parts") && candidate.content.parts?.length === 1 ? candidate.content.parts[0] : null;
-    if (!only(part, "text") || typeof part.text !== "string") return emit(raw + "\n\n");
-    emit(sseData({ candidates: [{ ...candidate, finishReason: "STOP" }] }));
+    if (only(part, "text") && typeof part.text === "string") {
+      return emit(sseData({ candidates: [{ ...candidate, finishReason: "STOP" }] }));
+    }
+    stop?.process(parsed);
+    if (stop?.marker()) {
+      emit(sseData(parsed));
+      return false; // Close the TT response reader at the matching frame.
+    }
+    emit(raw + "\n\n");
   });
 }
 
@@ -113,17 +121,27 @@ function reportStreamFailure(body, signal) {
 export async function restoreTauriTavernResponse(response, prepared, signal) {
   // A failed quiet request is TauriTavern's own JSON error; leave it as it is.
   if (!response.ok || !response.body) return response;
+  const rule = prepared.tagStop;
+  const stop = rule && createTagStop(prepared.toolName, rule.tag, rule.count);
   let usageMetadata;
-  const restored = guardCompletionStream(wrapAntiTruncationStream(wrapNativeTextStream(endHostError(response), prepared.toolName,
-    prepared.model, usage => { usageMetadata = usage; }, true, prepared.tools), prepared.toolName, () => {}, prepared.tools), () => {}, null, BODY_LIMIT);
+  const translated = wrapNativeTextStream(normalizeTauriStream(response, stop), prepared.toolName, prepared.model,
+    usage => { usageMetadata = usage; }, true, prepared.tools);
+  const restored = guardCompletionStream(wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools), () => {}, null, BODY_LIMIT);
   const headers = { ...(prepared.continuation ? { "x-vertex-continuation": "suffix" } : {}), ...outputLimitHeaders(prepared.outputLimit) };
   if (prepared.upstreamStream) {
-    return new Response(reportStreamFailure(toSillyTavernStream(restored, () => usageMetadata, prepared.model).body, signal),
+    return new Response(reportStreamFailure(toSillyTavernStream(restored, () => usageMetadata, prepared.model, stop?.marker).body, signal),
       { headers: { ...headers, "content-type": "text/event-stream; charset=utf-8" } });
   }
   let delivered;
   try {
-    delivered = completedSillyTavernResponse(await collectCompletion(restored, prepared.model), prepared, usageMetadata);
+    const completion = await collectCompletion(restored, prepared.model);
+    const stopAfter = stop?.marker();
+    if (stopAfter) {
+      // TT can send interim usage before the matching frame.
+      delete completion.usage;
+      usageMetadata = undefined;
+    }
+    delivered = completedSillyTavernResponse(completion, prepared, usageMetadata, stopAfter);
   } catch (error) {
     signal?.throwIfAborted();
     return new Response(JSON.stringify(failure(error.code ?? "restoration_failed")), { status: 502, headers: { "content-type": "application/json" } });

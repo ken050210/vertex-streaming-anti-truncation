@@ -20,7 +20,7 @@
 
 连接配置支持完整服务账号 JSON、Express 快速模式 API Key、短期 OAuth token。Express 调用 Argon 时必须填写 API Key 所属的项目 ID 或项目编号，请求地址才会明确包含 `projects/{项目}/locations/global`；未填写时请求在本地返回 `express_project_required`，旧配置仍可读取和修改。快速 key 是 Vertex Express key，不等于任意 AI Studio key；账户能否调用 Gemini 4 仍取决于 Google 的权限与当前可用性。目录拉取失败时可以手动填写 ID，目录也不证明模型调用权限。
 
-可以自定义上游 **Gemini 模型 ID** 与客户端显示名称。独立网关除了官方 Vertex，也可以改接提供 Gemini 模型的 OpenAI 兼容服务，见[自定义上游](../README.md#自定义上游)。这时 Argon 的思考等级等参数照原样发给上游，是否生效由上游决定；流式抗截断也不走 Vertex 原生参数流。酒馆的“自定义 OpenAI 连接”可以连接本地网关，这与网关自己接哪个上游是两回事。
+可以自定义上游 **Gemini 模型 ID** 与客户端显示名称。独立网关除了官方 Vertex，也可以改接提供 Gemini 模型的 OpenAI 兼容服务，见[自定义上游](GATEWAY.md#自定义上游)。这时 Argon 的思考等级等参数照原样发给上游，是否生效由上游决定；流式抗截断也不走 Vertex 原生参数流。酒馆的“自定义 OpenAI 连接”可以连接本地网关，这与网关自己接哪个上游是两回事。
 
 ## 请求兼容
 
@@ -100,7 +100,7 @@ Google 规定 Argon 单次请求最多输出 65,536 token（流式）或 32,768 
 
 ## 母仓库
 
-[LLM Subscription Router](https://github.com/ken050210/llm-subscription-router) 同步加入 `gemini-4-argon`、`抗截断-gemini-4-argon` 和 `实验性-流式抗截断-gemini-4-argon`。模板与已有运行配置是两份数据，拉取源码不会替换已有运行配置；添加时复用自己的 Vertex 账号与路由。母仓库的普通 OpenAI-compatible 账号支持自定义上游 URL；本独立网关现在也支持 OpenAI 兼容格式的[自定义上游](../README.md#自定义上游)。
+[LLM Subscription Router](https://github.com/ken050210/llm-subscription-router) 同步加入 `gemini-4-argon`、`抗截断-gemini-4-argon` 和 `实验性-流式抗截断-gemini-4-argon`。模板与已有运行配置是两份数据，拉取源码不会替换已有运行配置；添加时复用自己的 Vertex 账号与路由。母仓库的普通 OpenAI-compatible 账号支持自定义上游 URL；本独立网关现在也支持 OpenAI 兼容格式的[自定义上游](GATEWAY.md#自定义上游)。
 
 ## 官方依据
 

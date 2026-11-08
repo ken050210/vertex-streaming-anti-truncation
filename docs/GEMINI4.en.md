@@ -20,7 +20,7 @@ In the model manager, enter `gemini-4-argon`, select the normal, buffered or str
 
 The gateway supports full service-account JSON, Vertex Express API keys and short-lived OAuth access tokens. Express uses `global` and does not require a project ID. An Express key is not an arbitrary AI Studio key; Gemini 4 entitlement and availability still depend on Google and the account. Live Express entitlement for Argon has not been tested here.
 
-You can customize Gemini model IDs and client-facing names. Besides Google's Vertex endpoints, the standalone gateway can use an OpenAI-compatible service that serves Gemini models; see [Custom upstream](../README.en.md#custom-upstream). Argon's thinking level and similar fields are then sent upstream as-is, and whether they take effect is up to that service; streaming anti-truncation does not use Vertex's native argument stream there. Connecting Tavern's custom OpenAI connection to this local gateway is a separate matter from which upstream the gateway uses.
+You can customize Gemini model IDs and client-facing names. Besides Google's Vertex endpoints, the standalone gateway can use an OpenAI-compatible service that serves Gemini models; see [Custom upstream](GATEWAY.en.md#custom-upstream). Argon's thinking level and similar fields are then sent upstream as-is, and whether they take effect is up to that service; streaming anti-truncation does not use Vertex's native argument stream there. Connecting Tavern's custom OpenAI connection to this local gateway is a separate matter from which upstream the gateway uses.
 
 ## Request compatibility
 
@@ -99,7 +99,7 @@ Offline tests with simulated responses cover the cap for each entry point, joini
 
 ## Parent router
 
-[LLM Subscription Router](https://github.com/ken050210/llm-subscription-router) adds `gemini-4-argon`, `抗截断-gemini-4-argon` and `实验性-流式抗截断-gemini-4-argon`. The tracked template and existing runtime configuration are separate: pulling source does not replace runtime configuration. Reuse your Vertex account and route when adding these models. The parent's ordinary OpenAI-compatible account type permits custom upstream URLs; this standalone gateway now supports an OpenAI-compatible [custom upstream](../README.en.md#custom-upstream) too.
+[LLM Subscription Router](https://github.com/ken050210/llm-subscription-router) adds `gemini-4-argon`, `抗截断-gemini-4-argon` and `实验性-流式抗截断-gemini-4-argon`. The tracked template and existing runtime configuration are separate: pulling source does not replace runtime configuration. Reuse your Vertex account and route when adding these models. The parent's ordinary OpenAI-compatible account type permits custom upstream URLs; this standalone gateway now supports an OpenAI-compatible [custom upstream](GATEWAY.en.md#custom-upstream) too.
 
 ## Sources and validation
 

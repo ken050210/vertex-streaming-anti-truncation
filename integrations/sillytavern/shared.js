@@ -2,7 +2,7 @@ import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
 import { validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.10.0";
+export const PLUGIN_VERSION = "0.11.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -109,27 +109,27 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     }
     let reason = bypassReason(body, imageEnabled && mode === "off" ? "buffered" : mode);
     if (!reason && !direct && usesTools(body) && !await ensureBackend(TOOLS_FEATURE)) reason = "server-tools";
-    const tagStop = !direct && mode !== "off" ? getTagStop() : null;
+    const tagStop = !reason && mode !== "off" ? getTagStop() : null;
     delete body.vertex_tucao_stop;
     delete body.vertex_tag_stop;
+    // Without a server plugin (TauriTavern), `direct` adds the transport to ST's
+    // own request here and restores the reply below.
+    let prepared;
+    if (direct && !reason) {
+      try { prepared = direct.prepare(body, mode, tagStop); }
+      catch (error) { onStatus({ error: error.code || "invalid_request" }); throw error; }
+      reason = prepared.bypass ?? null;
+    }
     if (!reason && tagStop) {
       try { validateTagStopRule(tagStop); }
       catch (error) { onStatus({ error: error.code }); throw error; }
-      if (!await ensureBackend(TAG_STOP_FEATURE)) {
+      if (!direct && !await ensureBackend(TAG_STOP_FEATURE)) {
         onStatus({ error: "tag_stop_not_supported" }); throw new Error("tag_stop_not_supported");
       }
     }
     if (imageEnabled) {
       if (!["current-turn", "all"].includes(imageMode) || reason) { onStatus({ error: "image_input_requires_supported_request", bypass: reason }); throw new Error("image_input_requires_supported_request"); }
       body.vertex_image_input = imageMode;
-    }
-    // Without a server plugin (TauriTavern), `direct` adds the transport to ST's
-    // own request here and restores the reply below.
-    let prepared;
-    if (direct && !reason) {
-      try { prepared = direct.prepare(body, mode); }
-      catch (error) { onStatus({ error: error.code || "invalid_request" }); throw error; }
-      reason = prepared.bypass ?? null;
     }
     let payload = reason ? null : JSON.stringify(prepared?.body ??
       { ...body, vertex_anti_truncation: mode, ...(tagStop ? { vertex_tag_stop: tagStop } : {}), ...(getLongDecode() === true ? { vertex_long_decode: true } : {}) });
@@ -139,7 +139,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (reason && !unicodeEnabled) { onStatus({ bypass: reason }); return originalFetch(input, init); }
     // Old plugins ignore image settings and Continue semantics. Check only
     // eligible plugin requests; disabled/bypass routes retain ST's behavior.
-    if (!reason && (imageEnabled || body.type === "continue") && !await ensureBackend()) {
+    if (!reason && !direct && (imageEnabled || body.type === "continue") && !await ensureBackend()) {
       onStatus({ error: "plugin_not_ready" }); throw new Error("plugin_not_ready");
     }
     onStatus({ mode, bypass: reason, unicode });

@@ -135,31 +135,31 @@ function mount() {
     showStatus();
   });
   panel.append(label, select, inputLabel, input);
+  const tagStop = document.createElement("label");
+  tagStop.className = "checkbox_label";
+  tagStop.htmlFor = "vertex_tag_stop";
+  const stopBox = Object.assign(document.createElement("input"), { type: "checkbox", id: tagStop.htmlFor, checked: saved.tucaoStop ?? true });
+  const tagLabel = Object.assign(document.createElement("label"), { htmlFor: "vertex_stop_tag", textContent: "截停标签名（不含尖括号）" });
+  const tagInput = Object.assign(document.createElement("input"), { type: "text", id: tagLabel.htmlFor, className: "text_pole", value: saved.stopTag ?? DEFAULT_STOP_TAG, maxLength: 64, placeholder: "tucao 或 A" });
+  const countLabel = Object.assign(document.createElement("label"), { htmlFor: "vertex_stop_count", textContent: "完整出现次数" });
+  const countInput = Object.assign(document.createElement("input"), { type: "number", id: countLabel.htmlFor, className: "text_pole", min: "1", step: "1", value: saved.stopCount ?? DEFAULT_STOP_COUNT });
+  tagInput.disabled = countInput.disabled = !stopBox.checked;
+  stopBox.addEventListener("change", () => {
+    settings().tucaoStop = stopBox.checked;
+    tagInput.disabled = countInput.disabled = !stopBox.checked;
+    context.saveSettingsDebounced();
+    showStatus();
+  });
+  for (const field of [tagInput, countInput]) field.addEventListener("change", () => {
+    settings().stopTag = tagInput.value.trim();
+    settings().stopCount = Number(countInput.value);
+    context.saveSettingsDebounced();
+  });
+  tagStop.append(stopBox, Object.assign(document.createElement("span"), { textContent: "自定义标签截停" }));
+  panel.append(tagStop, tagLabel, tagInput, countLabel, countInput, Object.assign(document.createElement("small"), { textContent:
+    "默认在本次正文的第二个完整 <tucao>…</tucao> 后停止。标签区分大小写，只匹配无属性的标签。结束标签会保留，后面的内容会被丢弃，包括 MVU 更新块。仅在抗截断开启时生效。" }));
   // TauriTavern's own backend sends the request, so it cannot follow long-decode continuation tokens.
   if (!direct) {
-    const tagStop = document.createElement("label");
-    tagStop.className = "checkbox_label";
-    tagStop.htmlFor = "vertex_tag_stop";
-    const stopBox = Object.assign(document.createElement("input"), { type: "checkbox", id: tagStop.htmlFor, checked: saved.tucaoStop ?? true });
-    const tagLabel = Object.assign(document.createElement("label"), { htmlFor: "vertex_stop_tag", textContent: "截停标签名（不含尖括号）" });
-    const tagInput = Object.assign(document.createElement("input"), { type: "text", id: tagLabel.htmlFor, className: "text_pole", value: saved.stopTag ?? DEFAULT_STOP_TAG, maxLength: 64, placeholder: "tucao 或 A" });
-    const countLabel = Object.assign(document.createElement("label"), { htmlFor: "vertex_stop_count", textContent: "完整出现次数" });
-    const countInput = Object.assign(document.createElement("input"), { type: "number", id: countLabel.htmlFor, className: "text_pole", min: "1", step: "1", value: saved.stopCount ?? DEFAULT_STOP_COUNT });
-    tagInput.disabled = countInput.disabled = !stopBox.checked;
-    stopBox.addEventListener("change", () => {
-      settings().tucaoStop = stopBox.checked;
-      tagInput.disabled = countInput.disabled = !stopBox.checked;
-      context.saveSettingsDebounced();
-      showStatus();
-    });
-    for (const input of [tagInput, countInput]) input.addEventListener("change", () => {
-      settings().stopTag = tagInput.value.trim();
-      settings().stopCount = Number(countInput.value);
-      context.saveSettingsDebounced();
-    });
-    tagStop.append(stopBox, Object.assign(document.createElement("span"), { textContent: "自定义标签截停" }));
-    panel.append(tagStop, tagLabel, tagInput, countLabel, countInput, Object.assign(document.createElement("small"), { textContent:
-      "默认开启：tucao，2 次。例如 A + 1 次，在完整 <A>…</A> 后停止。精确区分大小写，不匹配带属性的标签；保留命中的结束标签，丢弃后续所有内容（包括其后的 MVU 更新块）。仅抗截断生效时应用，每次请求重新计数。" }));
     const longDecode = document.createElement("label");
     longDecode.className = "checkbox_label";
     longDecode.htmlFor = "vertex_long_decode";
@@ -185,15 +185,15 @@ function mount() {
       getImageInput: () => direct ? "off" : settings().imageInput || "off",
       getUnicodeInput: () => settings().unicodeInput === true,
       getLongDecode: () => !direct && settings().longDecode === true,
-      getTagStop: () => direct || settings().tucaoStop === false ? null
+      getTagStop: () => settings().tucaoStop === false ? null
         : { tag: settings().stopTag ?? DEFAULT_STOP_TAG, count: settings().stopCount ?? DEFAULT_STOP_COUNT },
       getUserFloor: () => {
         const context = SillyTavern.getContext();
         return latestUserInput(context.chat, context.chatMetadata?.variables);
       },
       // Image input, Continue and client tools require a matching server plugin.
-      ensureBackend: async feature => Boolean(direct) ||
-        Boolean((backendReady || await checkBackend(true)) && (!feature || backendFeatures.includes(feature))), onStatus: updateStatus, direct });
+      ensureBackend: async feature => (backendReady || await checkBackend(true)) && (!feature || backendFeatures.includes(feature)),
+      onStatus: updateStatus, direct });
   }
   if (!direct) void checkBackend(true);
 }
