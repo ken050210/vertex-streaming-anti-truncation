@@ -15,7 +15,8 @@ async function fixture(t) {
   const root = path.join(temporary, "repo");
   t.after(() => rm(temporary, { recursive: true, force: true }));
   const files = ["package-lock.json", "assets/fonts/NotoSansCJKsc-Regular.otf", "assets/fonts/OFL.txt", "manifest.json", "package.json", "integrations/sillytavern/index.js", "integrations/sillytavern/shared.js",
-    "integrations/sillytavern/style.css", "integrations/sillytavern/server.mjs", "src/current.mjs", "src/tag-stop-rule.mjs", "src/unicode-input.mjs", "src/vertex-schema.mjs", "src/wire.mjs", "LICENSE", "NOTICE.md",
+    "assets/fonts/NotoColorEmoji.ttf", "assets/fonts/NotoEmoji-OFL.txt", "integrations/sillytavern/paygo.js", "integrations/sillytavern/style.css", "integrations/sillytavern/server.mjs",
+    ...["current","anti-truncation","completion-integrity","completion-stream","gemini4","sillytavern","tag-stop","tag-stop-rule","tauritavern","unicode-input","unsupported-params","vertex-native","vertex-partial-args","vertex-protocol","vertex-schema","vertex-text-stream","wire"].map(name=>"src/"+name+".mjs"), "LICENSE", "NOTICE.md",
     "LICENSES/Antigravity-gateway-MIT.txt", "docs/SILLYTAVERN.md", ...["install.mjs", "install-windows.cmd", "install.sh", "README.txt"].map(file => `integrations/sillytavern/installer/${file}`)];
   for (const file of files) {
     await mkdir(path.dirname(path.join(root, file)), { recursive: true });

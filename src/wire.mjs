@@ -14,20 +14,92 @@ const redactions = [
   [/\b(?:Bearer\s+)?(?:ya29\.|AIza)[\w.-]{16,}/g, "[key]"],
   [/[\w+=-]{40,}/g, "[token]"],
 ];
-// A Google error envelope (native, or the compatible endpoint's one-element array) reduced
-// to fixed fields: the google.rpc status, the ErrorInfo reason and error.message with markup,
-// emails, keys, long tokens and the given secret removed, capped at 240 characters.
-export function googleErrorDetail(body, secret) {
-  const error = (Array.isArray(body) ? body[0] : body)?.error;
-  if (!isObject(error)) return null;
-  const info = Array.isArray(error.details) ? error.details.find(item => item?.["@type"] === "type.googleapis.com/google.rpc.ErrorInfo") : null;
-  let message = typeof error.message === "string" ? error.message : "";
+function diagnosticText(value, secret) {
+  let message = typeof value === "string" ? value : "";
   if (secret) message = message.split(secret).join("[key]");
   for (const [pattern, replacement] of redactions) message = message.replace(pattern, replacement);
   message = message.replace(/[\s\u0000-\u001f\u007f]+/g, " ").trim();
-  if (message.length > 240) message = message.slice(0, 239).replace(/[\ud800-\udbff]$/, "") + "…";
-  const detail = { status: enumToken(error.status), reason: enumToken(info?.reason), message: message || null };
-  return detail.status || detail.reason || detail.message ? detail : null;
+  return message.length > 4096 ? message.slice(0, 4095).replace(/[\ud800-\udbff]$/, "") + "…" : message;
+}
+
+// Only the provider's diagnostic fields go to the client. Logs never receive its message.
+export function googleErrorDetail(body, secret) {
+  const root = Array.isArray(body) ? body[0] : body;
+  const feedback = root?.promptFeedback;
+  if (!root?.candidates?.length && (feedback?.blockReason || feedback?.blockReasonMessage)) {
+    const blocked = Array.isArray(feedback.safetyRatings) ? feedback.safetyRatings
+      .filter(rating => rating?.blocked === true).map(rating => enumToken(rating.category)).filter(Boolean) : [];
+    return { status: null, reason: enumToken(feedback.blockReason), message: diagnosticText(feedback.blockReasonMessage, secret) || null,
+      promptBlocked: true, ...(blocked.length ? { blockedCategories: blocked } : {}) };
+  }
+  const error = root?.error;
+  if (!isObject(error) && typeof error !== "string") return null;
+  const info = Array.isArray(error.details) ? error.details.find(item => item?.["@type"] === "type.googleapis.com/google.rpc.ErrorInfo") : null;
+  const code = Number.isInteger(error.code) && error.code >= 400 && error.code <= 599 ? error.code : null;
+  const detail = { status: enumToken(error.status), reason: enumToken(info?.reason ?? error.details?.reason ?? error.code),
+    message: diagnosticText(typeof error === "string" ? error : error.message, secret) || null, ...(code ? { code } : {}) };
+  return code || detail.status || detail.reason || detail.message ? detail : null;
+}
+
+export function upstreamMessage(detail, fallback) {
+  if (!detail) return fallback;
+  return [detail.promptBlocked && "Google 拒绝了输入", detail.code && `上游代码 ${detail.code}`, detail.status, detail.reason, ...(detail.blockedCategories ?? []), detail.message]
+    .filter(Boolean).join(" · ") || fallback;
+}
+
+export function checkSseError(event, data, code) {
+  if (event !== "error") return;
+  let body;
+  try { body = JSON.parse(data); } catch { body = data; }
+  const root = Array.isArray(body) ? body[0] : body;
+  throw Object.assign(protocolError(code), { upstreamBody: root?.error || root?.promptFeedback ? root : { error: root } });
+}
+
+export function checkPromptFeedback(body) {
+  const feedback = body?.promptFeedback;
+  if (!body?.candidates?.length && (feedback?.blockReason || feedback?.blockReasonMessage)) {
+    throw Object.assign(protocolError("google_prompt_blocked"), { status: 400, upstreamBody: body });
+  }
+}
+
+// Google's OpenAI-compatible API can return a refusal instead of an error
+// envelope. Only inspect this protocol field, never ordinary assistant text.
+export function checkCompatibleRejection(body) {
+  checkPromptFeedback(body);
+  if (!Array.isArray(body?.choices)) return;
+  for (const choice of body.choices) {
+    const message = choice?.delta ?? choice?.message;
+    if (!message?.content && typeof message?.refusal === "string" && message.refusal.trim()) {
+      throw Object.assign(protocolError("upstream_refusal"), { status: 400, upstreamBody: { error: { message: message.refusal } } });
+    }
+  }
+}
+
+// The HTTP status survives a stalled, malformed or oversized error body.
+export async function readUpstreamError(response, credential) {
+  const limit = 16 * 1024;
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  let text = "", size = 0, ended = false;
+  const decoder = new TextDecoder();
+  const timer = setTimeout(() => reader.cancel().catch(() => {}), 5000);
+  try {
+    while (size < limit) {
+      const { done, value } = await reader.read();
+      if (done) { ended = true; break; }
+      text += decoder.decode(value.subarray(0, limit - size), { stream: true });
+      size += value.byteLength;
+    }
+    text += decoder.decode();
+  } catch { return null; } finally { clearTimeout(timer); reader.cancel().catch(() => {}); }
+  try {
+    const body = JSON.parse(text);
+    return googleErrorDetail(body, credential) ?? (typeof body?.message === "string" ? googleErrorDetail({ error: body }, credential) : null);
+  }
+  catch {
+    return ended && /^text\/plain\b/i.test(response.headers.get("content-type") ?? "") && !/^\s*[<{\[]/.test(text)
+      ? googleErrorDetail({ error: text }, credential) : null;
+  }
 }
 // Logs and events keep only the two codes, never the message.
 export function upstreamErrorLogFields(value) {

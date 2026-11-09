@@ -16,10 +16,12 @@ const reasons = { "existing-tools": "旧版 functions 工具", "tool-choice": "�
 const errors = { unicode_floor_required: "找不到真实用户楼层，也没有聊天变量“我的行动”，已停止发送。请先输入消息，或关闭 Unicode 转码。",
   unicode_input_too_large: "转码后的请求超过大小限制，已停止发送。请缩短输入或关闭 Unicode 转码。",
   plugin_not_ready: "服务端插件未就绪或版本太旧，本次请求已停止发送。点“检查插件连接”查看原因和更新办法。",
+  paygo_image_backend_required: "PayGo 图片转码需要配套的新版抗截断服务端插件。请更新后重启酒馆。",
+  paygo_long_decode_unsupported: "当前 PayGo 后端不支持 Gemini 4 分段续写。请降低最大回复长度，或关闭 long decode 后使用单次上限。",
   tag_stop_not_supported: "服务端插件不支持自定义标签截停。请更新服务端插件并重启酒馆，或关闭此开关。",
   invalid_tag_stop: "截停标签名须为 1–64 位字母、数字、下划线、点、冒号或连字符，以字母或下划线开头；次数须为正整数。",
   image_input_requires_supported_request: "图片输入不支持此请求，已停止发送，未改用明文。请去掉不支持的内容或换用支持的模型，或关闭图片输入。",
-  image_input_unsupported_characters: "图片输入不支持 emoji、控制字符或字体缺字，已停止发送。请删除这些字符，或改用“图片·当前轮”/关闭图片输入。",
+  image_input_unsupported_characters: "图片转码遇到无法绘制的字符。请替换提示位置的字符，或改用“图片·当前轮”。",
   image_input_too_large: "转成图片后超过大小或页数限制，已停止发送。请缩短对话，或改用“图片·当前轮”。",
   image_renderer_unavailable: "服务端图片渲染组件不可用。请在服务端插件目录运行 npm ci --ignore-scripts 后重启酒馆。",
   image_render_failed: "服务端图片渲染失败，已停止发送，未改用明文。",
@@ -42,24 +44,26 @@ function showStatus(text = "") {
 }
 function updateStatus(result) {
   if (result.error) {
+    if (result.message && result.message !== result.error) return showStatus(result.message);
     const code = result.status ? `${result.error}，HTTP ${result.status}` : result.error;
     const cause = result.bypass ? `原因：${reasons[result.bypass] ?? result.bypass}。` : "";
-    return showStatus((errors[result.error] || `请求失败（${code}）。请查看酒馆错误提示；未自动重试。`) + cause);
+    const where = result.character && result.param ? ` ${result.character}，位置 ${result.param}。` : "";
+    return showStatus((errors[result.error] || `请求失败（${code}）。请查看酒馆错误提示；未自动重试。`) + where + cause);
   }
-  const unicode = result.unicode ? { encoded: "已对当前用户输入的匹配文本转码。", "floor-not-found": "请求中没有找到当前用户输入的原文，按原文发送。", "no-encodable-text": "当前用户输入没有需要转码的字符。" }[result.unicode.reason] || "" : "";
+  const unicode = result.unicode ? { encoded: result.unicode.method === "all-context" ? `已对全部上下文中的 ${result.unicode.matchedMessages} 条消息转码。` : "已对当前用户输入的匹配文本转码。", "floor-not-found": "请求中没有找到当前用户输入的原文，按原文发送。", "no-encodable-text": "所选范围没有需要转码的字符。" }[result.unicode.reason] || "" : "";
   const noText = result.image?.mode === "current-turn"
     ? "图片·当前轮：最后一条 AI 消息之后没有可转换的文本（如点击“继续”或以 AI 消息结尾的预填充），本次按原文发送。"
     : "图片·全部会话：没有可转换的文本，本次按原文发送。";
   const image = result.image ? { encoded: `已将文本转为图片发送${result.image.pages ? `（${result.image.pages} 页）` : ""}。`,
     "no-text": noText }[result.image.reason] || "" : "";
-  const delivery = result.image && { "native-streaming": "正文按流式接收。", buffered: "正文整段返回。" }[result.image.transport];
+  const delivery = result.image && { "native-streaming": "正文按流式接收。", "paygo-streaming": "正文经 PayGo 流式接收。", buffered: "正文整段返回。" }[result.image.transport];
   const bypass = result.bypass && result.bypass !== "disabled" ? `本次使用普通 Vertex：${reasons[result.bypass] ?? result.bypass}。` : "";
   const continuation = result.continuation ? "本次“继续”已请求仅生成新增续文，由酒馆追加到原消息。" : "";
   const limit = result.outputLimit, tokens = value => value.toLocaleString("en-US");
   const output = !limit ? "" : limit.longDecode
     ? `本次输出上限 ${tokens(limit.applied)} token（含思考）超过单次上限，写满后自动续写。`
     : `本次输出上限按单次上限 ${tokens(limit.applied)} token（含思考）发送，预设未改动；写满会停止并标记为长度截断。`;
-  showStatus([unicode, image, delivery, bypass, continuation, output].filter(Boolean).join(" "));
+  showStatus([result.payGo && "本次通过 Vertex PayGo 发送。", unicode, image, delivery, bypass, continuation, output].filter(Boolean).join(" "));
 }
 
 async function checkBackend(silent = false) {
@@ -120,16 +124,17 @@ function mount() {
   input.className = "text_pole";
   for (const [value, text] of [
     ["off", "关闭（保持原文）"],
-    ["unicode", "Unicode（最新用户楼层或“我的行动”变量，及其副本）"],
+    ["unicode", "Unicode · 当前输入（最新用户楼层或“我的行动”及其副本）"],
+    ["unicode-all", "Unicode · 全部上下文（含系统提示、历史和当前输入）"],
     ["current-turn", "图片·当前轮（本轮用户文本）"],
     ["all", "图片·全部会话（用户与 AI 文本）"],
   ]) if (!direct || !["current-turn", "all"].includes(value)) input.add(new Option(text, value));
   const saved = settings();
-  input.value = saved.unicodeInput === true ? "unicode"
+  input.value = saved.unicodeInput === "all" ? "unicode-all" : saved.unicodeInput === true ? "unicode"
     : !direct && ["current-turn", "all"].includes(saved.imageInput) ? saved.imageInput : "off";
   input.addEventListener("change", () => {
     const current = settings();
-    current.unicodeInput = input.value === "unicode";
+    current.unicodeInput = input.value === "unicode-all" ? "all" : input.value === "unicode";
     current.imageInput = ["current-turn", "all"].includes(input.value) ? input.value : "off";
     context.saveSettingsDebounced();
     showStatus();
@@ -182,8 +187,10 @@ function mount() {
   if (!window[key]) {
     window[key] = true;
     window.fetch = createFetchInterceptor(window.fetch.bind(window), { origin: location.origin, getMode: mode,
+      payGoInstalled: !direct && window.fetch.name === "payGoFetch",
+      getRequestHeaders: () => SillyTavern.getContext().getRequestHeaders(),
       getImageInput: () => direct ? "off" : settings().imageInput || "off",
-      getUnicodeInput: () => settings().unicodeInput === true,
+      getUnicodeInput: () => settings().unicodeInput,
       getLongDecode: () => !direct && settings().longDecode === true,
       getTagStop: () => settings().tucaoStop === false ? null
         : { tag: settings().stopTag ?? DEFAULT_STOP_TAG, count: settings().stopCount ?? DEFAULT_STOP_COUNT },

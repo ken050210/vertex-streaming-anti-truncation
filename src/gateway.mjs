@@ -16,7 +16,7 @@ import { convertGeminiPrefill, fetchWithGeminiRecovery, compatibilityLogFields }
 import { capGemini4Output, outputLimitHeaders, prepareGemini4Request, validateGemini4Connection } from "./gemini4.mjs";
 import { fetchLongDecode, longDecodeUrl } from "./vertex-long-decode.mjs";
 import { documentedUnsupported, dropParams } from "./unsupported-params.mjs";
-import { googleErrorDetail, trafficType, upstreamErrorLogFields } from "./wire.mjs";
+import { checkCompatibleRejection, googleErrorDetail, readUpstreamError, sseData, trafficType, upstreamErrorLogFields, upstreamMessage } from "./wire.mjs";
 import { waitWithSignal } from "./abort.mjs";
 import { createAccountPool } from "./account-pool.mjs";
 import { createTagStop } from "./tag-stop.mjs";
@@ -77,7 +77,8 @@ async function readCompletion(response, limit, native, model, toolName, stop) {
   let parsed;
   try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
   catch { throw new Problem(502, "invalid_upstream_json"); }
-  if (parsed?.error) throw new Problem(502, "upstream_error_object");
+  if ((Array.isArray(parsed) ? parsed[0] : parsed)?.error) throw Object.assign(new Problem(502, "upstream_error_object"), { upstreamBody: parsed });
+  if (!native) checkCompatibleRejection(parsed);
   if (native) { stop?.process(parsed); parsed = translateNativeCompletion(parsed, model); }
   if (!parsed || parsed.error || !Array.isArray(parsed.choices) || !parsed.choices.length) {
     throw new Problem(502, "invalid_upstream_completion");
@@ -95,25 +96,6 @@ async function readCompletion(response, limit, native, model, toolName, stop) {
     if (!inspected.valid) throw Object.assign(new Problem(502, inspected.reason), { integrity: inspected.integrity });
   }
   return parsed;
-}
-// A bounded prefix of a provider error body, reduced to its fixed fields. The status
-// decides the reply even if the body is broken, slow or not JSON.
-const ERROR_DETAIL_BYTES = 16 * 1024;
-async function readUpstreamError(response, credential) {
-  const reader = response.body?.getReader();
-  if (!reader) return null;
-  const chunks = [];
-  let size = 0;
-  const timer = setTimeout(() => reader.cancel().catch(() => {}), 5000);
-  try {
-    while (size < ERROR_DETAIL_BYTES) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value); size += value.byteLength;
-    }
-  } catch { /* keep what arrived */ } finally { clearTimeout(timer); reader.cancel().catch(() => {}); }
-  try { return googleErrorDetail(JSON.parse(Buffer.concat(chunks).subarray(0, ERROR_DETAIL_BYTES).toString("utf8")), credential); }
-  catch { return null; }
 }
 function validate(payload) {
   if (!payload || Array.isArray(payload) || typeof payload !== "object") throw new Problem(400, "invalid_request");
@@ -220,7 +202,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           const modelKey = custom ? geminiModelKey(route.upstreamModel) : route.upstreamModel;
           payload = prepareGemini4Request(payload, modelKey);
           try {
-            const prepared = prepareUnicodeInput(payload, config.unicodeInput === true, config.bodyLimitBytes);
+            const prepared = prepareUnicodeInput(payload, config.unicodeInput, config.bodyLimitBytes);
             payload = prepared.payload; unicode = prepared.metadata;
           } catch (error) {
             if (["unicode_floor_required", "unicode_input_too_large"].includes(error.code)) throw new Problem(error.status, error.code);
@@ -322,10 +304,8 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
             if (upstream.status === 401 && !pool) rejectedCredentials.add(config);
             const retryAfter = upstream.headers.get("retry-after");
             if (retryAfter && /^\d{1,6}$/.test(retryAfter)) response.setHeader("retry-after", retryAfter);
-            // A matched prompt rejection keeps only its code; other errors add Google's fixed fields.
             const prompt = Boolean(upstream.routerPromptSubmissionError);
-            if (prompt) await upstream.body?.cancel().catch(() => {});
-            const detail = prompt ? null : await readUpstreamError(upstream, credential);
+            const detail = await readUpstreamError(upstream, credential);
             throw Object.assign(new Problem(upstream.status, prompt ? "prompt_submission_failed" : "upstream_http_error"), { upstreamError: detail });
           }
           status = upstream.status;
@@ -422,10 +402,12 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       if (status !== 499 && !deadline.aborted) upstreamError = error.upstreamError ?? (error.upstreamBody ? googleErrorDetail(error.upstreamBody, credential) : null);
       integrity = { ...integrity, outcome: status === 499 ? "cancelled" :
         ["empty", "incomplete"].includes(integrity?.outcome) ? integrity.outcome : "error" };
-      if (response.headersSent) response.destroy();
-      else send(response, status === 499 ? 502 : status, { error: { code, message: code, type: "gateway_error", requestId,
+      const payload = { error: { code, message: upstreamMessage(upstreamError, code), type: "gateway_error", requestId,
         ...integrityLogFields(integrity), ...(error.status === 400 && error.param ? { param: error.param } : {}),
-        ...(upstreamError ? { upstreamError } : {}) } });
+        ...(upstreamError ? { upstreamError } : {}) } };
+      if (!response.headersSent) send(response, status === 499 ? 502 : status, payload);
+      else if (stream && upstreamError && !response.destroyed) response.end(sseData(payload));
+      else response.destroy();
     } finally {
       active--;
       response.off("close", onClose);

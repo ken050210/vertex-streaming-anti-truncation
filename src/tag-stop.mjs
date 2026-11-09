@@ -75,8 +75,8 @@ export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_
     stream(response) {
       const encoder = new TextEncoder();
       let controller;
-      const parser = createSseParser(({ raw, data }) => {
-        if (!data || data.trim() === "[DONE]") { controller.enqueue(encoder.encode(raw + "\n\n")); return; }
+      const parser = createSseParser(({ raw, data, event }) => {
+        if (!data || data.trim() === "[DONE]" || event === "error") { controller.enqueue(encoder.encode(raw + "\n\n")); return; }
         let frame;
         // Preserve the existing native decoder's error contract before a stop.
         try { frame = JSON.parse(data); }

@@ -3,35 +3,23 @@ import assert from "node:assert/strict";
 import { translateNativeCompletion, wrapNativeStream } from "../src/vertex-protocol.mjs";
 import { nativeRequestBody, supportsNativeRequest } from "../src/vertex-native.mjs";
 import { wrapNativeTextStream } from "../src/vertex-text-stream.mjs";
-import { guardCompletionStream, inspectCompletion } from "../src/completion-integrity.mjs";
+import { guardCompletionStream } from "../src/completion-integrity.mjs";
 
 const sse = value => "data: " + JSON.stringify(value) + "\n\n";
 const records = wire => wire.split("\n").filter(line => line.startsWith("data:") && !line.includes("[DONE]"))
   .map(line => JSON.parse(line.slice(5)));
 
-test("native prompt blocks retain original codes without exposing rejection text", async () => {
+test("native prompt blocks surface the provider's rejection in JSON and both SSE transports", async () => {
   // One code the finish-reason table knows and one it does not.
   for (const blockReason of ["BLOCKLIST", "JAILBREAK"]) {
     for (const candidates of [undefined, []]) {
       const native = { candidates, promptFeedback: { blockReason, blockReasonMessage: "private provider detail" } };
-      const completion = translateNativeCompletion(native, "fixture");
-      assert.equal(inspectCompletion(completion).valid, true);
-      assert.equal(completion.choices[0].finish_reason, "content_filter");
-      assert.equal(completion.choices[0].native_finish_reason, blockReason);
-      assert.equal(JSON.stringify(completion).includes("private provider detail"), false);
-
-      const wire = await guardCompletionStream(wrapNativeStream(new Response(sse(native)), "fixture")).text();
-      const choice = records(wire).flatMap(record => record.choices).find(item => item.finish_reason);
-      assert.equal(choice.finish_reason, "content_filter");
-      assert.equal(choice.native_finish_reason, blockReason);
-      assert.match(wire, /\[DONE\]/);
-      assert.equal(wire.includes("private provider detail"), false);
-
-      const text = await guardCompletionStream(wrapNativeTextStream(new Response(sse(native)), "router_emit_fixture", "fixture")).text();
-      const textChoice = records(text).flatMap(record => record.choices).find(item => item.finish_reason);
-      assert.equal(textChoice.finish_reason, "content_filter");
-      assert.equal(textChoice.native_finish_reason, blockReason);
-      assert.equal(text.includes("private provider detail"), false);
+      const failure = error => error.code === "google_prompt_blocked" && error.status === 400
+        && error.upstreamBody?.promptFeedback?.blockReasonMessage === native.promptFeedback.blockReasonMessage
+        && error.upstreamBody?.promptFeedback?.blockReason === blockReason;
+      assert.throws(() => translateNativeCompletion(native, "fixture"), failure);
+      await assert.rejects(wrapNativeStream(new Response(sse(native)), "fixture").text(), failure);
+      await assert.rejects(wrapNativeTextStream(new Response(sse(native)), "router_emit_fixture", "fixture").text(), failure);
     }
   }
 });

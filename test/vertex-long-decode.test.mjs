@@ -74,7 +74,7 @@ test("a streamed continuation that fails ends with an error event; an interrupte
   const continued = () => sse({ candidates: [{ ...text("A"), finishReason: "CONTINUATION", continuationToken: "token-1" }] });
   const failed = upstream(continued(), new Response("unavailable", { status: 503 }));
   const ending = events(await (await fetchLongDecode(failed.send, body, true)).text()).at(-1);
-  assert.deepEqual(ending, { error: { code: 503, message: "Long decode continuation request failed with HTTP 503." } });
+  assert.deepEqual(ending, { error: { code: 503, message: "unavailable" } });
   const interrupted = upstream(sse({ candidates: [{ ...text("A"), continuationToken: "checkpoint-1" }] }));
   assert.equal(events(await (await fetchLongDecode(interrupted.send, body, true)).text()).length, 1);
   assert.equal(interrupted.sent.length, 1);

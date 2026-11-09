@@ -4,9 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
 export const IMAGE_INPUT_MODES = ['off', 'current-turn', 'all'];
 const fail = (status, code) => Object.assign(new Error(code), { status, code });
-// A bundled CJK font cannot faithfully render every control/emoji sequence.
-// Text-presentation symbols such as ♥ © ™ are left to the glyph coverage check.
-const UNSUPPORTED = /[\p{Emoji_Presentation}\p{Regional_Indicator}\p{Emoji_Modifier}\u200d\ufe0f\u20e3\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u;
+const CJK = '20px RouterCJK';
+const EMOJI = '20px RouterEmoji';
+const emojiSequence = /^\p{RGI_Emoji}$/v;
+const control = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/u;
 // Exempt from glyph coverage: layout whitespace, and format characters that draw nothing
 // (ZWSP, ZWNJ, WJ, BOM, VS15), so invisible pasted characters do not reject the request.
 const NO_GLYPH = '\n\r\t\u200b\u200c\u2060\ufeff\ufe0e';
@@ -42,10 +43,16 @@ function fontCoverage(font) {
 }
 async function renderer() {
   if (!canvasModule) canvasModule = import('@napi-rs/canvas').then(async mod => {
-    const fontPath = fileURLToPath(new URL('../assets/fonts/NotoSansCJKsc-Regular.otf', import.meta.url));
-    const covers = fontCoverage(await readFile(fontPath));
-    if (!mod.GlobalFonts.registerFromPath(fontPath, 'RouterCJK')) throw Error('font unavailable');
-    return { createCanvas: mod.createCanvas, covers };
+    async function register(file, family) {
+      const fontPath = fileURLToPath(new URL('../assets/fonts/' + file, import.meta.url));
+      const covers = fontCoverage(await readFile(fontPath));
+      if (!mod.GlobalFonts.registerFromPath(fontPath, family)) throw Error('font unavailable');
+      return covers;
+    }
+    const [cjkCovers, emojiCovers] = await Promise.all([
+      register('NotoSansCJKsc-Regular.otf', 'RouterCJK'), register('NotoColorEmoji.ttf', 'RouterEmoji')
+    ]);
+    return { createCanvas: mod.createCanvas, cjkCovers, emojiCovers };
   });
   try { return await canvasModule; } catch { throw fail(503, 'image_renderer_unavailable'); }
 }
@@ -75,20 +82,50 @@ export async function prepareImageInput(input, mode = 'off', limitBytes = 8 * 10
   if (chars > 150000) throw fail(413, 'image_input_too_large');
   if (!chars) return { payload: input, metadata };
   signal?.throwIfAborted();
-  const { createCanvas, covers } = await renderer();
+  const { createCanvas, cjkCovers, emojiCovers } = await renderer();
   const measure = createCanvas(1,1).getContext('2d');
-  measure.font = '20px RouterCJK';
   const segmenter = new Intl.Segmenter('und', { granularity: 'grapheme' });
-  const widths = new Map();
+  const glyphs = new Map();
+  function glyph(segment, param) {
+    if (glyphs.has(segment)) return glyphs.get(segment);
+    // RGI sequences must be shaped in one font, including skin tones, flags,
+    // keycaps and ZWJ ligatures. Prefer the text face for plain text symbols.
+    const emoji = emojiSequence.test(segment);
+    const chars = Array.from(segment);
+    const base = segment.codePointAt(0);
+    const useEmoji = emoji || (!cjkCovers(base) && emojiCovers(base));
+    const covers = useEmoji ? emojiCovers : cjkCovers;
+    for (const c of chars) {
+      const point = c.codePointAt(0);
+      if (NO_GLYPH.includes(c) || (emoji && /[\u200d\ufe0f\u{e0020}-\u{e007f}]/u.test(c))) continue;
+      if (control.test(c) || /[\u200d\ufe0f]/u.test(c) || !covers(point)) {
+        throw Object.assign(fail(400, 'image_input_unsupported_characters'), {param, character:'U+' + point.toString(16).toUpperCase().padStart(4,'0')});
+      }
+    }
+    const font = useEmoji ? EMOJI : CJK;
+    measure.font = font;
+    const entry = {font, width:measure.measureText(segment).width};
+    glyphs.set(segment, entry);
+    return entry;
+  }
+  // Measure and draw identical font runs so Latin kerning and emoji clusters
+  // survive wrapping and the final raster uses the same advances.
+  function layoutLine(ctx, segments, y) {
+    let x = 0, start = 0;
+    while (start < segments.length) {
+      const font = glyphs.get(segments[start]).font;
+      let end = start + 1;
+      while (end < segments.length && glyphs.get(segments[end]).font === font) end++;
+      const run = segments.slice(start,end).join('');
+      ctx.font = font;
+      if (y !== undefined) ctx.fillText(run, 28 + x, y);
+      x += ctx.measureText(run).width;
+      start = end;
+    }
+    return x;
+  }
   async function textParts(text, role, param) {
     if (!text.trim()) return [{type:'text', text}];
-    // Keep input intact by failing explicitly, never replace unknown glyphs silently.
-    // The client error names the part and code point; the message stays the fixed code.
-    for (const character of text) {
-      const point = character.codePointAt(0);
-      if (UNSUPPORTED.test(character) || (!NO_GLYPH.includes(character) && !covers(point))) throw Object.assign(
-        fail(400, 'image_input_unsupported_characters'), { param, character: 'U+' + point.toString(16).toUpperCase().padStart(4, '0') });
-    }
     const lines=[];
     for (const raw of text.replace(/\r\n?/g,'\n').replace(/\t/g,'    ').split('\n')) {
       // Sum cached grapheme widths: re-measuring the growing line made wrapping quadratic per line.
@@ -96,17 +133,16 @@ export async function prepareImageInput(input, mode = 'off', limitBytes = 8 * 10
       // when it closes; on overflow trailing graphemes covering the excess carry to the next line.
       let segs=[], width=0;
       const close = () => {
-        let keep = segs.length, over = keep > 1 ? measure.measureText(segs.join('')).width - 960 : 0;
+        let keep = segs.length, over = keep > 1 ? layoutLine(measure,segs) - 960 : 0;
         while (over > 0) {
-          while (over > 0 && keep > 1) over -= widths.get(segs[--keep]);
-          over = keep > 1 ? measure.measureText(segs.slice(0,keep).join('')).width - 960 : 0;
+          while (over > 0 && keep > 1) over -= glyphs.get(segs[--keep]).width;
+          over = keep > 1 ? layoutLine(measure,segs.slice(0,keep)) - 960 : 0;
         }
-        lines.push(segs.slice(0,keep).join(''));
-        segs = segs.slice(keep); width = segs.reduce((sum, s) => sum + widths.get(s), 0);
+        lines.push(segs.slice(0,keep));
+        segs = segs.slice(keep); width = segs.reduce((sum, s) => sum + glyphs.get(s).width, 0);
       };
       for (const {segment} of segmenter.segment(raw)) {
-        let advance = widths.get(segment);
-        if (advance === undefined) widths.set(segment, advance = measure.measureText(segment).width);
+        const advance = glyph(segment,param).width;
         while (segs.length && width + advance > 960) close();
         segs.push(segment); width+=advance;
       }
@@ -122,9 +158,9 @@ export async function prepareImageInput(input, mode = 'off', limitBytes = 8 * 10
       const ctx=canvas.getContext('2d');
       ctx.fillStyle='#f8f9fa';ctx.fillRect(0,0,canvas.width,canvas.height);
       ctx.fillStyle='#e9ecef';ctx.fillRect(0,0,1024,42);
-      ctx.font='20px RouterCJK';ctx.fillStyle='#212529';
+      ctx.font=CJK;ctx.fillStyle='#212529';
       ctx.fillText(`[Role: ${role.toUpperCase()}] [Part ${page+1}/${pageCount}]`,28,29);
-      rows.forEach((line,i)=>ctx.fillText(line,28,70+i*28));
+      rows.forEach((line,i)=>layoutLine(ctx,line,70+i*28));
       // In @napi-rs/canvas only quality 100 selects lossless WebP (VP8L); lower values are lossy.
       // Pixels decode identically to PNG; full prose pages are about 1.3-3x smaller, one-line pages slightly larger.
       const image=await canvas.encode('webp',100);

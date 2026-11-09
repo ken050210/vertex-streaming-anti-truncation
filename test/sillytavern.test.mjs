@@ -698,11 +698,11 @@ test("plugin failures report their fixed code without consuming the response", a
   const failure = { error: { code: "image_input_unsupported_characters", message: "图片输入转换失败" } };
   reply = () => Response.json(failure, { status: 400 });
   const response = await intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify(body) });
-  assert.deepEqual(statuses.at(-1), { error: "image_input_unsupported_characters", status: 400 });
+  assert.deepEqual(statuses.at(-1), { error: "image_input_unsupported_characters", status: 400, message: "图片输入转换失败" });
   assert.deepEqual(await response.json(), failure);
   reply = () => new Response("<html>Cannot POST</html>", { status: 404 });
   await intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify(body) });
-  assert.deepEqual(statuses.at(-1), { error: 404 });
+  assert.deepEqual(statuses.at(-1), { error: 404, status: 404 });
   reply = () => Response.json(failure, { status: 429 });
   await intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify({ ...body, tools: [{}] }) });
   assert.deepEqual(statuses.at(-1), { bypass: "tool-schema" });
@@ -724,17 +724,84 @@ test("image conversion failures are labelled as image input, not anti-truncation
     const response = await fetch(`http://127.0.0.1:${server.address().port}`, { method: "POST", body: JSON.stringify({ ...body, ...extra }) });
     return { status: response.status, error: (await response.json()).error };
   };
-  const emoji = await post({ vertex_anti_truncation: "off", vertex_image_input: "all", messages: [{ role: "user", content: "你好😀" }] });
-  assert.equal(emoji.status, 400);
-  assert.equal(emoji.error.code, "image_input_unsupported_characters");
-  assert.match(emoji.error.message, /^图片输入转换失败/);
+  const invalid = await post({ vertex_anti_truncation: "off", vertex_image_input: "all", messages: [{ role: "user", content: "你好😀\0" }] });
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.error.code, "image_input_unsupported_characters");
+  assert.equal(invalid.error.character, "U+0000");
+  assert.equal(invalid.error.param, "/messages/0/content");
+  assert.match(invalid.error.message, /^图片输入转换失败/);
   assert.equal(upstream.length, 0);
   const rejected = await post({ vertex_anti_truncation: "off", vertex_image_input: "current-turn" });
   assert.equal(rejected.status, 429);
-  assert.equal(rejected.error.message, "Vertex 图片输入请求失败。 (vertex_upstream_http_error, HTTP 429)");
+  assert.match(rejected.error.message, /^busy .*HTTP 429/);
   const wrapped = await post({ vertex_image_input: "current-turn" });
-  assert.match(wrapped.error.message, /^Vertex 抗截断请求失败。/);
+  assert.match(wrapped.error.message, /^busy .*HTTP 429/);
   assert.equal(upstream.length, 2);
+});
+
+test("Google rejections reach both Tavern's error.message and the extension panel", {timeout: 5000}, async t => {
+  let upstream;
+  const handler = createGenerateHandler(adapters, {fetchImpl: async (...args) => upstream(...args)});
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const bytes of req) chunks.push(bytes);
+    req.body = JSON.parse(Buffer.concat(chunks).toString());
+    req.user = {directories:{}};
+    res.status = status => { res.statusCode = status; return res; };
+    res.json = data => res.end(JSON.stringify(data));
+    await handler(req, res);
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const origin = "http://127.0.0.1:" + server.address().port;
+  const panel = [];
+  const intercept = createFetchInterceptor((url, init) => fetch(new URL(url, origin), init),
+    {origin, getMode:() => "streaming", onStatus: status => panel.push(status)});
+  const send = stream => intercept(GENERATE_PATH, {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({...body,stream})});
+  const feedback = { promptFeedback: {blockReason:"PROHIBITED_CONTENT", blockReasonMessage:"Prompt rejected by provider.",
+    safetyRatings:[{category:"HARM_CATEGORY_HARASSMENT",blocked:true}]} };
+  for (const [stream, reply, expected] of [
+    [false, () => Response.json({error:{status:"INVALID_ARGUMENT",message:"The prompt could not be submitted."}}, {status:400}), /INVALID_ARGUMENT.*The prompt could not be submitted/],
+    [false, () => Response.json(feedback), /Google 拒绝了输入.*PROHIBITED_CONTENT.*HARASSMENT.*Prompt rejected/],
+    [true, () => Response.json(feedback), /PROHIBITED_CONTENT.*Prompt rejected/],
+    [true, () => new Response(sseData(feedback)), /PROHIBITED_CONTENT.*Prompt rejected/],
+  ]) {
+    upstream = reply;
+    const response = await send(stream);
+    assert.equal(response.status,400);
+    const result = await response.json();
+    assert.match(result.error.message, expected);
+    assert.equal(panel.at(-1).message,result.error.message);
+  }
+  let failStream;
+  const bytes = new TextEncoder();
+  upstream = (_url, init) => {
+    const name = JSON.parse(init.body).tools[0].functionDeclarations[0].name;
+    return new Response(new ReadableStream({start(controller) {
+      controller.enqueue(bytes.encode(nativeCall({name,willContinue:true}) +
+        nativeCall({partialArgs:[{jsonPath:"$.content",stringValue:"partial text",willContinue:true}],willContinue:true})));
+      failStream = () => {
+        controller.enqueue(bytes.encode(sseData({error:{code:429,status:"RESOURCE_EXHAUSTED",message:"Quota reached for fixture-api-key."}})));
+        controller.close();
+      };
+    }}));
+  };
+  const response = await send(true);
+  assert.equal(response.status,200);
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  let wire = "";
+  while (!wire.includes("partial text")) {
+    const read = await reader.read();
+    assert.equal(read.done,false);
+    wire += decoder.decode(read.value,{stream:true});
+  }
+  failStream();
+  for (let read = await reader.read(); !read.done; read = await reader.read()) wire += decoder.decode(read.value,{stream:true});
+  const records = events(wire);
+  assert.match(records.at(-1).error.message,/429.*RESOURCE_EXHAUSTED.*Quota reached for \[key\].*流式错误/);
+  assert.doesNotMatch(records.at(-1).error.message,/HTTP 502/);
+  assert.equal(panel.at(-1).message, records.at(-1).error.message);
+  assert.ok(records.some(record => record.candidates?.[0].content?.parts?.some(part => part.text?.includes("partial text"))));
 });
 
 test("image requests report the plugin's conversion outcome, including text sent unchanged", async t => {

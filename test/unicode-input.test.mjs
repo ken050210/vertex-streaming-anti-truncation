@@ -9,6 +9,27 @@ const request = () => ({ model: "sample", router_unicode_input: { user_floor: fl
   stream: true, extra_body: { test: 1 } });
 const prepare = payload => prepareUnicodeInput(payload, true, 65536);
 
+test("all-context encodes system, developer, history and current text without reading a chat floor", () => {
+  const media={type:"image_url",image_url:{url:"https://example.test/keep"}};
+  const tool={role:"tool",tool_call_id:"call",content:'{"key":"tool value"}'};
+  const input={model:"model-name",messages:[
+    {role:"system",content:"<System>规则</System>"},{role:"developer",content:"Guide"},
+    {role:"user",content:"前文"},{role:"assistant",content:[{type:"text",text:"历史"},media]},
+    tool,{role:"user",content:[{type:"text",text:"当前❤ ⟦U:41⟧"}]}]};
+  const {payload,metadata}=prepareUnicodeInput(input,"all",65536);
+  assert.equal(metadata.method,"all-context");
+  assert.equal(metadata.matchedMessages,5);
+  assert.equal(payload.messages[0].content,"<System>⟦U:89C4 5219⟧</System>");
+  assert.equal(payload.messages[1].content,encodeUnicodeText("Guide").text);
+  assert.equal(payload.messages[2].content,encodeUnicodeText("前文").text);
+  assert.equal(payload.messages[3].content[0].text,encodeUnicodeText("历史").text);
+  assert.equal(payload.messages[3].content[1],media);
+  assert.equal(payload.messages[4],tool);
+  assert.equal(payload.messages[5].content[0].text,"⟦U:5F53 524D⟧❤ ⟦U:41⟧");
+  assert.deepEqual(prepareUnicodeInput(payload,"all",65536).payload,payload);
+  assert.throws(()=>prepareUnicodeInput(input,"all",100),{code:"unicode_input_too_large"});
+});
+
 test("reference encoding protects tags and encoded blocks, not macros; astral Han round-trips", () => {
   const result = encodeUnicodeText(floor);
   assert.equal(result.count, 10);

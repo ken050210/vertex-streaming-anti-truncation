@@ -12,6 +12,6 @@
 
 Google、Vertex AI、Gemini 和 SillyTavern 的名称用于说明兼容对象，其维护者没有为本项目背书。协议参考为 Google 的[流式函数参数文档](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling#streaming_function_call_arguments)。
 
-图片输入参考 Antigravity-gateway experimental 分支修订 004067b34f42cd6a9ba9b147a0cad02b88c10c7b（imagectx）。本项目是独立的 JavaScript 实现，并有意保留若干兼容性差异。随附的 NotoSansCJKsc-Regular.otf 来自 https://github.com/notofonts/noto-cjk/tree/main/Sans/OTF/SimplifiedChinese，依 SIL Open Font License 再分发，许可证见 assets/fonts/OFL.txt。@napi-rs/canvas 及其各平台二进制文件通过 npm 保留各自上游的许可证声明。
+图片输入参考 Antigravity-gateway experimental 分支修订 004067b34f42cd6a9ba9b147a0cad02b88c10c7b（imagectx）。本项目是独立的 JavaScript 实现，并有意保留若干兼容性差异。随附的 NotoSansCJKsc-Regular.otf 来自 https://github.com/notofonts/noto-cjk/tree/main/Sans/OTF/SimplifiedChinese，依 SIL Open Font License 再分发，许可证见 assets/fonts/OFL.txt。随包的 Noto Color Emoji 来自 Google，以 SIL Open Font License 1.1 再分发。[字体来源与修订](assets/fonts/README.txt) · [许可证](assets/fonts/NotoEmoji-OFL.txt)。@napi-rs/canvas 及其各平台二进制文件通过 npm 保留各自上游的许可证声明。
 
 Unicode 输入转码的紧凑 `⟦U:…⟧` 编码规则和当前楼层匹配方式，参考灰鸠「GoldRush」（作者网名）的编码器，经项目维护者确认已获作者许可后收录；本仓库未记录原编码器的许可证。本项目的 JavaScript 实现只匹配消息文本，有意不替换周围文本中标签和已有 `⟦U:…⟧` 编码块内的匹配内容，也不追加解码指令。本实现并非作者官方发布。

@@ -1,5 +1,5 @@
 import { SIGNATURE_ID_PREFIX, mapFinishReason, translateUsage } from "./vertex-native.mjs";
-import { isObject, protocolError, sseData, transformSse } from "./wire.mjs";
+import { checkPromptFeedback, checkSseError, isObject, protocolError, sseData, transformSse } from "./wire.mjs";
 import { isGemini4Argon, encodeGemini4ToolId } from "./gemini4.mjs";
 // Native replies for requests without the synthetic transport: complete replies,
 // and streams whose function calls arrive whole.
@@ -23,16 +23,16 @@ function candidateMessage(candidate, model) {
 }
 
 export function translateNativeCompletion(native, model) {
-  if (!isObject(native) || native.error) throw protocolError("invalid_native_completion");
-  let candidates = native.candidates;
-  const promptBlockReason = !candidates?.length && native.promptFeedback?.blockReason;
-  if (promptBlockReason) candidates = [{ finishReason: "SAFETY" }];
+  if ((Array.isArray(native) ? native[0] : native)?.error) throw Object.assign(protocolError("upstream_error_object"), { upstreamBody: native });
+  if (!isObject(native)) throw protocolError("invalid_native_completion");
+  checkPromptFeedback(native);
+  const candidates = native.candidates;
   if (!Array.isArray(candidates) || !candidates.length) throw protocolError("invalid_native_completion");
   return { id: "chatcmpl-" + crypto.randomUUID(), object: "chat.completion", created: Math.floor(Date.now() / 1000), model,
     choices: candidates.map((c, i) => {
       const message = candidateMessage(c, model);
       if (!c.finishReason) throw protocolError("incomplete_native_completion");
-      return { index: c.index ?? i, message, finish_reason: mapFinishReason(c.finishReason, Boolean(message.tool_calls)), native_finish_reason: promptBlockReason || c.finishReason };
+      return { index: c.index ?? i, message, finish_reason: mapFinishReason(c.finishReason, Boolean(message.tool_calls)), native_finish_reason: c.finishReason };
     }), usage: translateUsage(native.usageMetadata) };
 }
 
@@ -43,13 +43,14 @@ export function wrapNativeStream(response, model, onUsage = () => {}, includeUsa
   const id = "chatcmpl-" + crypto.randomUUID(), created = Math.floor(Date.now() / 1000);
   const states = new Map();
   let usage;
-  return transformSse(response, ({ data }, emit) => {
+  return transformSse(response, ({ data, event }, emit) => {
+    checkSseError(event, data, "native_stream_error");
     if (!data || data.trim() === "[DONE]") return;
     const parsed = JSON.parse(data);
-    if (parsed.error) throw Object.assign(protocolError("native_stream_error"), { upstreamBody: parsed });
+    if ((Array.isArray(parsed) ? parsed[0] : parsed)?.error) throw Object.assign(protocolError("native_stream_error"), { upstreamBody: parsed });
+    checkPromptFeedback(parsed);
     if (parsed.usageMetadata) { usage = translateUsage(parsed.usageMetadata); onUsage(usage); }
-    const promptBlockReason = !parsed.candidates?.length && parsed.promptFeedback?.blockReason;
-    const candidates = promptBlockReason ? [{ finishReason: "SAFETY" }] : (parsed.candidates ?? []);
+    const candidates = parsed.candidates ?? [];
     for (const candidate of candidates) {
       const index = candidate.index ?? 0;
       const state = states.get(index) || { done: false, tools: 0 };
@@ -59,7 +60,7 @@ export function wrapNativeStream(response, model, onUsage = () => {}, includeUsa
       if (message.tool_calls) delta.tool_calls = message.tool_calls.map(call => ({ ...call, index: state.tools++ }));
       const reason = candidate.finishReason ? mapFinishReason(candidate.finishReason, state.tools > 0) : null;
       emit(sseData({ id, object: "chat.completion.chunk", created, model, choices: [{ index, delta, finish_reason: reason,
-        ...(candidate.finishReason ? { native_finish_reason: promptBlockReason || candidate.finishReason } : {}) }] }));
+        ...(candidate.finishReason ? { native_finish_reason: candidate.finishReason } : {}) }] }));
       state.done = Boolean(reason); states.set(index, state);
     }
   }, emit => {

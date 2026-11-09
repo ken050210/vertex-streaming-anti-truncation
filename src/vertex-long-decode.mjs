@@ -1,4 +1,4 @@
-import { createSseParser, isObject, protocolError, sseData } from "./wire.mjs";
+import { createSseParser, isObject, protocolError, readUpstreamError, sseData, upstreamMessage } from "./wire.mjs";
 
 // Gemini 4 Argon long decode, documented for generateContent and streamGenerateContent in
 // v1beta1 only. A reply that reaches one request's output limit ends with finishReason
@@ -88,8 +88,8 @@ function joinStream(send, body, first) {
         usage = addUsage(usage, hopUsage);
         const next = await send({ ...body, continuationToken: token });
         if (!next.ok || !next.body) {
-          await next.body?.cancel().catch(() => {});
-          queue.push(sseData({ error: { code: next.status, message: `Long decode continuation request failed with HTTP ${next.status}.` } }));
+          const detail = await readUpstreamError(next);
+          queue.push(sseData({ error: { code: next.status, message: upstreamMessage(detail, `Long decode continuation request failed with HTTP ${next.status}.`) } }));
           closed = true;
           continue;
         }

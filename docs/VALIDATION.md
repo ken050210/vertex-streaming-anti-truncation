@@ -2,6 +2,14 @@
 
 中文 | [English](VALIDATION.en.md)
 
+## 网关 0.17.0 / 酒馆插件 0.12.0（2026-11-10）
+
+Unicode 测试覆盖当前输入、系统与开发者提示、历史对话、当前轮和“继续”，并核对工具参数、独立工具结果、附件及已有编码块。两种转图范围都用爱心、旗帜、肤色和组合 emoji 生成了 WebP，并解码检查字形。普通酒馆部署更新后，转码接口对合成消息分别返回 1 页（当前轮）和 3 页（全部会话）。
+
+隔离浏览器加载了实际扩展。模拟 Google 用 HTTP 200 返回 `promptFeedback` 时，面板显示 `PROHIBITED_CONTENT` 和上游说明。另一组响应先返回正文，再返回 `429 RESOURCE_EXHAUSTED`，客户端收到了流式错误。PayGo 0.6.1-pre1 的隔离检查覆盖两种加载顺序以及 Standard、Flex、Priority。8 个合成请求各准备一次票据、提交一次生成并登记一次用量。线上部署只验证了抗截断插件，PayGo 兼容性使用模拟上游验收。本版验收未调用付费模型。
+
+[Unicode 测试](../test/unicode-input.test.mjs) · [WebP 测试](../test/image-input.test.mjs) · [PayGo 测试](../test/paygo.test.mjs) · [酒馆错误处理测试](../test/sillytavern.test.mjs)
+
 ## 酒馆集成 0.11.0 · TT 标签截停（2026-11-08）
 
 全部 288 项离线测试通过。TT 用例覆盖了跨分块的结束标签、提前取消响应流、完整工具参数和普通正文裁剪、截停时省略最终用量，以及“继续”重新计数。测试还核对了命中前的客户端工具、原生思考、TT 错误文本、关闭开关和旁路请求。[TT 测试用例](../test/tauritavern.test.mjs)

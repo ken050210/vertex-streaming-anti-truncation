@@ -1,8 +1,9 @@
 import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
 import { validateTagStopRule } from "../../src/tag-stop-rule.mjs";
+import { createSseParser } from "../../src/wire.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.11.0";
+export const PLUGIN_VERSION = "0.12.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -12,11 +13,43 @@ export const MIN_SERVER_VERSION = "0.3.1";
 export const TOOLS_FEATURE = "client-tools";
 export const TUCAO_FEATURE = "stop-after-second-tucao";
 export const TAG_STOP_FEATURE = "stop-after-tag-pairs";
-export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE];
+export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, "image-input-convert"];
 export const MODES = ["off", "buffered", "streaming"];
 export const GENERATE_PATH = "/api/backends/chat-completions/generate";
+const PAYGO_GENERATE_PATH = "/api/plugins/vertex-paygo/native-gemini/generate";
 export const PLUGIN_PATH = `/api/plugins/${PLUGIN_ID}`;
 export const BODY_LIMIT = 8 * 1024 * 1024;
+
+// ST displays error.message in its toast. Keep the same message in the panel,
+// including errors received after the first SSE byte, without teeing the reply.
+async function reportResponse(response, onStatus) {
+  const report = (data, status) => {
+    const detail = data?.error;
+    const message = typeof detail === "string" ? detail : detail?.message ?? data?.message;
+    onStatus({ error: detail?.code ?? status ?? "upstream_stream_error", ...(status ? { status } : {}),
+      ...(typeof message === "string" && message ? { message } : {}),
+      ...(detail?.character && detail.param ? { character: detail.character, param: detail.param } : {}) });
+  };
+  if (!response.ok) {
+    report(await response.clone().json().catch(() => null), response.status);
+  } else if (response.body && response.headers.get("content-type")?.includes("text/event-stream")) {
+    let parser = createSseParser(({ data }) => {
+      if (!data?.includes('"error"')) return;
+      let value;
+      try { value = JSON.parse(data); } catch { return; }
+      if (value?.error) report(value);
+    });
+    return new Response(response.body.pipeThrough(new TransformStream({
+      transform(bytes, controller) {
+        controller.enqueue(bytes);
+        // An oversized third-party event must not interrupt the user's stream.
+        try { parser?.push(bytes); } catch { parser = null; }
+      },
+      flush() { parser?.finish(); },
+    })), { status: response.status, statusText: response.statusText, headers: response.headers });
+  }
+  return response;
+}
 
 export function compareVersions(a, b) {
   const left = a.split(".").map(Number), right = b.split(".").map(Number);
@@ -60,10 +93,10 @@ function nativeTool(tool) {
 }
 
 // Shared by both sides: unsupported requests keep SillyTavern's original route.
-export function bypassReason(body, mode) {
+export function bypassReason(body, mode, payGo = false) {
   if (mode === "off" || !MODES.includes(mode)) return "disabled";
   if (body?.chat_completion_source !== "vertexai") return "other-provider";
-  if (body.reverse_proxy) return "reverse-proxy";
+  if (body.reverse_proxy && !payGo) return "reverse-proxy";
   if (!/^gemini-[\w.-]+$/.test(body.model || "") || /image|embedding/i.test(body.model)) return "model";
   if (body.functions?.length || body.function_call != null) return "existing-tools";
   // Client tools stay callable next to the transport tool; a forced choice asks for a call, not text.
@@ -80,17 +113,18 @@ export function bypassReason(body, mode) {
 
 // ST 1.19 exposes a settings event, but not a generation-URL override. Intercept
 // only its same-origin Vertex POST; preserve the original fetch for everything else.
-export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getTagStop = () => null, getUserFloor = () => "", ensureBackend = async () => true, onStatus = () => {}, direct }) {
+export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getTagStop = () => null, getUserFloor = () => "", ensureBackend = async () => true, onStatus = () => {}, direct, payGoInstalled = false, getRequestHeaders = () => ({ "Content-Type": "application/json" }) }) {
   return async function vertexFetch(input, init) {
     let url;
     try { url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, origin); }
     catch { return originalFetch(input, init); }
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     const mode = getMode();
-    const unicodeEnabled = getUnicodeInput() === true;
+    const unicodeMode = getUnicodeInput();
+    const unicodeEnabled = unicodeMode === true || unicodeMode === "all";
     const imageMode = getImageInput();
     const imageEnabled = imageMode !== "off";
-    if ((mode === "off" && !unicodeEnabled && !imageEnabled) || url.origin !== origin || url.pathname !== GENERATE_PATH || method.toUpperCase() !== "POST") {
+    if ((mode === "off" && !unicodeEnabled && !imageEnabled) || url.origin !== origin || ![GENERATE_PATH, PAYGO_GENERATE_PATH].includes(url.pathname) || method.toUpperCase() !== "POST") {
       return originalFetch(input, init);
     }
     let body;
@@ -103,12 +137,20 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     let unicode;
     if (unicodeEnabled) {
       try {
-        const prepared = prepareUnicodeInput({ ...body, router_unicode_input: { user_floor: getUserFloor() } }, true, BODY_LIMIT);
+        const input = unicodeMode === "all" ? body : { ...body, router_unicode_input: { user_floor: getUserFloor() } };
+        const prepared = prepareUnicodeInput(input, unicodeMode, BODY_LIMIT);
         body = prepared.payload; unicode = prepared.metadata;
       } catch (error) { onStatus({ error: error.code || "unicode_input_failed" }); throw error; }
     }
-    let reason = bypassReason(body, imageEnabled && mode === "off" ? "buffered" : mode);
-    if (!reason && !direct && usesTools(body) && !await ensureBackend(TOOLS_FEATURE)) reason = "server-tools";
+    // PayGo can be on either side of this wrapper. Before prepare it marks the
+    // request; afterwards it leaves a local ticket and may change the ST route.
+    const ticket = /^http:\/\/127\.0\.0\.1:\d+\/proxy\/[\w-]+$/.test(body.reverse_proxy ?? "") && Boolean(body.proxy_password);
+    const marked = body.__vertexPayGoRequestState;
+    const payGo = !direct && (payGoInstalled || marked || url.pathname === PAYGO_GENERATE_PATH
+      || (ticket && typeof globalThis.vertexPayGoGemini4GenerateInterceptor === "function"));
+    const ownPayGoProxy = payGo && (ticket || (marked?.sink === body.reverse_proxy && body.reverse_proxy === "vertex-paygo-blocked://request"));
+    let reason = bypassReason(body, imageEnabled && mode === "off" ? "buffered" : mode, ownPayGoProxy);
+    if (!reason && !direct && !payGo && usesTools(body) && !await ensureBackend(TOOLS_FEATURE)) reason = "server-tools";
     const tagStop = !reason && mode !== "off" ? getTagStop() : null;
     delete body.vertex_tucao_stop;
     delete body.vertex_tag_stop;
@@ -123,13 +165,25 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (!reason && tagStop) {
       try { validateTagStopRule(tagStop); }
       catch (error) { onStatus({ error: error.code }); throw error; }
-      if (!direct && !await ensureBackend(TAG_STOP_FEATURE)) {
+      if (!direct && !payGo && !await ensureBackend(TAG_STOP_FEATURE)) {
         onStatus({ error: "tag_stop_not_supported" }); throw new Error("tag_stop_not_supported");
       }
     }
     if (imageEnabled) {
       if (!["current-turn", "all"].includes(imageMode) || reason) { onStatus({ error: "image_input_requires_supported_request", bypass: reason }); throw new Error("image_input_requires_supported_request"); }
       body.vertex_image_input = imageMode;
+    }
+    if (payGo && !reason) {
+      const { sendPayGoRequest } = await import("./paygo.js");
+      try {
+        const reply = await sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, unicode, longDecode: getLongDecode() === true,
+          ensureBackend, getRequestHeaders, onStatus });
+        return await reportResponse(reply, onStatus);
+      } catch (error) {
+        onStatus({ error: error.code ?? error.message, ...(error.message && error.message !== error.code ? { message: error.message } : {}),
+          character: error.character, param: error.param });
+        throw error;
+      }
     }
     let payload = reason ? null : JSON.stringify(prepared?.body ??
       { ...body, vertex_anti_truncation: mode, ...(tagStop ? { vertex_tag_stop: tagStop } : {}), ...(getLongDecode() === true ? { vertex_long_decode: true } : {}) });
@@ -163,11 +217,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const applied = Number(response.headers.get("x-gemini-output-tokens-applied"));
     const outputLimit = !reason && applied > 0 ? { requested: Number(response.headers.get("x-gemini-output-tokens-requested")), applied,
       longDecode: response.headers.get("x-gemini-long-decode") === "true" } : null;
-    if (!response.ok) {
-      // Plugin errors carry a fixed code; ST's own route keeps the HTTP status.
-      const code = reason ? undefined : await response.clone().json().then(data => data?.error?.code, () => undefined);
-      onStatus(typeof code === "string" && code ? { error: code, status: response.status } : { error: response.status });
-    } else if (!reason && (imageEnabled || body.type === "continue" || outputLimit)) {
+    if (response.ok && !reason && (imageEnabled || body.type === "continue" || outputLimit)) {
       // The plugin reports whether any text was converted; "no-text" was sent as plain text.
       onStatus({ mode,
         ...(unicode ? { unicode } : {}),
@@ -177,6 +227,6 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
           pages: Number(response.headers.get("x-image-input-pages")) || 0, transport: response.headers.get("x-anti-truncation-transport") } } : {}) });
     }
     // Never resubmit to the original route after a failed plugin request.
-    return response;
+    return reportResponse(response, onStatus);
   };
 }

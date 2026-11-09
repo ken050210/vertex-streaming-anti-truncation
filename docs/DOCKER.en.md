@@ -2,14 +2,14 @@
 
 [中文](DOCKER.md) | English
 
-The Docker image runs the standalone web console and OpenAI-compatible gateway. Connect Tavern through its custom API; this image does not install a Tavern plugin. The public image is `ghcr.io/ken050210/vertex-streaming-anti-truncation`, with `latest`, `0.15.0` and commit tags for `linux/amd64` and `linux/arm64`. Use Docker Engine / Docker Desktop (Linux containers) and Compose v2 or later.
+The Docker image runs the standalone web console and OpenAI-compatible gateway. Connect Tavern through its custom API; this image does not install a Tavern plugin. The public image is `ghcr.io/ken050210/vertex-streaming-anti-truncation`, with `latest`, `0.17.0` and commit tags for `linux/amd64` and `linux/arm64`. Use Docker Engine / Docker Desktop (Linux containers) and Compose v2 or later.
 
 ## Start
 
 ```sh
 mkdir vertex-gateway
 cd vertex-gateway
-curl -fL https://github.com/ken050210/vertex-streaming-anti-truncation/releases/download/gateway-v0.15.0/compose.yaml -o compose.yaml
+curl -fL https://github.com/ken050210/vertex-streaming-anti-truncation/releases/download/gateway-v0.17.0/compose.yaml -o compose.yaml
 docker compose pull
 docker compose up -d
 docker compose logs vertex-gateway
@@ -17,13 +17,13 @@ docker compose logs vertex-gateway
 
 Open the first-time setup link in the logs, including `#setup=...`. The console defaults to `http://127.0.0.1:4780/`. Enter Google credentials (or a [custom upstream](GATEWAY.en.md#custom-upstream)'s URL and API key), models and a gateway key, then save. The API starts at `http://127.0.0.1:4781/v1`. Strict keys are the default; the access-mode selector also offers weak keys (e.g. `123456`) or keyless access to both API and console, with a risk-confirmation checkbox before saving. Keyless mode opens the console directly; the other modes require the saved key. Anyone who can reach a keyless service can call models, read logs and change settings, potentially incurring charges; port publishing determines who can reach it. Keep bootstrap links private.
 
-No registry login, source checkout, host Node.js or `.env` is needed. You can also download the Compose file manually from the [release](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/gateway-v0.15.0). Compose does not automatically pass host Google credentials into the container. Startup, saving and health checks never invoke a model; the console's manual connection test uses your Google billing account, or a custom upstream's own billing.
+No registry login, source checkout, host Node.js or `.env` is needed. You can also download the Compose file manually from the [release](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/gateway-v0.17.0). Compose does not automatically pass host Google credentials into the container. Startup, saving and health checks never invoke a model; the console's manual connection test uses your Google billing account, or a custom upstream's own billing.
 
 The container listens on `0.0.0.0`; Compose publishes both ports only on the host's loopback address by default. Native `npm start` still defaults to `127.0.0.1`. See [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/).
 
 ## Ports and access addresses
 
-Download `default.env.docker.example` from the release, copy it to `.env.docker`, edit it and use `docker compose --env-file .env.docker ...` for every Compose command. Set `IMAGE_TAG=0.15.0` to pin the version instead of using `latest`. For example:
+Download `default.env.docker.example` from the release, copy it to `.env.docker`, edit it and use `docker compose --env-file .env.docker ...` for every Compose command. Set `IMAGE_TAG=0.17.0` to pin the version instead of using `latest`. For example:
 
 ```dotenv
 DOCKER_BIND_IP=127.0.0.1
@@ -66,13 +66,15 @@ Recreate the affected containers. Service-name URLs work inside the shared netwo
 
 Container localhost refers to that container. So a custom upstream running on the host cannot be reached at `127.0.0.1` or `localhost`; use `host.docker.internal` (mapping below), or the service name of a relay container on a shared network. When a proxy is also in use, add `host.docker.internal` to `NO_PROXY`. To send upstream traffic through an outgoing host proxy, explicitly pass `NODE_USE_ENV_PROXY=1`, a reachable `HTTPS_PROXY`, and `NO_PROXY=127.0.0.1,localhost` in Compose's environment. Docker Desktop provides `host.docker.internal`; Linux Engine can add it with `extra_hosts: ["host.docker.internal:host-gateway"]`. The host proxy must also listen on a reachable interface. Verify this outgoing proxy path separately in your environment.
 
-## Updating to 0.15.0
+## Updating to 0.17.0
 
-0.15.0 includes the same custom tag stop as the local gateway. In the connection compatibility panel, set a tag name and complete-pair count, such as `tucao / 2` or `A / 1`, then save. New configurations enable `tucao / 2`; existing explicit opt-outs stay off. Rules are stored in the existing data volume and survive container recreation.
+Version 0.17.0 adds full-context Unicode encoding in Connection settings. Deployments with Unicode already enabled keep current-input mode. The image includes an emoji font, and clients can see the reason Google supplies when it blocks a prompt.
+
+You can also adjust the tag stop for your preset. In the connection compatibility panel, set a tag name and complete-pair count, such as `tucao / 2` or `A / 1`, then save. New configurations enable `tucao / 2`; existing explicit opt-outs stay off. Rules are stored in the existing data volume and survive container recreation.
 
 The matched closing tag is retained and everything after it is discarded, including any later MVU update block. Only anti-truncation profiles apply the rule. Default Compose deployments save settings through the console and do not inherit host `TAG_STOP`, `STOP_TAG` or `STOP_COUNT`; those variables belong to the CLI configuration described in `.env.example`.
 
-Keep the existing data volume, run `docker compose pull`, then `docker compose up -d`. If you use `.env.docker`, keep adding `--env-file .env.docker` to both commands and change a pinned `IMAGE_TAG` to `0.15.0`. Do not run `down -v`, which deletes saved configuration.
+Keep the existing data volume, run `docker compose pull`, then `docker compose up -d`. If you use `.env.docker`, keep adding `--env-file .env.docker` to both commands and change a pinned `IMAGE_TAG` to `0.17.0`. Do not run `down -v`, which deletes saved configuration.
 
 Existing keys keep strict mode after upgrading. To allow a simple key or keyless access, select the mode in Connection settings → 本地网关, confirm the risk and save. Keyless mode opens both API and console access and clears the previous gateway key.
 

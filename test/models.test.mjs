@@ -204,7 +204,13 @@ test("normal compatible streams reject premature EOF and provider error events",
     assert.match(new TextDecoder().decode((await reader.read()).value), /first part/);
     if (ending === "error") upstream.enqueue(encode({ error: { message: "private provider error" } }));
     upstream.close();
-    await assert.rejects(async () => { while (!(await reader.read()).done) { /* Drain until the failure. */ } });
+    const drain = async () => {
+      let tail = "";
+      for (let part = await reader.read(); !part.done; part = await reader.read()) tail += new TextDecoder().decode(part.value);
+      return tail;
+    };
+    if (ending === "eof") await assert.rejects(drain);
+    else assert.match(await drain(), /"error":.*private provider error/);
     assert.equal(f.events.at(-1).status, 502);
     assert.equal(f.events.at(-1).code, ending === "error" ? "upstream_stream_error" : "upstream_protocol_error");
     assert.equal(f.events.at(-1).antiTruncation.streamDone, false);

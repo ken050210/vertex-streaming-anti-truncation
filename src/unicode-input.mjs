@@ -2,7 +2,7 @@
 // Match message text only: never substitute serialized protocol fields.
 // The client supplies the actual chat floor; assembled messages are not a chat store.
 const reasons = new Set(["encoded", "floor-not-found", "no-encodable-text"]);
-const methods = new Set(["chat-floor-match"]);
+const methods = new Set(["chat-floor-match", "all-context"]);
 const counter = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
 
 export function unicodeInputLogFields(value) {
@@ -43,22 +43,31 @@ export function prepareUnicodeInput(input, enabled, limitBytes) {
   // This local extension never goes upstream, even on an ordinary model.
   if (supplied) { payload = { ...input }; delete payload.router_unicode_input; }
   if (!enabled) return { payload, metadata: null };
-  if (!source || typeof source !== "object" || Array.isArray(source) ||
-      Object.keys(source).some(key => key !== "user_floor") || typeof source.user_floor !== "string" || !source.user_floor.length) {
+  const all = enabled === "all";
+  if (!all && (!source || typeof source !== "object" || Array.isArray(source) ||
+      Object.keys(source).some(key => key !== "user_floor") || typeof source.user_floor !== "string" || !source.user_floor.length)) {
     throw inputError(400, "unicode_floor_required", "Unicode input requires router_unicode_input.user_floor from the latest real user chat floor");
   }
-  const floor = source.user_floor;
+  const floor = all ? "" : source.user_floor;
   // Longest form first, so at one position the original wins over its trimmed copy.
   const variants = [...new Set([floor, floor.trim(), floor.replace(/\r\n?/g, "\n")].filter(Boolean))]
     .map(text => ({ text, encoded: encodeUnicodeText(text) })).filter(variant => variant.encoded.text !== variant.text)
     .sort((left, right) => right.text.length - left.text.length);
-  const metadata = { reason: "floor-not-found", method: "chat-floor-match", encodedCharacters: 0, matchedMessages: 0, occurrences: 0 };
+  const metadata = { reason: all ? "no-encodable-text" : "floor-not-found", method: all ? "all-context" : "chat-floor-match", encodedCharacters: 0, matchedMessages: 0, occurrences: 0 };
   // One left-to-right pass, so an inserted block is never matched again. Unlike the
   // reference, a match that lies inside a tag or an existing ⟦U:…⟧ block of the
   // surrounding text (a preset's <剧情> tag, say) is left unchanged. A tag here
   // cannot contain another "<" or a newline, so a stray "<3" protects nothing.
   const replaceText = text => {
     const value = String(text ?? "");
+    if (all) {
+      const encoded = encodeUnicodeText(value);
+      if (encoded.count) {
+        metadata.occurrences++;
+        metadata.encodedCharacters += encoded.count;
+      }
+      return encoded.text;
+    }
     if (!variants.some(variant => value.includes(variant.text))) return value;
     const spans = [...value.matchAll(/<[^<>\n]*>|⟦U:[0-9a-fA-F\s]+⟧/g)].map(match => [match.index, match.index + match[0].length]);
     const isProtected = (at, length) => {
@@ -88,6 +97,8 @@ export function prepareUnicodeInput(input, enabled, limitBytes) {
   };
   const messages = payload.messages.map(message => {
     if (!message || typeof message !== "object") return message;
+    // A tool result may itself be structured JSON consumed by another tool.
+    if (all && !["system", "developer", "user", "assistant"].includes(message.role)) return message;
     const before = metadata.occurrences;
     const content = typeof message.content === "string" ? replaceText(message.content)
       : Array.isArray(message.content) ? message.content.map(part => typeof part === "string" ? replaceText(part)
@@ -98,7 +109,7 @@ export function prepareUnicodeInput(input, enabled, limitBytes) {
     return { ...message, content };
   });
   if (metadata.occurrences) payload = { ...payload, messages };
-  else if (!encodeUnicodeText(floor).count) metadata.reason = "no-encodable-text";
+  else if (!all && !encodeUnicodeText(floor).count) metadata.reason = "no-encodable-text";
   if (metadata.occurrences) metadata.reason = "encoded";
   if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > limitBytes) {
     throw inputError(413, "unicode_input_too_large", "Unicode-encoded request exceeds the configured body limit");

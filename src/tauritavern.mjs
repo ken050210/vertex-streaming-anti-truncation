@@ -5,7 +5,7 @@ import { guardCompletionStream } from "./completion-integrity.mjs";
 import { createTagStop } from "./tag-stop.mjs";
 import { capGemini4Output, outputLimitHeaders } from "./gemini4.mjs";
 import { completedSillyTavernResponse, toSillyTavernStream } from "./sillytavern.mjs";
-import { createSseParser, isObject, sseData, transformSse } from "./wire.mjs";
+import { createSseParser, googleErrorDetail, isObject, sseData, transformSse, upstreamMessage } from "./wire.mjs";
 import { BODY_LIMIT } from "../integrations/sillytavern/shared.js";
 
 // TauriTavern replaces SillyTavern's Node server with a Rust backend, so no
@@ -96,7 +96,11 @@ async function collectCompletion(response, model) {
   return completion;
 }
 
-const failure = code => ({ error: { code, message: `Vertex 抗截断请求失败。 (${code})` } });
+function failure(error, upstreamError = googleErrorDetail(error.upstreamBody)) {
+  const code = error.code ?? "restoration_failed";
+  return { error: { code, message: upstreamMessage(upstreamError, `Vertex 抗截断请求失败。 (${code})`),
+    ...(upstreamError ? { upstreamError } : {}) } };
+}
 
 // A reply that fails restoration ends with the error event ST's stream reader
 // reports, as the server plugin does. A cancelled request just stops.
@@ -110,7 +114,7 @@ function reportStreamFailure(body, signal) {
         else controller.enqueue(value);
       } catch (error) {
         if (signal?.aborted) return controller.error(error);
-        controller.enqueue(new TextEncoder().encode(sseData(failure(error.code ?? "restoration_failed"))));
+        controller.enqueue(new TextEncoder().encode(sseData(failure(error))));
         controller.close();
       }
     },
@@ -119,17 +123,28 @@ function reportStreamFailure(body, signal) {
 }
 
 export async function restoreTauriTavernResponse(response, prepared, signal) {
+  return restoreBrowserStream(response, prepared, signal, true);
+}
+
+export async function restoreBrowserStream(response, prepared, signal, tauri = false) {
   // A failed quiet request is TauriTavern's own JSON error; leave it as it is.
   if (!response.ok || !response.body) return response;
+  if (response.headers.get("content-type")?.includes("application/json")) {
+    const data = await response.json();
+    const detail = googleErrorDetail(data);
+    const code = detail?.promptBlocked ? "google_prompt_blocked" : "unexpected_stream_response";
+    return new Response(JSON.stringify(failure({ code }, detail)), { status: detail?.promptBlocked ? 400 : 502, headers: { "content-type": "application/json" } });
+  }
   const rule = prepared.tagStop;
   const stop = rule && createTagStop(prepared.toolName, rule.tag, rule.count);
-  let usageMetadata;
-  const translated = wrapNativeTextStream(normalizeTauriStream(response, stop), prepared.toolName, prepared.model,
-    usage => { usageMetadata = usage; }, true, prepared.tools);
+  let usageMetadata, textSignature;
+  const native = tauri ? normalizeTauriStream(response, stop) : stop ? stop.stream(response) : response;
+  const translated = wrapNativeTextStream(native, prepared.toolName, prepared.model,
+    usage => { usageMetadata = usage; }, true, prepared.tools, tauri ? undefined : signature => { textSignature = signature; });
   const restored = guardCompletionStream(wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools), () => {}, null, BODY_LIMIT);
   const headers = { ...(prepared.continuation ? { "x-vertex-continuation": "suffix" } : {}), ...outputLimitHeaders(prepared.outputLimit) };
   if (prepared.upstreamStream) {
-    return new Response(reportStreamFailure(toSillyTavernStream(restored, () => usageMetadata, prepared.model, stop?.marker).body, signal),
+    return new Response(reportStreamFailure(toSillyTavernStream(restored, () => usageMetadata, prepared.model, stop?.marker, () => textSignature).body, signal),
       { headers: { ...headers, "content-type": "text/event-stream; charset=utf-8" } });
   }
   let delivered;
@@ -141,10 +156,10 @@ export async function restoreTauriTavernResponse(response, prepared, signal) {
       delete completion.usage;
       usageMetadata = undefined;
     }
-    delivered = completedSillyTavernResponse(completion, prepared, usageMetadata, stopAfter);
+    delivered = completedSillyTavernResponse(completion, prepared, usageMetadata, stopAfter, textSignature);
   } catch (error) {
     signal?.throwIfAborted();
-    return new Response(JSON.stringify(failure(error.code ?? "restoration_failed")), { status: 502, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify(failure(error)), { status: error.status ?? 502, headers: { "content-type": "application/json" } });
   }
   return new Response(delivered.body, { headers: { ...headers, "content-type": delivered.headers.get("content-type") } });
 }

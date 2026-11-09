@@ -203,23 +203,25 @@ Google 的 [Gemini 3.7 Flash](https://docs.cloud.google.com/gemini-enterprise-ag
 
 ## Unicode 输入转码
 
-网关设置中的 **Unicode 输入转码（所有模型）** 是独立总开关，默认关闭；保存并应用后作用于所有模型的后续请求，包括普通、非流式抗截断和流式抗截断。CLI 环境变量为 `UNICODE_INPUT=false|true`。它不改变模型列表或各模型的抗截断模式。编码规则与当前楼层匹配参考灰鸠「GoldRush」（作者网名）的编码器，经作者许可收录，详见 [NOTICE](../NOTICE.zh-CN.md)。
+在控制台的「Unicode 输入转码（所有模型）」选择范围，保存并应用后对后续请求生效。命令行使用 `UNICODE_INPUT`。
 
-启用时客户端必须提供最新真实用户楼层原文：
+| 值 | 转码范围 |
+| --- | --- |
+| `false` | 关闭（默认） |
+| `true` | 当前输入。客户端提供最新真实用户楼层，网关只转换消息中匹配的文字 |
+| `all` | 系统、开发者、用户和 AI 消息的文本，含当前输入。无需提供楼层原文 |
+
+当前输入模式使用下面的请求字段。缺少有效原文会返回 `400 unicode_floor_required`。网关匹配原文、去除首尾空白或归一换行后的文本，同一位置取较长者。已替换的文字不会再次参与匹配。消息里完整的单行标签（如 `<剧情>`）和已有编码块能保护内部文字，孤立的 `<`（如 `<3`）不影响后面的匹配。未匹配时按原文发送。
 
 ```json
 {"router_unicode_input":{"user_floor":"最新真实用户楼层原文"}}
 ```
 
-只对消息文本中的原文、去除首尾空白、归一换行版本做匹配（不依赖 role）。汉字与 ASCII 字母编码为 `⟦U:…⟧`，保留标签、已有编码块、数字、标点和 emoji；不保护 `{{user}}` 内的字母。消息中其他位置的标签和已有编码块内部的匹配内容也不会被替换（这一点有意不同于参考实现）；这里的标签指不跨行、内部不含 `<` 的完整标签（如 `<剧情>`），消息其他位置孤立的 `<`（如 `<3`）不起保护作用。楼层本身编码时，仍与参考实现一样保留所有 `<…>` 片段。三种形式一次扫描，同一位置取较长者，已替换的内容不会再次匹配。未匹配就保持原文，绝不扫描整个 JSON 改写工具名、Schema、模型名或图片地址。工具／Schema 只影响输出抗截断旁路，不关闭输入转码。不追加解码指令。
+两种模式都把汉字和 ASCII 字母写作 `⟦U:…⟧`，保留标签、已有编码块、数字、标点和 emoji。`{{user}}` 中的字母也会转码。模型 ID、工具参数、Schema 和媒体地址保留原值。全部上下文模式还会跳过独立的工具结果。工具或 Schema 请求旁路输出抗截断时，输入转码仍会执行。编码和楼层匹配规则来自灰鸠「GoldRush」的编码器，经作者许可收录。[来源说明](../NOTICE.zh-CN.md)
 
-缺少有效原文返回本地 `400 unicode_floor_required`；编码后超过请求体限制返回 `413 unicode_input_too_large`。本地 `router_unicode_input` 字段在关闭状态下也会被剥离，不转发上游。响应头 `x-unicode-input` 报告 disabled、encoded 或跳过原因；日志仅保存固定状态与计数，不保存楼层原文或编码内容。
+网关会移除本地字段 `router_unicode_input`。编码后超过请求体上限会返回 `413 unicode_input_too_large`。响应头 `x-unicode-input` 给出结果，日志记录状态和计数。转码可能增加 token 用量与延迟。已有真实模型短请求验收仅覆盖当前输入模式。[验收记录](UNICODE-INPUT-AUDIT.md)
 
-酒馆以自定义 API 连接本网关时，可导入并启用 [楼层传递脚本](../integrations/sillytavern-unicode-floor.json)；[可读源码](../integrations/sillytavern-unicode-floor.js) 默认仅匹配 localhost/127.0.0.1/[::1]:4781/v1。更换端口后，在脚本内调整 `gatewayPort`。脚本只提供原文，不决定是否转码；总开关仍在网关。它保留现有 custom body 配置，需要酒馆 `/lib.js` YAML 解析器。停用脚本或刷新即可解除。
-
-使用原生 Vertex 面板插件时，请在插件面板的“输入转码”下拉框中选择 Unicode，无需这个桥接脚本，详见 [插件说明](SILLYTAVERN.md)。两种连接方式分别由各自开关控制；不是跨进程同步设置。关闭预设中的重复转码，以免原文无法匹配。
-
-转码不是加密，不保证模型理解或改善生成结果，可能增加 token 用量和延迟。插件 UI v0.2.0（当时为独立勾选框）已完成配套酒馆安装、开关持久化及三种传输模式的短请求验收；0.3.0 起改用的下拉框在实际酒馆中的导入与持久化尚未验证。这些验收不证明长文本理解或抗截断收益，详见 [验收记录](UNICODE-INPUT-AUDIT.md)。
+酒馆使用自定义 API 和当前输入模式时，可启用楼层传递脚本。脚本保留现有自定义请求体，通过酒馆 `/lib.js` 的 YAML 解析器读取配置，默认匹配本机 4781 端口。端口不同可修改脚本中的 `gatewayPort`。全部上下文模式直接读取请求。使用酒馆原生 Vertex 面板时，在面板的「输入转码」里选范围即可。[楼层传递脚本](../integrations/sillytavern-unicode-floor.json) · [脚本源码](../integrations/sillytavern-unicode-floor.js) · [酒馆扩展](SILLYTAVERN.md)
 
 ## 图片输入
 
@@ -232,7 +234,7 @@ base64 图片与其余请求内容合计限 8 MiB。若约有 6 MiB 可用于图
 | 转换失败的原因 | 返回结果 |
 | --- | --- |
 | 容量或页数超限 | `413 image_input_too_large` |
-| 不支持的 emoji、控制字符或字体缺字 | HTTP 400。字体收录的 ♥ © ™ 等文字样式符号可渲染，ZWSP、ZWNJ、WJ、BOM、VS15 可以保留 |
+| 控制字符、无效序列或字体缺字 | HTTP 400。随包字体支持 ❤、❤️、🙂、肤色、旗帜和常见组合 emoji |
 | 缺少渲染依赖或字体 | `503 image_renderer_unavailable` |
 | 渲染或编码失败 | `503 image_render_failed` |
 
@@ -341,7 +343,7 @@ JSON 日志记录请求 ID、状态、耗时和 `antiTruncation` 元数据，不
 | `image_render_failed` | 503 | 本地图片渲染失败 |
 | `upstream_protocol_error` | 502 | 上游回复格式异常或中途断开 |
 
-上游 HTTP 错误和输出前的流式错误（`upstream_stream_error`、`native_stream_error`）还会带 `upstreamError`。其中最多保留 240 个字符的 `message`，会去除标记、邮箱、密钥类字符串、长令牌和本次凭据。Google 格式的错误还可能带 `status` 和 ErrorInfo 的 `reason`。日志只保留状态和原因。
+客户端的 `error.message` 会显示 Google 给出的状态、原因和说明，最多保留 4096 个字符的说明，并去除标记和凭据。Google 在 HTTP 200 的 `promptFeedback` 中拒绝输入时，网关会显示 `blockReason`、`blockReasonMessage` 和已拦截的类别。如果正文已经开始传输，服务商错误通过最后一个 SSE 错误事件交给客户端。日志只保留状态和原因码。
 
 ### 核对流式回复
 

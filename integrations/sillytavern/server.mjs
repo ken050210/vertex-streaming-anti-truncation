@@ -7,11 +7,34 @@ import { outputLimitHeaders, validateGemini4Connection } from "../../src/gemini4
 import { fetchLongDecode, longDecodeUrl } from "../../src/vertex-long-decode.mjs";
 import { upstreamDispatcher } from "../../src/gateway.mjs";
 import { prepareSillyTavernRequest, restoreSillyTavernResponse, requestError } from "../../src/sillytavern.mjs";
-import { sseData } from "../../src/wire.mjs";
+import { googleErrorDetail, sseData, upstreamMessage } from "../../src/wire.mjs";
 import { waitWithSignal } from "../../src/abort.mjs";
 import { BODY_LIMIT, PLUGIN_FEATURES, PLUGIN_ID, PLUGIN_VERSION } from "./shared.js";
 
 export const info = { id: PLUGIN_ID, name: "Vertex AI Anti-Truncation", description: "Native Vertex text transport using SillyTavern's saved credentials." };
+
+function imageErrorLocation(error) {
+  return error.code === "image_input_unsupported_characters"
+    ? { param: error.param, character: error.character } : {};
+}
+
+// PayGo owns generation and billing. Its UI only needs our local rasterizer.
+export async function convertImages(request, response) {
+  if (!request.user?.directories) return response.sendStatus(401);
+  const { mode, messages } = request.body ?? {};
+  const client = new AbortController();
+  const close = () => client.abort();
+  response.once("close", close);
+  try {
+    if (!["all", "current-turn"].includes(mode)) throw requestError("invalid_image_input_mode");
+    if (Buffer.byteLength(JSON.stringify(request.body)) > BODY_LIMIT) throw Object.assign(requestError("image_input_too_large"), { status: 413 });
+    const { payload, metadata } = await prepareImageInput({ messages }, mode, BODY_LIMIT, { signal: client.signal });
+    response.setHeader("cache-control", "no-store");
+    return response.json({ messages: payload.messages, metadata });
+  } catch (error) {
+    if (!client.signal.aborted) return response.status(error.status ?? 503).json({ error: { code: error.code ?? "image_render_failed", ...imageErrorLocation(error) } });
+  } finally { response.off("close", close); }
+}
 
 export function connectionForRequest(request, { readSecret, SECRET_KEYS }) {
   const body = request.body;
@@ -40,6 +63,7 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
     const close = () => { if (!response.writableEnded) client.abort(); };
     response.once("close", close);
     let stage = "request";
+    let credential;
     const imageMode = request.body?.vertex_image_input ?? "off";
     try {
       // Validate normal plugin eligibility before spending CPU rasterizing.
@@ -54,7 +78,7 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       stage = "configuration";
       const config = connectionForRequest(request, adapters);
       stage = "authentication";
-      const credential = await waitWithSignal(() => config.accessToken(), signal);
+      credential = await waitWithSignal(() => config.accessToken(), signal);
       signal.throwIfAborted();
       const headers = { ...config.tierHeaders, "content-type": "application/json",
         ...(config.authMode === "express" ? { "x-goog-api-key": credential } : { authorization: `Bearer ${credential}` }) };
@@ -69,7 +93,7 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       });
       const upstream = await (longDecode ? fetchLongDecode(post, prepared.body, prepared.upstreamStream) : post(prepared.body));
       stage = "restoration";
-      const restored = await restoreSillyTavernResponse(upstream, prepared);
+      const restored = await restoreSillyTavernResponse(upstream, prepared, credential);
       // ST's global compression() would hold SSE chunks until the reply ends; no-transform opts out.
       response.setHeader("cache-control", prepared.stream ? "no-store, no-transform" : "no-store");
       response.setHeader("x-content-type-options", "nosniff");
@@ -85,15 +109,19 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       response.end();
     } catch (error) {
       if (client.signal.aborted || response.destroyed) return;
-      const status = deadline.aborted ? 504 : error.status ?? (stage === "configuration" ? 400 : stage === "image" ? 503 : 502);
-      // Do not echo provider error bodies, URLs, prompts or credential exceptions.
+      const upstreamError = deadline.aborted ? null : error.upstreamError ?? googleErrorDetail(error.upstreamBody, credential);
+      const status = deadline.aborted ? 504 : error.status ?? upstreamError?.code ?? (stage === "configuration" ? 400 : stage === "image" ? 503 : 502);
       const code = deadline.aborted ? "vertex_timeout" : error.protocolFailure || error.status ? error.code
         : stage === "image" ? "image_render_failed" : `vertex_${stage}_failed`;
       const detail = code === "express_project_required" ? "快速模式使用 Gemini 4 Argon 需要填写 API Key 所属的项目 ID，以指定 global 地区。" :
         stage === "configuration" ? "检查 Vertex 凭据和地区；Express、Flex、Priority 需要 global。" :
         stage === "authentication" ? "Vertex 鉴权失败，请检查已保存的凭据。" : stage === "image" ? "图片输入转换失败，未改用明文发送。" :
         imageMode !== "off" && request.body?.vertex_anti_truncation === "off" ? "Vertex 图片输入请求失败。" : "Vertex 抗截断请求失败。";
-      const payload = { error: { code, message: `${detail} (${code}, HTTP ${status})` } };
+      const location = imageErrorLocation(error);
+      const where = location.character ? ` ${location.character}，${location.param}。` : "";
+      const message = upstreamMessage(upstreamError, detail + where);
+      const locationInResponse = response.headersSent ? "流式错误" : `HTTP ${status}`;
+      const payload = { error: { code, ...location, message: `${message} (${code}, ${locationInResponse})`, ...(upstreamError ? { upstreamError } : {}) } };
       if (response.headersSent) { response.write(sseData(payload)); response.end(); }
       else {
         response.setHeader("content-type", "application/json; charset=utf-8");
@@ -117,4 +145,5 @@ export async function init(router) {
     response.json({ id: PLUGIN_ID, version: PLUGIN_VERSION, ready: true, features: PLUGIN_FEATURES });
   });
   router.post("/generate", createGenerateHandler(adapters));
+  router.post("/image-input", convertImages);
 }

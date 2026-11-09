@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.17.0 / SillyTavern 0.12.0 (2026-11-10)
+
+Unicode input now has two scopes. Current input keeps the existing floor match. Full context encodes system instructions and conversation text, including the current input, while preserving tool arguments, attachments and separate tool results. Existing Unicode settings keep current-input mode. Both text-to-image scopes render ❤, ❤️, 🙂, flags, skin tones and common emoji sequences. Errors for missing glyphs and malformed sequences identify the message part and code point.
+
+When Google blocks a prompt, clients receive the reason code, explanation and blocked categories that Google supplied. Tavern also reports errors carried by an HTTP 200 response or arriving after streamed text has started. Diagnostic text is redacted and limited to 4096 characters.
+
+Ordinary SillyTavern can use Vertex PayGo 0.6.1-pre1 alongside the extension. PayGo selects the tier, prepares the ticket and records usage. Update both anti-truncation components, restart Tavern and reload the page. [Tavern guide (Chinese)](docs/SILLYTAVERN.md) · [Validation](docs/VALIDATION.en.md)
+
 ## SillyTavern 0.11.0 / TauriTavern custom tag stop (2026-11-08)
 
 TauriTavern's Vertex panel supports the same custom tag stop as SillyTavern. The extension keeps text through the matching closing tag in both streaming and buffered replies. The default is two complete `<tucao>…</tucao>` pairs. [TauriTavern guide (Chinese)](docs/SILLYTAVERN.md#tauritavern)

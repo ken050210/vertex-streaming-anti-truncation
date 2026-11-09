@@ -243,7 +243,10 @@ test("real HTTP output stays progressive and a later submission error cannot ret
   const response = await f.post({ ...payload(), stream: true }), reader = response.body.getReader();
   assert.match(new TextDecoder().decode((await reader.read()).value), /First part/);
   upstream.enqueue(encode(errorBody)); upstream.close();
-  await assert.rejects(async () => { while (!(await reader.read()).done) { /* Await protocol failure. */ } });
+  let tail = "";
+  for (let part = await reader.read(); !part.done; part = await reader.read()) tail += new TextDecoder().decode(part.value);
+  assert.ok(tail.includes(phrase));
+  assert.doesNotMatch(tail, /\[DONE\]/);
   assert.equal(f.calls.length, 1); assert.equal(f.events.at(-1).status, 502);
   assert.equal(f.events.at(-1).geminiCompatibility.promptRetried, false);
 });

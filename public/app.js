@@ -221,7 +221,8 @@ function draft() {
     port: Number($("port").value), timeoutMs: Number($("timeout").value) * 1000, antiTruncation: true, models: state.models.map(m => ({ ...m })),
     accountRotationEnabled: $("account-rotation").checked, accounts: accountDraft(),
     accountTimeoutMs: Number($("account-timeout").value) * 1000, accountFailureThreshold: Number($("account-failures").value), accountCooldownMs: Number($("account-cooldown").value) * 1000,
-    unicodeInput: $("unicode-input").checked, imageInput: $("image-input").value, hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
+    unicodeInput: $("unicode-input").value === "all" ? "all" : $("unicode-input").value === "current",
+    imageInput: $("image-input").value, hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
     geminiLongDecode: $("long-decode").checked, tucaoStop: $("tucao-stop").checked, stopTag: $("stop-tag").value.trim(), stopCount: Number($("stop-count").value), geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
     geminiPromptRetryMatches: retryMatches() };
 }
@@ -348,7 +349,7 @@ function fillConfig(c = state.config.settings) {
   $("account-cooldown").value = (c.accountCooldownMs ?? 60000) / 1000;
   $("account-list").replaceChildren(); $("add-account").disabled = false;
   for (const account of c.accounts || []) addAccount(account);
-  $("unicode-input").checked = c.unicodeInput === true;
+  $("unicode-input").value = c.unicodeInput === "all" ? "all" : c.unicodeInput ? "current" : "off";
   $("image-input").value = c.imageInput || "off";
   $("hide-unavailable").checked = c.hideUnavailableModels !== false;
   $("prefill-to-user").checked = c.geminiPrefillToUser !== false;
@@ -689,9 +690,7 @@ $("probe-button").addEventListener("click", async () => {
       const body = await response.json().catch(() => ({}));
       requestId = body.error?.requestId || null;
       // Google's status, reason and redacted message; shown only through textContent or esc().
-      const google = body.error?.upstreamError;
-      const detail = google ? [google.status, google.reason, google.message].filter(v => typeof v === "string" && v).join(" · ") : "";
-      throw new Error(`HTTP ${response.status} · ` + errorMessage(body.error?.message || body.error?.code) + (detail ? " 上游：" + detail : ""));
+      throw new Error(`HTTP ${response.status} · ` + (body.error?.upstreamError ? body.error.message : errorMessage(body.error?.code || body.error?.message)));
     }
     requestId = response.headers.get("x-request-id");
     const transport = response.headers.get("x-anti-truncation-transport");
@@ -704,7 +703,7 @@ $("probe-button").addEventListener("click", async () => {
           const raw = buffer.slice(0, match.index); buffer = buffer.slice(match.index + match[0].length);
           const data = raw.split(/\r?\n/).filter(l => l.startsWith("data:")).map(l => l.slice(5).trimStart()).join("\n");
           if (!data) continue; if (data === "[DONE]") { done = true; continue; }
-          const chunk = JSON.parse(data); if (chunk.error) throw new Error("上游流式响应返回错误。");
+          const chunk = JSON.parse(data); if (chunk.error) throw new Error(chunk.error.message || "上游流式响应返回错误。");
           for (const choice of chunk.choices || []) { if (choice.delta?.content) { text += choice.delta.content; hasContent = true; } if (choice.finish_reason) finish = choice.finish_reason; }
           if (chunk.usage) usage = chunk.usage;
           if (chunk.router_anti_truncation) restored = chunk.router_anti_truncation.restored;
@@ -748,5 +747,5 @@ window.addEventListener("beforeunload", e => { if (state.dirty || state.probe) {
   if ($("app-view").hidden) { $("login-view").hidden = false; $("login-key").focus(); }
 })();
 
-$("image-input").addEventListener("change", () => { if ($("image-input").value !== "off") $("unicode-input").checked = false; });
-$("unicode-input").addEventListener("change", () => { if ($("unicode-input").checked) $("image-input").value = "off"; });
+$("image-input").addEventListener("change", () => { if ($("image-input").value !== "off") $("unicode-input").value = "off"; });
+$("unicode-input").addEventListener("change", () => { if ($("unicode-input").value !== "off") $("image-input").value = "off"; });

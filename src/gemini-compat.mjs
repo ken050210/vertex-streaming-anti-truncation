@@ -52,7 +52,7 @@ function submissionError(value, matches, allowMessage = false) {
   }
   for (const [text, body] of found) {
     const rule = typeof text === "string" && matches.find(match => text.toLowerCase().includes(match.toLowerCase()));
-    if (rule) return { error: body, rule };
+    if (rule) return { error: body, rule, ...(feedback && !root.candidates?.length ? { feedback } : {}) };
   }
   return null;
 }
@@ -116,7 +116,7 @@ async function inspectSubmissionError(response, stream, matches) {
       await reader.cancel();
       // Matched HTTP-200 error envelopes, refusals and prompt blocks become errors,
       // never successful content, so the client sees the rejection message.
-      const errorResponse = new Response(JSON.stringify({ error: failure.error }), {
+      const errorResponse = new Response(JSON.stringify(failure.feedback ? { promptFeedback: failure.feedback } : { error: failure.error }), {
         status: 400, headers: { "content-type": "application/json; charset=utf-8" },
       });
       errorResponse.routerPromptSubmissionError = failure.rule;

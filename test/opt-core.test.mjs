@@ -41,15 +41,16 @@ test("Google error envelopes reduce to a fixed, redacted, bounded shape", () => 
     { "@type": "type.googleapis.com/google.rpc.Help", reason: "NOT_THIS_ONE" },
     { "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "IAM_PERMISSION_DENIED", metadata: { permission: "aiplatform.endpoints.predict" } }] } };
   for (const shape of [body, [body]]) {
-    assert.deepEqual(googleErrorDetail(shape, token), { status: "PERMISSION_DENIED", reason: "IAM_PERMISSION_DENIED",
+    assert.deepEqual(googleErrorDetail(shape, token), { code: 403, status: "PERMISSION_DENIED", reason: "IAM_PERMISSION_DENIED",
       message: "Permission denied for [email]: key [key], bearer [key], id [token]." });
   }
   assert.equal(googleErrorDetail(body).message.includes(token), true, "only the given secret is removed exactly");
-  const words = "abc ".repeat(60).slice(0, 238);
+  const words = "abc ".repeat(1024).slice(0, 4094);
   const long = googleErrorDetail({ error: { message: words + "😀" + " more".repeat(20) } }).message;
   assert.equal(long, words + "…", "a split surrogate pair is dropped at the cap");
   assert.deepEqual(googleErrorDetail({ error: { status: "denied <b>", message: 42, details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "x".repeat(80) }] } }), null);
-  for (const value of [null, "text", [], { error: "text" }, { message: "no envelope" }]) assert.equal(googleErrorDetail(value), null);
+  for (const value of [null, "text", [], { message: "no envelope" }]) assert.equal(googleErrorDetail(value), null);
+  assert.equal(googleErrorDetail({error:"text"}).message, "text");
   assert.deepEqual(upstreamErrorLogFields({ status: "NOT_FOUND", reason: null, message: "private" }), { upstreamError: { status: "NOT_FOUND", reason: null } });
   assert.deepEqual(upstreamErrorLogFields({ status: "lower", reason: "has space", message: "private" }), {});
   assert.deepEqual(upstreamErrorLogFields(null), {});
@@ -68,8 +69,8 @@ test("upstream HTTP errors keep their code and add Google's fields; logs keep on
     assert.equal(response.headers.get("retry-after"), "5");
     const error = (await response.json()).error;
     assert.equal(error.code, "upstream_http_error");
-    assert.equal(error.message, "upstream_http_error", "the console's Chinese hints still key on the code");
-    assert.deepEqual(error.upstreamError, { status: "PERMISSION_DENIED", reason: "SERVICE_DISABLED",
+    assert.match(error.message, /PERMISSION_DENIED.*SERVICE_DISABLED.*API has not been used/);
+    assert.deepEqual(error.upstreamError, { code: 403, status: "PERMISSION_DENIED", reason: "SERVICE_DISABLED",
       message: "Vertex AI API has not been used in project example-project before or it is disabled. Ask [email] (key [key], bearer [key]) to enable it." });
     assert.deepEqual(f.events[0].upstreamError, { status: "PERMISSION_DENIED", reason: "SERVICE_DISABLED" });
     assert.equal(f.events[0].code, "upstream_http_error");
@@ -78,7 +79,7 @@ test("upstream HTTP errors keep their code and add Google's fields; logs keep on
   }
 });
 
-test("non-JSON, endless and prompt-rejection error bodies keep the status without provider fields", async t => {
+test("plain-text and prompt-rejection messages reach the client; unbounded bodies keep the status", async t => {
   const endless = () => new ReadableStream({ pull(c) { c.enqueue(new TextEncoder().encode('{"error":{"message":"' + "x".repeat(4096))); } });
   for (const body of [() => "private provider error", () => '{"error":"private provider error"}', endless]) {
     const f = await fixture(t, () => new Response(body(), { status: 503, headers: { "retry-after": "3" } }), { models: normal });
@@ -87,7 +88,7 @@ test("non-JSON, endless and prompt-rejection error bodies keep the status withou
     assert.equal(response.headers.get("retry-after"), "3");
     const error = (await response.json()).error;
     assert.equal(error.code, "upstream_http_error");
-    assert.equal(error.upstreamError, undefined);
+    assert.equal(error.upstreamError?.message, body === endless ? undefined : "private provider error");
     assert.equal(f.events[0].upstreamError, undefined);
   }
   const rejected = { error: { status: "INVALID_ARGUMENT", message: "The prompt could not be submitted." } };
@@ -96,8 +97,8 @@ test("non-JSON, endless and prompt-rejection error bodies keep the status withou
   assert.equal(response.status, 400);
   const error = (await response.json()).error;
   assert.equal(error.code, "prompt_submission_failed");
-  assert.equal(error.upstreamError, undefined);
-  assert.equal(f.events[0].upstreamError, undefined);
+  assert.match(error.message, /The prompt could not be submitted/);
+  assert.deepEqual(f.events[0].upstreamError, {status:"INVALID_ARGUMENT", reason:null});
   assert.equal(f.requests.length, 2);
 });
 
@@ -134,7 +135,7 @@ test("provider error events in a stream carry the same fields before the first b
     assert.equal(response.status, 502, name);
     const error = (await response.json()).error;
     assert.equal(error.code, expected, name);
-    assert.deepEqual(error.upstreamError, { status: "RESOURCE_EXHAUSTED", reason: null, message: "Resource exhausted for bearer [key]. Please try again later." }, name);
+    assert.deepEqual(error.upstreamError, { code: 429, status: "RESOURCE_EXHAUSTED", reason: null, message: "Resource exhausted for bearer [key]. Please try again later." }, name);
     assert.deepEqual(f.events[0].upstreamError, { status: "RESOURCE_EXHAUSTED", reason: null });
     for (const value of ["Resource exhausted", token]) assert.equal(JSON.stringify(f.events).includes(value), false);
   }

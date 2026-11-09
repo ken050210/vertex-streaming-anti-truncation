@@ -58,7 +58,7 @@ SillyTavern 需要 Node.js 22.9+。扩展按 1.19.0 的 Vertex 面板、提示�
 
 ### 一键安装包
 
-1. 从 [Release `sillytavern-v0.11.0`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.11.0) 下载 `vertex-anti-truncation-sillytavern-0.11.0.zip`。同页有 `SHA256.txt` 可校验。酒馆至少要启动过一次，生成 `config.yaml`。
+1. 从 [Release `sillytavern-v0.12.0`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.12.0) 下载 `vertex-anti-truncation-sillytavern-0.12.0.zip`。同页有 `SHA256.txt` 可校验。酒馆至少要启动过一次，生成 `config.yaml`。
 2. 关闭酒馆并解压。Windows 双击 `install-windows.cmd`，按提示拖入酒馆文件夹。macOS、Linux 或 Termux 运行 `sh install.sh 酒馆文件夹路径`。命令行代装用 `node install.mjs "酒馆文件夹路径"`。
 3. 重启酒馆，刷新网页，按下方[确认安装](#确认安装)检查。
 
@@ -145,7 +145,9 @@ TT 在本地结束响应流。SillyTavern 的服务端在流式模式下取消�
 
 ### Unicode
 
-扩展读取最新真实用户楼层，只转换请求消息中与原文匹配的文本。单楼层游戏卡没有用户消息，或最新用户楼层为空时，扩展改读聊天变量「我的行动」（预设用 `{{getvar::我的行动}}` 取值）。两处都没有内容会停止发送。原文在请求中找不到时，面板会提示，本次按原文发送。
+「Unicode · 当前输入」读取最新真实用户楼层，只转换请求消息中与原文匹配的文本。单楼层游戏卡没有用户消息，或最新用户楼层为空时，扩展改读聊天变量「我的行动」（预设用 `{{getvar::我的行动}}` 取值）。两处都没有内容会停止发送。原文在请求中找不到时，面板会提示，本次按原文发送。已开启 Unicode 的旧设置继续使用这个模式。
+
+「Unicode · 全部上下文」直接遍历本次请求中的系统提示、开发者提示、用户和 AI 历史及当前输入。独立的工具结果、调用参数、签名和附件保留原样。此模式也适用于没有用户楼层的预填充和“继续”。扩展只编码文本中的汉字和 ASCII 字母，已有标签、编码块和标点会保留。
 
 转码发生在浏览器分流之前。普通 Vertex 和工具、Schema、搜索等旁路请求也会转码。聊天、预设、工具定义、Schema 和图片地址保留原样。已有编码块不会重复编码，也不会追加解码指令。转码后的请求超过 8 MiB 会停止发送。预设若已启用同类功能，关闭其中一处可以避免原文匹配失败。短请求的验证范围见 [Unicode 验收记录](UNICODE-INPUT-AUDIT.md)。
 
@@ -158,13 +160,27 @@ SillyTavern 服务端将选中的文本渲染为无损 WebP 页面，系统指�
 | 错误 | 处理方式 |
 | --- | --- |
 | `413 request_too_large` 或 `413 image_input_too_large` | 前者表示转换前的请求过大，后者表示渲染后超限。缩短输入或改用当前轮 |
-| `400 image_input_unsupported_characters` | 检查被转换文本中的 emoji、控制字符和字体缺字。ZWSP、ZWNJ、WJ、BOM、VS15 可保留 |
+| `400 image_input_unsupported_characters` | 根据报错里的消息位置和 Unicode 码点查找控制字符、无效序列或两种随包字体都缺的字形。常见爱心 ❤、❤️、笑脸、旗帜、肤色和职业组合可直接渲染 |
 | `503 image_renderer_unavailable` | 在服务端插件目录运行 `npm ci --ignore-scripts` 安装渲染依赖，确认随包字体存在，然后重启 |
 | `503 image_render_failed` | 服务端渲染或编码失败，按面板报错排查 |
 
 选了图片输入后，服务端不可用或请求内容不受支持时会停止发送。字体和许可证随服务端包提供，前端扩展目录无需安装 npm 依赖。[图片输入验收记录](IMAGE-INPUT-VALIDATION.md)
 
 ## 范围与边界
+
+### 与 Vertex PayGo 同用
+
+普通 SillyTavern 同时启用 ST-Vertex-PayGo 及其配套服务端时，仍在 PayGo 里选择 Standard、Flex、Priority 和 PayGo Only。抗截断扩展在同一次生成请求上转换输入和还原正文，PayGo 负责准备票据、选择凭据及记录用量。图片模式另外调用本机抗截断服务端的转码接口。此接口只接收所选范围和消息，不调用模型。
+
+使用流式模式时，正文随 PayGo 提供的函数参数到达。上游一次性返回完整参数时，正文也会一次到达。PayGo 准备失败或图片转换失败会结束本次请求。
+
+PayGo 0.6.1-pre1 没有分段续写接口。启用 long decode 且 Gemini 4 请求超过单次上限时，面板会提示调整设置。兼容测试使用了同版本的前后端。[PayGo 扩展](https://github.com/mananekoha114/ST-Vertex-PayGo) · [PayGo 服务端](https://github.com/mananekoha114/ST-Vertex-PayGo-Server)
+
+### 查看生成错误
+
+酒馆的错误提示和扩展面板显示上游提供的说明。Google 通过 `promptFeedback` 拒绝输入时，可看到原因码、原文说明和已标记为拦截的类别。流式正文开始后出现的错误也会显示。经第三方后端时，能显示的内容取决于该后端返回的字段。
+
+### 请求处理
 
 扩展接管同源的 `/api/backends/chat-completions/generate` Vertex POST 请求。它在提示词末尾加一条 user 指令，让模型通过工具参数交付正文。已收到的内容仍需通过回复完整性检查。达到长度上限或被过滤时保留上游结束原因，未命中标签的残缺参数或意外断流会报错。TT 的流式还原失败会产生错误事件，非流式返回 HTTP 502。TT 自己报告的凭据、配额等错误会按酒馆原样显示。
 

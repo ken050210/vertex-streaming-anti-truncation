@@ -42,9 +42,6 @@ test('bounded pagination, overflow, unsupported characters and cancellation fail
  for(const [text,limit,code] of [['x'.repeat(150001),8e6,'image_input_too_large'],['test',100,'image_input_too_large'],['a\0b',8e6,'image_input_unsupported_characters'],['\u{10ffff}',8e6,'image_input_unsupported_characters']]) {
   await assert.rejects(prepareImageInput(payload(text),'all',limit),e=>e.code===code);
  }
- for(const text of ['⚽','♥️','👩‍💻','👍🏽','1️⃣','🇨🇳']) {
-  await assert.rejects(prepareImageInput(payload(text),'all'),e=>e.code==='image_input_unsupported_characters');
- }
  await assert.rejects(prepareImageInput(payload('test'),'all',8e6,{signal:AbortSignal.abort()}));
  await assert.rejects(prepareImageInput(payload('test'),'invalid'),e=>e.code==='invalid_image_input_mode');
 });
@@ -52,14 +49,36 @@ test('text-presentation symbols covered by the bundled font are rendered',async(
  const result=await prepareImageInput({messages:[{role:'user',content:'喜欢你♥ ♀ ♂ © ™ ▶ ♠'}]},'all');
  assert.equal(result.metadata.reason,'encoded');assert.equal(result.metadata.pages,1);
 });
+test('both image scopes render actual colored emoji pixels, including entire grapheme sequences',async()=>{
+ for (const text of ['❤','❤️','♥️','🙂','💖','⚽','👩‍💻','👍🏽','1️⃣','🇨🇳']) {
+  const messages = [{role:'assistant',content:text},{role:'user',content:text}];
+  for (const mode of ['current-turn','all']) {
+   const result = await prepareImageInput({messages},mode);
+   assert.equal(result.metadata.pages,mode === 'all' ? 2 : 1);
+   const part = result.payload.messages.at(-1).content[0];
+   assert.match(part.image_url.url,/^data:image\/webp;base64,/);
+   const bitmap = await loadImage(Buffer.from(part.image_url.url.split(',')[1],'base64'));
+   const ctx = createCanvas(bitmap.width,bitmap.height).getContext('2d');
+   ctx.drawImage(bitmap,0,0);
+   const pixels = ctx.getImageData(0,42,bitmap.width,bitmap.height-42).data;
+   let ink=0, color=0;
+   for(let p=0;p<pixels.length;p+=4) {
+    if(Math.min(pixels[p],pixels[p+1],pixels[p+2])<150) ink++;
+    if(Math.max(pixels[p],pixels[p+1],pixels[p+2])-Math.min(pixels[p],pixels[p+1],pixels[p+2])>35) color++;
+   }
+   assert.ok(ink>20,text);
+   if(text!=='⚽') assert.ok(color>20,text);
+  }
+ }
+});
 test('zero-width format characters draw nothing and are accepted',async()=>{
  const url=async text=>(await prepareImageInput({messages:[{role:'user',content:text}]},'all')).payload.messages[0].content[0].image_url.url;
  assert.equal(await url('\ufeffhi\u200bthere\u200c\u2060 ♥\ufe0e'),await url('hithere ♥'));
 });
 test('unsupported characters report the message part and code point, not the text',async()=>{
  const unsupported=(payload,param,character)=>assert.rejects(prepareImageInput(payload,'all'),e=>e.status===400&&e.code==='image_input_unsupported_characters'&&e.message===e.code&&e.param===param&&e.character===character);
- await unsupported({messages:[{role:'user',content:'ok'},{role:'assistant',content:[{type:'text',text:'fine'},{type:'text',text:'bad ☺ 😀'}]},{role:'user',content:'a\vb'}]},'/messages/1/content/1','U+263A');
- for(const [text,character] of [['x😀','U+1F600'],['a\vb','U+000B'],['a\u200db','U+200D'],['a\ufe0fb','U+FE0F'],['\ud800','U+D800']]) await unsupported({messages:[{role:'user',content:text}]},'/messages/0/content',character);
+ await unsupported({messages:[{role:'user',content:'ok'},{role:'assistant',content:[{type:'text',text:'fine'},{type:'text',text:'😀 \u{10FFFF}'}]},{role:'user',content:'a\vb'}]},'/messages/1/content/1','U+10FFFF');
+ for(const [text,character] of [['a\vb','U+000B'],['a\u200db','U+200D'],['a\ufe0fb','U+FE0F'],['\ud800','U+D800']]) await unsupported({messages:[{role:'user',content:text}]},'/messages/0/content',character);
 });
 test('diagnostics project only fixed fields',()=>{
  assert.deepEqual(imageInputLogFields({mode:'all',reason:'encoded',pages:1,bytes:42,messages:1,text:'private',data:'private'}),{imageInput:{mode:'all',reason:'encoded',pages:1,bytes:42,messages:1}});

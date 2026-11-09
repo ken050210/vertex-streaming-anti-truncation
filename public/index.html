@@ -31,7 +31,7 @@
         <button data-page="test"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6m-5 0v7l-5 8a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-8V3M8 15h8"/></svg>连接测试</button>
       </nav>
       <div class="rail-note"><span class="eyebrow">MODEL LIBRARY</span><strong id="rail-models">正在读取模型</strong><span class="small muted">正常 · 非流式 · 流式抗截断</span></div>
-      <div class="rail-foot"><span id="rail-lamp" class="lamp idle"></span><div><strong id="rail-status">正在连接</strong><span id="listen-scope" class="small muted">仅限本机 · 127.0.0.1</span></div><span class="version">0.14.0</span></div>
+      <div class="rail-foot"><span id="rail-lamp" class="lamp idle"></span><div><strong id="rail-status">正在连接</strong><span id="listen-scope" class="small muted">仅限本机 · 127.0.0.1</span></div><span class="version">0.17.0</span></div>
     </aside>
     <div class="main-wrap">
       <header class="topbar"><div><p class="eyebrow">GATEWAY OPERATIONS</p><h1 id="page-title">总览</h1></div>
@@ -100,8 +100,8 @@
                 <div class="panel-head"><h2><span class="step">04</span> SillyTavern 兼容与重试</h2></div>
                 <label class="toggle-row"><span>隐藏无可用路由的模型<small>隐藏已停用的版本及上游返回 401 后的连接。429、超时和其他临时错误不隐藏。</small></span><input id="hide-unavailable" type="checkbox" checked></label>
                 <p class="hint">轮询关闭时使用主账号；开启时，单个账号的 401 不隐藏整个模型。修正凭据后保存并应用会重置账号状态；模型列表不会触发推理探测。</p>
-                <label class="field">图片输入（实验）<select id="image-input" aria-describedby="image-input-help"><option value="off">关闭</option><option value="current-turn">当前轮转图</option><option value="all">全部会话转图</option></select></label><p id="image-input-help" class="hint">与 Unicode 互斥。文字转图片（无损 WebP）会增加用量，图片会触发抗截断缓冲回退。超限或不支持的字符会报错。</p>
-                <label class="toggle-row"><span>Unicode 输入转码（所有模型）<small>独立于抗截断，仅编码最新真实用户楼层的匹配文本。客户端须传递楼层原文；默认关闭，可能增加 token 用量。</small></span><input id="unicode-input" type="checkbox"></label>
+                <label class="field">图片输入（实验）<select id="image-input" aria-describedby="image-input-help"><option value="off">关闭</option><option value="current-turn">当前轮转图</option><option value="all">全部会话转图</option></select></label><p id="image-input-help" class="hint">文字转为无损 WebP 后可能增加用量。Vertex 原生参数流支持转图后逐段显示正文。超限或缺字时会显示错误。</p>
+                <label class="field">Unicode 输入转码（所有模型）<select id="unicode-input" aria-describedby="unicode-input-help"><option value="off">关闭</option><option value="current">当前输入</option><option value="all">全部上下文（含当前输入）</option></select></label><p id="unicode-input-help" class="hint">当前输入需要客户端提供用户楼层原文。全部上下文会编码系统提示和对话文本，可能增加 token 用量。</p>
                 <label class="toggle-row"><span>Gemini 3.7 / 3.8 Flash、4 Argon 预填充转为 USER<small>将末尾纯文本 assistant 消息改为 user，保留原文；工具和思考历史保持原样。转换不保证模型会接着预填充续写。</small></span><input id="prefill-to-user" type="checkbox" checked></label>
                 <label class="toggle-row"><span>自定义标签截停<small>默认开启，完整 &lt;tucao&gt;…&lt;/tucao&gt; 出现 2 次后停止。保留结束标签，丢弃后续所有内容（包括其后的 MVU 更新块）。仅用于抗截断回复。</small></span><input id="tucao-stop" type="checkbox" checked></label>
                 <div class="form-grid">

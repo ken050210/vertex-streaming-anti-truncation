@@ -89,7 +89,7 @@ export async function settingsFromEnv(env = process.env) {
     tucaoStop: toggle("TAG_STOP", toggle("TUCAO_STOP", true)),
     stopTag: env.STOP_TAG ?? DEFAULT_STOP_TAG,
     stopCount: integer(env.STOP_COUNT, DEFAULT_STOP_COUNT, 1, Number.MAX_SAFE_INTEGER, "STOP_COUNT"),
-    unicodeInput: toggle("UNICODE_INPUT", false), imageInput: env.IMAGE_INPUT || "off",
+    unicodeInput: env.UNICODE_INPUT === "all" ? "all" : toggle("UNICODE_INPUT", false), imageInput: env.IMAGE_INPUT || "off",
     hideUnavailableModels: toggle("HIDE_UNAVAILABLE_MODELS", true),
     geminiPrefillToUser: toggle("GEMINI_PREFILL_TO_USER", true), geminiLongDecode: toggle("GEMINI_LONG_DECODE", false),
     geminiPromptRetryEnabled: toggle("GEMINI_PROMPT_RETRY_ENABLED", false), geminiPromptRetryText,
@@ -173,7 +173,8 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
   if (s.unicodeInput && s.imageInput !== "off") throw new Error("Unicode and image input are mutually exclusive");
   if (typeof s.antiTruncation !== "boolean") throw new Error("Invalid anti-truncation setting");
   validateTagStopRule({ tag: s.stopTag, count: s.stopCount });
-  for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiLongDecode", "geminiPromptRetryEnabled", "unicodeInput", "accountRotationEnabled", "tucaoStop"]) {
+  if (![false, true, "all"].includes(s.unicodeInput)) throw new Error("Invalid Unicode input toggle or scope");
+  for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiLongDecode", "geminiPromptRetryEnabled", "accountRotationEnabled", "tucaoStop"]) {
     if (typeof s[name] !== "boolean") throw new Error("Invalid compatibility toggle");
   }
   if (typeof s.geminiPromptRetryText !== "string" || Buffer.byteLength(s.geminiPromptRetryText) > MAX_RETRY_TEXT_BYTES) {

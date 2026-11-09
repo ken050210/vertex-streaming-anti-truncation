@@ -451,7 +451,7 @@ test("image input reaches compatible and native routes; failures do not call ups
   },{imageInput:'current-turn',antiTruncation:false,nativeOnly});
   const response=await f.post(payload);assert.equal(response.status,200);assert.equal(response.headers.get('x-image-input'),'encoded');await response.json();
   assert.equal(f.events[0].imageInput.pages,1);assert.ok(!JSON.stringify(f.events).includes('base64'));
-  const rejected=await f.post({...payload,messages:[{role:'user',content:'😀'}]});assert.equal(rejected.status,400);assert.equal(f.requests.length,1);
+  const rejected=await f.post({...payload,messages:[{role:'user',content:'😀\0'}]});assert.equal(rejected.status,400);assert.equal(f.requests.length,1);
  }
 });
 test("non-streaming image input keeps JSON tool transport for a streaming alias",async t=>{

@@ -5,7 +5,7 @@ import { wrapNativeTextStream } from "./vertex-text-stream.mjs";
 import { inspectCompletion, guardCompletionStream } from "./completion-integrity.mjs";
 import { completionStream } from "./completion-stream.mjs";
 import { documentedUnsupported } from "./unsupported-params.mjs";
-import { isObject, protocolError, sseData, transformSse } from "./wire.mjs";
+import { isObject, protocolError, readUpstreamError, sseData, transformSse } from "./wire.mjs";
 import { bypassReason, BODY_LIMIT } from "../integrations/sillytavern/shared.js";
 import { isGemini4Argon, gemini4OutputLimit, gemini4ThinkingLevel, gemini4ToolMetadata } from "./gemini4.mjs";
 import { createTagStop } from "./tag-stop.mjs";
@@ -112,7 +112,7 @@ function nativeUsage(usage) {
 
 // Vertex's ST streaming reader expects native candidates[].content.parts, while
 // its non-streaming reader expects choices[] plus responseContent. Match both.
-export function toSillyTavernStream(response, getNativeUsage = () => undefined, model, getStopAfter = () => undefined) {
+export function toSillyTavernStream(response, getNativeUsage = () => undefined, model, getStopAfter = () => undefined, getTextSignature) {
   return transformSse(response, ({ data }, emit) => {
     if (!data) return;
     if (data.trim() === "[DONE]") return emit(sseData("[DONE]"));
@@ -128,7 +128,11 @@ export function toSillyTavernStream(response, getNativeUsage = () => undefined, 
       if (delta.reasoning_content) parts.push({ thought: true, text: delta.reasoning_content });
       if (delta.content) parts.push({ text: delta.content });
       const candidate = { index: choice.index ?? 0, content: { role: "model", parts } };
-      if (choice.finish_reason != null) candidate.finishReason = choice.native_finish_reason ?? finishReasons[choice.finish_reason] ?? "OTHER";
+      if (choice.finish_reason != null) {
+        candidate.finishReason = choice.native_finish_reason ?? finishReasons[choice.finish_reason] ?? "OTHER";
+        const signature = !parsed.router_anti_truncation?.restored && !getStopAfter() && getTextSignature?.();
+        if (signature) parts.push({ text: "", thoughtSignature: signature });
+      }
       output.candidates.push(candidate);
     }
     if (parsed.usage && !getStopAfter()) { output.usage = parsed.usage; output.usageMetadata = getNativeUsage() ?? nativeUsage(parsed.usage); }
@@ -140,12 +144,13 @@ export function toSillyTavernStream(response, getNativeUsage = () => undefined, 
 
 // A checked, complete reply in the shape ST asked for. Also used in a WebView,
 // where older WebKit has no Response.json.
-export function completedSillyTavernResponse(completion, prepared, usageMetadata, stopAfter) {
+export function completedSillyTavernResponse(completion, prepared, usageMetadata, stopAfter, textSignature) {
   const message = completion.choices[0].message;
-  if (prepared.stream) return toSillyTavernStream(guardCompletionStream(completionStream(completion, true), () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stopAfter);
+  if (prepared.stream) return toSillyTavernStream(guardCompletionStream(completionStream(completion, true), () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stopAfter, () => textSignature);
   const parts = [];
   if (message.reasoning_content) parts.push({ thought: true, text: message.reasoning_content });
   if (message.content) parts.push({ text: message.content });
+  if (textSignature && !completion.router_anti_truncation?.restored && !stopAfter) parts.push({text:"",thoughtSignature:textSignature});
   for (const call of message.tool_calls ?? []) parts.push(functionCallPart(call, prepared.model));
   return new Response(JSON.stringify({ ...completion, responseContent: { role: "model", parts }, usageMetadata,
     vertexAntiTruncation: completion.router_anti_truncation, ...(stopAfter ? { vertexStopAfter: stopAfter } : {}) }), { headers: { "content-type": "application/json" } });
@@ -163,13 +168,14 @@ async function readJson(response) {
   catch { throw protocolError("invalid_upstream_json"); }
 }
 
-export async function restoreSillyTavernResponse(upstream, prepared) {
+export async function restoreSillyTavernResponse(upstream, prepared, credential) {
   if (!upstream.ok) {
-    await upstream.body?.cancel();
-    throw Object.assign(new Error("vertex_upstream_http_error"), { status: upstream.status, code: "vertex_upstream_http_error" });
+    throw Object.assign(protocolError("vertex_upstream_http_error"), {
+      status: upstream.status, upstreamError: await readUpstreamError(upstream, credential)
+    });
   }
   const stop = prepared.toolName && prepared.tucaoStop ? createTagStop(prepared.toolName, prepared.stopTag, prepared.stopCount) : null;
-  if (prepared.upstreamStream) {
+  if (prepared.upstreamStream && !upstream.headers.get("content-type")?.includes("application/json")) {
     if (!upstream.body) throw protocolError("empty_upstream_stream");
     if (stop) upstream = stop.stream(upstream);
     let usageMetadata;

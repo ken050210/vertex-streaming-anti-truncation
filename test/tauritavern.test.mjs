@@ -227,11 +227,12 @@ test("cut-short, interrupted and malformed replies are never reported as complet
     const streamed = events(await (await send(intercept(host(name => new Response(wire(name))), "streaming"))).text());
     assert.equal(streamed.at(-1).error.code, code);
     assert.ok(!streamed.some(event => event.candidates?.[0]?.finishReason));
-    assert.doesNotMatch(JSON.stringify(streamed), /provider failure/);
+    if (code === "upstream_stream_error") assert.match(streamed.at(-1).error.message, /INTERNAL.*provider failure/);
     const buffered = await send(intercept(host(name => new Response(wire(name))), "buffered", { onStatus: status => statuses.push(status) }), { stream: false });
     assert.equal(buffered.status, 502);
-    assert.equal((await buffered.json()).error.code, code);
-    assert.deepEqual(statuses.at(-1), { error: code, status: 502 });
+    const error = (await buffered.json()).error;
+    assert.equal(error.code, code);
+    assert.deepEqual(statuses.at(-1), { error: code, status: 502, message: error.message });
   }
 });
 

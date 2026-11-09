@@ -2,6 +2,14 @@
 
 [中文](VALIDATION.md) | English
 
+## Gateway 0.17.0 / SillyTavern 0.12.0 (2026-11-10)
+
+Unicode tests cover the current input, system and developer instructions, conversation history and Continue. They check that tool arguments, tool results, attachments and existing encoded blocks survive. Both image scopes rendered hearts, flags, skin tones and emoji sequences, and the tests decoded the WebP output to check for visible glyphs. The deployed SillyTavern conversion endpoint returned one page for the current turn and three for the full conversation on synthetic input.
+
+An isolated browser loaded the actual extension. A simulated Google HTTP 200 prompt block showed `PROHIBITED_CONTENT` and Google's explanation in the panel. A separate stream delivered text before reporting `429 RESOURCE_EXHAUSTED` to the client. The PayGo 0.6.1-pre1 checks exercised both extension load orders and the Standard, Flex and Priority tiers. Each of eight synthetic requests prepared one ticket, submitted one generation and registered usage once. The deployed Tavern ran the anti-truncation plugin alone. PayGo tests used a simulated upstream. This release check made no paid model requests.
+
+[Unicode tests](../test/unicode-input.test.mjs) · [WebP tests](../test/image-input.test.mjs) · [PayGo tests](../test/paygo.test.mjs) · [Tavern error tests](../test/sillytavern.test.mjs)
+
 ## SillyTavern 0.11.0 / TauriTavern tag stop (2026-11-08)
 
 All 288 offline tests passed. The TT cases covered a closing tag split across chunks, cancellation of an open host stream, clipping of full tool arguments and plain text, omitted final usage, and a fresh count on Continue. They also checked client tools before the stop, native thoughts, TT error text, the disabled switch and bypassed requests. [TT tests](../test/tauritavern.test.mjs)

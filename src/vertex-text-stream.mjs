@@ -1,7 +1,7 @@
 import { mapFinishReason, translateUsage, SIGNATURE_ID_PREFIX } from "./vertex-native.mjs";
 import { encodeGemini4ToolId, isGemini4Argon } from "./gemini4.mjs";
 import { NativePartialArgs } from "./vertex-partial-args.mjs";
-import { isObject, protocolError, sseData, transformSse } from "./wire.mjs";
+import { checkPromptFeedback, checkSseError, isObject, protocolError, sseData, transformSse } from "./wire.mjs";
 
 const fail = suffix => { throw protocolError("anti_truncation_native_" + suffix); };
 
@@ -9,11 +9,11 @@ const fail = suffix => { throw protocolError("anti_truncation_native_" + suffix)
 // emitted whole, including their final thought signature, for ST's tool reader.
 // Google serializes even parallel calls one after another using willContinue.
 // The empty-choices usage chunk follows OpenAI's stream_options.include_usage.
-export function wrapNativeTextStream(response, toolName, model, onNativeUsage = () => {}, includeUsage = true, tools = []) {
+export function wrapNativeTextStream(response, toolName, model, onNativeUsage = () => {}, includeUsage = true, tools = [], onTextSignature) {
   if (!response.ok || !response.body) return response;
   const id = "chatcmpl-" + crypto.randomUUID(), created = Math.floor(Date.now() / 1000);
   const allowed = new Set(tools.map(tool => tool.function?.name));
-  let current, calls = 0, realCalls = 0, textCall = false, removedSignature = false, terminal = false, failed = false, usage;
+  let current, calls = 0, realCalls = 0, textCall = false, removedSignature = false, terminal = false, usage;
   const chunk = (emit, delta, finish_reason = null, nativeReason) => emit(sseData({
     id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason,
       ...(nativeReason ? { native_finish_reason: nativeReason } : {}) }],
@@ -83,12 +83,13 @@ export function wrapNativeTextStream(response, toolName, model, onNativeUsage = 
       current = null;
     }
   };
-  return transformSse(response, ({ data }, emit) => {
+  return transformSse(response, ({ data, event }, emit) => {
+    checkSseError(event, data, "upstream_stream_error");
     if (!data || data.trim() === "[DONE]") return;
     let parsed;
     try { parsed = JSON.parse(data); } catch { fail("invalid_sse"); }
-    if (parsed.error) { failed = true; emit(sseData(parsed)); return; }
-    if (failed) return;
+    if ((Array.isArray(parsed) ? parsed[0] : parsed)?.error) throw Object.assign(protocolError("upstream_stream_error"), { upstreamBody: parsed });
+    checkPromptFeedback(parsed);
     if (parsed.usageMetadata) {
       onNativeUsage(parsed.usageMetadata);
       usage = translateUsage(parsed.usageMetadata);
@@ -98,19 +99,17 @@ export function wrapNativeTextStream(response, toolName, model, onNativeUsage = 
     for (const part of candidate?.content?.parts ?? []) {
       if (terminal && (part.functionCall || part.text)) fail("data_after_finish");
       if (part.functionCall) call(emit, part);
+      if (!part.thought && typeof part.text === "string" && part.thoughtSignature) onTextSignature?.(part.thoughtSignature);
       if (part.text) chunk(emit, part.thought === true ? { reasoning_content: part.text } : { content: part.text });
     }
-    // Any prompt block is a content filter, whatever its code (OTHER, JAILBREAK...).
-    const blockReason = !parsed.candidates?.length && parsed.promptFeedback?.blockReason;
-    const reason = candidate?.finishReason ?? blockReason;
+    const reason = candidate?.finishReason;
     if (reason) {
       if (terminal) fail("duplicate_finish");
       if (reason === "STOP" && current) fail("incomplete_args");
       terminal = true;
-      chunk(emit, {}, mapFinishReason(blockReason ? "SAFETY" : reason, calls > 0), reason);
+      chunk(emit, {}, mapFinishReason(reason, calls > 0), reason);
     }
   }, emit => {
-    if (failed) return;
     if (!terminal) fail("stream_interrupted");
     if (includeUsage && usage) emit(sseData({ id, object: "chat.completion.chunk", created, model, choices: [], usage }));
     emit(sseData("[DONE]"));

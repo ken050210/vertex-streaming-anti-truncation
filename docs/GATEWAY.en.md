@@ -195,11 +195,25 @@ Logs add only `geminiCompatibility.prefillConverted` / `promptRetried` booleans 
 
 ## Unicode input
 
-The gateway's **Unicode input (all models)** setting is a separate, default-off global toggle (`UNICODE_INPUT=true|false`). Save/apply affects subsequent requests across normal, buffered and streaming modes. Enabled clients must supply `router_unicode_input: {user_floor: "latest actual user chat floor"}`. Missing source fails locally with 400; an expanded body exceeding the size limit fails with 413. The local field is stripped even when disabled. The encoding rules and current-floor matching follow an encoder by 灰鸠「GoldRush」 (the author's online name) and are included with the author's permission; see [NOTICE](../NOTICE.md).
+Choose a scope in the console's Unicode input selector, then save and apply. CLI users can set `UNICODE_INPUT`.
 
-Only matching message text is encoded; unmatched input remains unchanged. Han characters and ASCII letters become `⟦U:…⟧`; tags, existing encoded blocks, digits, punctuation and emoji are kept, but letters inside `{{user}}` are not protected. Matches inside tags or existing `⟦U:…⟧` blocks elsewhere in a message are left unchanged (a deliberate difference from the reference); for this check, only a complete one-line tag such as `<剧情>` counts, so a stray `<` elsewhere in the message (for example `<3`) does not protect anything. Encoding of the floor itself keeps every `<…>` span, as the reference does. The three forms of the floor (original, trimmed and newline-normalized) are matched in one pass, longest first, and inserted blocks are never matched again. There is no serialized-JSON fallback: model IDs, tool names, schemas and media URLs remain intact. Tools/schema bypass does not disable input encoding. Response header `x-unicode-input` and fixed metadata/counts describe the result without logging prompt text.
+| Value | What gets encoded |
+| --- | --- |
+| `false` | Off (default) |
+| `true` | Text matching the current user input supplied by the client |
+| `all` | System, developer, user and assistant message text, including the current input. No floor field is needed |
 
-For SillyTavern custom API connections, import and enable `integrations/sillytavern-unicode-floor.json` (default endpoint loopback port 4781; adjust `gatewayPort` in the script if needed). The script only supplies the floor text; the gateway switch decides whether to encode. It keeps the existing custom body configuration and needs Tavern's `/lib.js` YAML parser; disabling the script or reloading the page removes it. For native Vertex connections, choose Unicode in the paired extension's 输入转码 (input encoding) selector instead. Disable duplicate preset encoders. Encoding can increase tokens/latency and does not guarantee model comprehension. With extension UI v0.2.0 (then a separate checkbox), paired Tavern installation, toggle persistence and short live requests across all three transport modes passed; live import and persistence of the selector introduced in UI 0.3.0 remain unverified. Long-context quality and truncation reduction remain untested. See the [acceptance record](UNICODE-INPUT-AUDIT.md).
+Current-input mode reads the latest user message from the client field below. A missing or invalid value returns `400 unicode_floor_required`. The gateway matches the original, trimmed and newline-normalized forms, preferring the longest at each position. The matcher skips replacements it has already made, existing encoded blocks and text inside complete single-line tags such as `<剧情>`. A stray `<` such as `<3` leaves later text eligible. If nothing matches, the original text is forwarded.
+
+```json
+{"router_unicode_input":{"user_floor":"latest user message"}}
+```
+
+Both scopes write Han characters and ASCII letters as `⟦U:…⟧`. Tags, existing encoded blocks, digits, punctuation and emoji keep their original form. Letters inside `{{user}}` are encoded. Model IDs, tool arguments, schemas and media URLs keep their original values. Full-context mode also skips separate tool results. Input encoding still applies when a tool or schema request bypasses output restoration. The encoding and floor-matching rules follow an encoder by 灰鸠「GoldRush」 and are included with the author's permission. [Attribution](../NOTICE.md)
+
+The gateway strips `router_unicode_input` before forwarding the request. An encoded body above the size limit returns `413 unicode_input_too_large`. The `x-unicode-input` header gives the outcome. Logs record the encoding status and counts. Encoding can increase token use and latency. The live short-prompt checks covered current-input mode. [Acceptance record](UNICODE-INPUT-AUDIT.md)
+
+For a Tavern custom API connection in current-input mode, enable the floor bridge. It preserves the existing custom request body using Tavern's `/lib.js` YAML parser and defaults to loopback port 4781. Edit `gatewayPort` if you use another port. Full-context mode reads the request directly. For Tavern's native Vertex connection, choose the scope in the extension panel. [Floor bridge](../integrations/sillytavern-unicode-floor.json) · [Bridge source](../integrations/sillytavern-unicode-floor.js) · [Tavern extension (Chinese)](SILLYTAVERN.md)
 
 ## Text-to-image input
 
@@ -212,7 +226,7 @@ The base64 images and the rest of the request must fit within 8 MiB. With about 
 | Failure | Result |
 | --- | --- |
 | Size or page limit exceeded | `413 image_input_too_large` |
-| Unsupported emoji, control characters or missing glyphs | HTTP 400. Text-style symbols such as ♥ © ™ render when the font covers them. ZWSP, ZWNJ, WJ, BOM and VS15 are allowed |
+| Control characters, malformed sequences or missing glyphs | HTTP 400. Bundled fonts render ❤, ❤️, 🙂, skin tones, flags and common emoji sequences |
 | Missing renderer or font | `503 image_renderer_unavailable` |
 | Rendering or encoding failure | `503 image_render_failed` |
 
@@ -321,7 +335,7 @@ A failed `/v1/chat/completions` request returns an `error` object with `code`, `
 | `image_render_failed` | 503 | Local image rendering failed |
 | `upstream_protocol_error` | 502 | The upstream sent a malformed reply or disconnected early |
 
-For HTTP errors and stream errors before any output (`upstream_stream_error`, `native_stream_error`), `upstreamError` can include a Google `status`, an ErrorInfo `reason` and a `message` of up to 240 characters. The gateway strips markup, email addresses, key-like strings, long tokens and the current credential. Logs retain only the status and reason.
+The client receives Google's status, reason and diagnostic text in `error.message`. The text is capped at 4096 characters and credentials are redacted. A prompt blocked in an HTTP 200 response includes Google's `blockReason`, `blockReasonMessage` and any blocked categories. After streaming starts, the final SSE error event carries the diagnostic. Logs retain only the status and reason codes.
 
 ### Checking a streamed reply
 
