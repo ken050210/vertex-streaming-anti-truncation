@@ -2,6 +2,10 @@
 
 [中文](VALIDATION.md) | English
 
+## Gateway 0.18.0 · Gemini 4 Carbon (2026-11-10)
+
+A loopback HTTP test calls the three public Carbon profiles on an account configured for `us-central1`. It checks the restored text and the `locations/global` URL for compatible and native streaming requests, then calls the legacy model and checks its regional URL. The test uses a simulated upstream. Access to Carbon on a real Vertex project was not tested. [Gateway routing test](../test/gateway.test.mjs)
+
 ## Gateway 0.17.0 / SillyTavern 0.12.0 (2026-11-10)
 
 Unicode tests cover the current input, system and developer instructions, conversation history and Continue. They check that tool arguments, tool results, attachments and existing encoded blocks survive. Both image scopes rendered hearts, flags, skin tones and emoji sequences, and the tests decoded the WebP output to check for visible glyphs. The deployed SillyTavern conversion endpoint returned one page for the current turn and three for the full conversation on synthetic input.

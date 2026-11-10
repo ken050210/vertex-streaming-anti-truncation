@@ -97,12 +97,41 @@ test("loopback HTTP API requires auth and validates requests before any upstream
     assert.equal((await f.get(path, null)).status, 401);
     assert.equal((await f.get(path, "wrong-key")).status, 401);
   }
-  assert.deepEqual((await (await f.get("/v1/models")).json()).data.map(x => x.id), [MODEL_ID]);
+  assert.deepEqual((await (await f.get("/v1/models")).json()).data.map(x => x.id),
+    [MODEL_ID, "gemini-4-carbon", "gemini-4-carbon-antitruncation-nonstream", "gemini-4-carbon-antitruncation-stream"]);
   assert.equal((await f.get("/unknown")).status, 404);
   for (const body of ["bad-json", {}, { ...payload, model: "unavailable" }, { ...payload, messages: [] }, { ...payload, stream: "true" }]) {
     assert.equal((await f.post(body)).status, 400);
   }
   assert.equal(f.requests.length, 0);
+});
+
+test("Carbon uses the global Vertex URL for all three profiles on a regional account", async t => {
+  const regional = buildConfig({ ...DEFAULT_SETTINGS, gatewayKey: key, authMode: "access-token",
+    projectId: "example-project", accessToken: token, location: "us-central1" });
+  const f = await fixture(t, request => {
+    if (request.url.includes(":streamGenerateContent")) {
+      const name = request.json.tools[0].functionDeclarations[0].name;
+      return new Response(new Blob([call({ name, args: { content: "OK" } }), finish("STOP")]), { headers: { "content-type": "text/event-stream" } });
+    }
+    const tool = request.json.tools?.[0].function;
+    return Response.json(tool ? completion(tool.name) : { choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] });
+  }, regional);
+  for (const model of ["gemini-4-carbon", "gemini-4-carbon-antitruncation-nonstream", "gemini-4-carbon-antitruncation-stream", MODEL_ID]) {
+    const streamed = model.endsWith("-stream");
+    const response = await f.post({ ...payload, model, stream: streamed });
+    assert.equal(response.status, 200);
+    if (streamed) assert.equal(visible(await response.text()), "OK");
+    else assert.equal((await response.json()).choices[0].message.content, "OK");
+    const { url, json } = f.requests.at(-1);
+    const regionalModel = model === MODEL_ID;
+    const expected = regionalModel ? regional.baseUrl : "https://aiplatform.googleapis.com/v1/projects/example-project/locations/global/endpoints/openapi";
+    if (streamed) assert.equal(url, "https://aiplatform.googleapis.com/v1/projects/example-project/locations/global/publishers/google/models/gemini-4-carbon:streamGenerateContent?alt=sse");
+    else {
+      assert.equal(url, expected + "/chat/completions");
+      assert.equal(json.model, regionalModel ? UPSTREAM_MODEL : "google/gemini-4-carbon");
+    }
+  }
 });
 
 test("native HTTP text arrives before upstream completion, with matching metadata-only acceptance logs", { timeout: 5000 }, async t => {

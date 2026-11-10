@@ -25,7 +25,7 @@ npm start
 
 在「连接配置」导入完整服务账号 JSON，也可以选择 Express API Key、短期 OAuth 令牌或[自定义上游](#自定义上游)。控制台会从服务账号填入项目 ID，你可以改成该账号有权访问的其他项目。Express Key、访问令牌和中转密钥只接受可见 ASCII 字符，粘贴时混入中文引号或全角字符会无法保存。
 
-服务等级可选 Standard、Flex 或 Priority。Express、Flex 和 Priority 使用 `global` 地区。Express 填写密钥所属的项目 ID 或项目编号后，请求地址会带上 `projects/{项目}/locations/global`。留空时使用无项目端点，由 Express 选择地区。Gemini 4 Argon 必须填写项目，否则本地会返回 `express_project_required`。
+服务等级可选 Standard、Flex 或 Priority。Express、Flex 和 Priority 使用 `global` 地区。Express 填写密钥所属的项目 ID 或项目编号后，请求地址会带上 `projects/{项目}/locations/global`。留空时使用无项目端点，由 Express 选择地区。Gemini 4 Argon 和 Carbon 必须填写项目，否则本地会返回 `express_project_required`。
 
 「本地网关」里的访问模式同时控制客户端 API 和控制台登录。
 
@@ -95,6 +95,8 @@ NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7890 NO_PROXY=127.0.0.1,localh
 把 `http://127.0.0.1:7890` 换成你的代理地址。代理模式下 `UPSTREAM_TIMEOUT_MS` 同样生效；连不上上游时日志记录 `502 upstream_unreachable`。这些设置对[自定义上游](#自定义上游)同样生效；中转服务在局域网里时，要把它的地址加进 `NO_PROXY`，否则请求会绕到代理上。代理路径目前只有本地测试，尚无真实请求验证。
 
 ## 添加多个模型及版本
+
+直连 Vertex 时，`gemini-4-carbon` 始终使用 `global`。默认模型列表提供普通、非流式抗截断和流式抗截断三个入口。已有自定义模型列表的用户可勾选所需版本，点「添加 Gemini 4 Carbon（global）」并保存，然后在客户端刷新模型列表。
 
 1. 在“连接配置”填写凭据，再进入“模型与版本”点击 **拉取 Model List**。拉取使用当前表单与已保存的凭据，无需先启动网关。
 2. 搜索并勾选一个或多个上游模型，选择需要的版本，点击添加。目录不可用时，也可填写 `gemini-…`、`google/gemini-…` 或 `publishers/google/models/gemini-…`。

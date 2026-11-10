@@ -23,8 +23,17 @@ export const geminiModelKey = name => /gemini-[a-z0-9][a-z0-9._-]*/i.exec(name)?
 // Missing profiles are legacy settings, not an empty model list. Keep the old
 // public ID and its selected behavior when upgrading an existing installation.
 export function modelProfiles(value, legacyEnabled = true, { custom = false } = {}) {
-  if (value === undefined || value === null) return [{ id: MODEL_ID, upstreamModel: custom ? UPSTREAM_MODEL.replace(/^google\//, "") : UPSTREAM_MODEL,
-    mode: legacyEnabled ? "streaming" : "normal" }];
+  if (value == null) {
+    const legacy = { id: MODEL_ID, upstreamModel: custom ? UPSTREAM_MODEL.slice("google/".length) : UPSTREAM_MODEL,
+      mode: legacyEnabled ? "streaming" : "normal" };
+    if (custom) return [legacy];
+    const upstreamModel = "google/gemini-4-carbon";
+    const defaults = [legacy, { id: "gemini-4-carbon", upstreamModel, mode: "normal" }];
+    if (legacyEnabled) defaults.push(
+      { id: "gemini-4-carbon-antitruncation-nonstream", upstreamModel, mode: "buffered" },
+      { id: "gemini-4-carbon-antitruncation-stream", upstreamModel, mode: "streaming" });
+    return defaults;
+  }
   if (!Array.isArray(value) || value.length > 100) throw new Error("Model list must contain at most 100 entries");
   const ids = new Set();
   return value.map(row => {

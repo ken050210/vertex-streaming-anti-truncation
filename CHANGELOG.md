@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.18.0 · Gemini 4 Carbon (2026-11-10)
+
+The gateway routes all three `gemini-4-carbon` profiles to Vertex `global`, including when the account uses a regional endpoint for other models. Express users must supply their Google Cloud project ID. To add Carbon to a saved model list, select the variants in the console and click **添加 Gemini 4 Carbon（global）**. [Gateway guide](docs/GATEWAY.en.md#model-library-and-variants)
+
 ## Gateway 0.17.0 / SillyTavern 0.12.0 (2026-11-10)
 
 Unicode input now has two scopes. Current input keeps the existing floor match. Full context encodes system instructions and conversation text, including the current input, while preserving tool arguments, attachments and separate tool results. Existing Unicode settings keep current-input mode. Both text-to-image scopes render ❤, ❤️, 🙂, flags, skin tones and common emoji sequences. Errors for missing glyphs and malformed sequences identify the message part and code point.

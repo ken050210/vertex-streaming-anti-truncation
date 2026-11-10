@@ -3,6 +3,7 @@ import { prepareUnicodeInput, unicodeInputLogFields } from "./unicode-input.mjs"
 import { guardCompletionStream, inspectCompletion, integrityLogFields } from "./completion-integrity.mjs";
 import { assertStructuredOutput, structuredOutputExpectation } from "./vertex-schema.mjs";
 import http from "node:http";
+import packageInfo from "../package.json" with { type: "json" };
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
 import { prepareAntiTruncation, restoreAntiTruncationCompletion, wrapAntiTruncationStream, antiTruncationLogFields } from "./anti-truncation.mjs";
@@ -11,9 +12,10 @@ import { estimateCostUsd, usageTokens } from "./pricing.mjs";
 import { wrapNativeTextStream } from "./vertex-text-stream.mjs";
 import { translateNativeCompletion, wrapNativeStream } from "./vertex-protocol.mjs";
 import { geminiModelKey, modelProfiles } from "./model-profiles.mjs";
+import { vertexBaseUrl } from "./config.mjs";
 import { completionStream, aliasStream } from "./completion-stream.mjs";
 import { convertGeminiPrefill, fetchWithGeminiRecovery, compatibilityLogFields } from "./gemini-compat.mjs";
-import { capGemini4Output, outputLimitHeaders, prepareGemini4Request, validateGemini4Connection } from "./gemini4.mjs";
+import { capGemini4Output, isGemini4Carbon, outputLimitHeaders, prepareGemini4Request, validateGemini4Connection } from "./gemini4.mjs";
 import { fetchLongDecode, longDecodeUrl } from "./vertex-long-decode.mjs";
 import { documentedUnsupported, dropParams } from "./unsupported-params.mjs";
 import { checkCompatibleRejection, googleErrorDetail, readUpstreamError, sseData, trafficType, upstreamErrorLogFields, upstreamMessage } from "./wire.mjs";
@@ -138,7 +140,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     return pools.get(config);
   };
   const currentConfig = () => typeof configSource === "function" ? configSource() : configSource;
-  const profiles = config => config.models || modelProfiles(null, config.antiTruncation !== false);
+  const profiles = config => config.models || modelProfiles(null, config.antiTruncation !== false, { custom: config.authMode === "custom" });
   const availability = config => profiles(config).map(model => {
     const reason = model.enabled === false ? "disabled" : rejectedCredentials.has(config) ? "authentication_failed" : null;
     return { id: model.id, available: reason === null, reason, hidden: config.hideUnavailableModels !== false && reason !== null };
@@ -148,6 +150,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     // Snapshot once: saved settings apply to new requests without changing streams in flight.
     const snapshot = currentConfig();
     let config = snapshot;
+    let location = config.location;
     const models = profiles(config);
     response.setHeader("cache-control", "no-store");
     response.setHeader("x-content-type-options", "nosniff");
@@ -156,7 +159,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     let pathname;
     try { pathname = new URL(request.url, "http://localhost").pathname; }
     catch { return send(response, 400, { error: { code: "invalid_path" } }); }
-    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: "0.14.0" });
+    if (request.method === "GET" && pathname === "/healthz") return send(response, 200, { status: "ok", version: packageInfo.version });
     if (config.gatewayKeyMode !== "none" && !authorized(request, config.gatewayKey)) return send(response, 401, { error: { code: "unauthorized" } });
     if (request.method === "GET" && pathname === "/v1/models") return send(response, 200, {
       object: "list", data: availability(config).filter(model => !model.hidden).map(model => ({ id: model.id, object: "model", owned_by: "vertex-streaming-anti-truncation" })),
@@ -197,6 +200,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         try {
           validateGemini4Connection(config, route.upstreamModel);
           const custom = config.authMode === "custom";
+          location = !custom && isGemini4Carbon(route.upstreamModel) ? "global" : config.location;
           // A custom upstream gets its own model name verbatim. Gemini-specific handling follows the
           // model that name refers to, and is skipped when none is recognizable.
           const modelKey = custom ? geminiModelKey(route.upstreamModel) : route.upstreamModel;
@@ -256,9 +260,8 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           audit = { transport: transport.reason, restored: transport.toolName ? null : false,
             finishReason: null, streamDone: stream ? false : null };
           response.setHeader("x-anti-truncation-transport", transport.reason);
-          let url = native
-            ? buildNativeUrl(config.baseUrl, route.upstreamModel, upstreamStream)
-            : config.baseUrl + "/chat/completions";
+          const baseUrl = location === config.location ? config.baseUrl : vertexBaseUrl(config.authMode, config.projectId, location);
+          let url = native ? buildNativeUrl(baseUrl, route.upstreamModel, upstreamStream) : baseUrl + "/chat/completions";
           if (longDecode) url = longDecodeUrl(url);
           const expectation = native ? structuredOutputExpectation(payload) : null;
           const requestBody = value => {
@@ -415,7 +418,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       // A reply that reported usage was billed, even if it then failed a local check.
       const tokens = usageTokens(audit?.usage);
       const cost = tokens && config.authMode !== "custom" ? estimateCostUsd(route.upstreamModel, tokens,
-        { trafficType: audit.trafficType, serviceTier: config.serviceTier, location: config.location }) : null;
+        { trafficType: audit.trafficType, serviceTier: config.serviceTier, location }) : null;
       const event = { at: new Date().toISOString(), event: code ? "request_failed" : "request_complete", requestId,
         model: route?.id || null, upstreamModel: route?.upstreamModel || null, mode: route?.mode || null, stream, status, latencyMs: Date.now() - started,
         serviceTier: config.serviceTier || "standard",

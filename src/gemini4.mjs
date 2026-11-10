@@ -1,11 +1,12 @@
 // Vertex Gemini 4 Argon: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon
 // Keep these rules model-specific; earlier Gemini versions retain their budget semantics.
 export const isGemini4Argon = model => /^(?:google\/|publishers\/google\/models\/)?gemini-4-argon(?:@[a-z0-9-]+)?$/i.test(model || "");
+export const isGemini4Carbon = model => /^(?:google\/|publishers\/google\/models\/)?gemini-4-carbon(?:@[a-z0-9-]+)?$/i.test(model || "");
 const invalid = (code, message) => Object.assign(new Error(message), { status: 400, code });
 
 export function validateGemini4Connection(config, model) {
-  if (config.authMode === "express" && !config.projectId && isGemini4Argon(model)) {
-    throw invalid("express_project_required", "Enter the API key's Google Cloud project ID to use Gemini 4 Argon with Express at locations/global.");
+  if (config.authMode === "express" && !config.projectId && (isGemini4Argon(model) || isGemini4Carbon(model))) {
+    throw invalid("express_project_required", "Enter the API key's Google Cloud project ID to use this Gemini 4 model with Express at locations/global.");
   }
 }
 

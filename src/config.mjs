@@ -118,6 +118,12 @@ function customConnection(s, requireAscii) {
   return { accessToken: async () => key, authMode: "custom", serviceTier: "standard", projectId: "", location: "", baseUrl, tierHeaders: {}, nativeOnly: false };
 }
 
+export function vertexBaseUrl(authMode, projectId, location) {
+  const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+  const projectPath = projectId ? `/projects/${projectId}/locations/${location}` : "";
+  return `https://${host}/v1${projectPath}` + (authMode === "express" ? "" : "/endpoints/openapi");
+}
+
 export function buildConnectionConfig(settings, { requireAscii = true } = {}) {
   const s = { ...DEFAULT_SETTINGS, ...settings };
   if (!["service-account", "express", "access-token", "custom"].includes(s.authMode)) throw new Error("Invalid authentication mode");
@@ -140,11 +146,7 @@ export function buildConnectionConfig(settings, { requireAscii = true } = {}) {
     if (requireAscii && !visibleAscii(value)) throw new Error(name + " must contain only visible ASCII characters");
     accessToken = async () => value;
   }
-  const host = s.location === "global" ? "aiplatform.googleapis.com" : `${s.location}-aiplatform.googleapis.com`;
-  // The projectless Express endpoint does not explicitly select locations/global.
-  // Honor a supplied project so global-only models can use the scoped native endpoint.
-  const baseUrl = s.authMode === "express" ? `https://aiplatform.googleapis.com/v1${s.projectId ? `/projects/${s.projectId}/locations/${s.location}` : ""}`
-    : `https://${host}/v1/projects/${s.projectId}/locations/${s.location}/endpoints/openapi`;
+  const baseUrl = vertexBaseUrl(s.authMode, s.projectId, s.location);
   const tierHeaders = s.serviceTier === "standard" ? {} : {
     "x-vertex-ai-llm-shared-request-type": s.serviceTier,
     "x-vertex-ai-llm-request-type": "shared",
