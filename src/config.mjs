@@ -4,12 +4,13 @@ import { parseServiceAccount, vertexAccessToken } from "./vertex-auth.mjs";
 import { modelProfiles, MODEL_ID, UPSTREAM_MODEL } from "./model-profiles.mjs";
 import { MAX_RETRY_TEXT_BYTES } from "./gemini-compat.mjs";
 import { DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT, validateTagStopRule } from "./tag-stop-rule.mjs";
+import { validateTransportToolName } from "./transport-tool-name.mjs";
 
 export { MODEL_ID, UPSTREAM_MODEL };
 export const DEFAULT_SETTINGS = Object.freeze({
   projectId: "", location: "global", authMode: "service-account", serviceTier: "standard",
   // Keep the persisted switch name so existing explicit opt-outs survive upgrades.
-  port: 4781, timeoutMs: 600000, antiTruncation: true, tucaoStop: true, stopTag: DEFAULT_STOP_TAG, stopCount: DEFAULT_STOP_COUNT, models: null,
+  port: 4781, timeoutMs: 600000, antiTruncation: true, transportToolName: "", tucaoStop: true, stopTag: DEFAULT_STOP_TAG, stopCount: DEFAULT_STOP_COUNT, models: null,
   hideUnavailableModels: true, geminiPrefillToUser: true, geminiLongDecode: false, unicodeInput: false, imageInput: "off",
   geminiPromptRetryEnabled: false, geminiPromptRetryText: "", geminiPromptRetryMatches: null, customBaseUrl: "",
   gatewayKeyMode: "strict", gatewayKey: "", serviceAccountJson: "", apiKey: "", accessToken: "", customApiKey: "",
@@ -86,6 +87,7 @@ export async function settingsFromEnv(env = process.env) {
     port: integer(env.PORT, 4781, 1, 65535, "PORT"),
     timeoutMs: integer(env.UPSTREAM_TIMEOUT_MS, 600000, 1000, 1800000, "UPSTREAM_TIMEOUT_MS"),
     antiTruncation: env.ANTI_TRUNCATION !== "false",
+    transportToolName: env.TRANSPORT_TOOL_NAME?.trim() ?? "",
     tucaoStop: toggle("TAG_STOP", toggle("TUCAO_STOP", true)),
     stopTag: env.STOP_TAG ?? DEFAULT_STOP_TAG,
     stopCount: integer(env.STOP_COUNT, DEFAULT_STOP_COUNT, 1, Number.MAX_SAFE_INTEGER, "STOP_COUNT"),
@@ -201,7 +203,8 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
     geminiPromptRetry: { enabled: s.geminiPromptRetryEnabled, text: s.geminiPromptRetryText, ...(matches ? { errorMatches: matches } : {}) },
     // Legacy fields remain available to CLI integrations; profiles own behavior.
     model: models[0]?.id || MODEL_ID, upstreamModel: models[0]?.upstreamModel || UPSTREAM_MODEL,
-    antiTruncation: s.models == null ? s.antiTruncation : true, tucaoStop: s.tucaoStop, stopTag: s.stopTag, stopCount: s.stopCount,
+    antiTruncation: s.models == null ? s.antiTruncation : true, transportToolName: validateTransportToolName(s.transportToolName),
+    tucaoStop: s.tucaoStop, stopTag: s.stopTag, stopCount: s.stopCount,
     port: integer(s.port, 4781, 1, 65535, "PORT"),
     timeoutMs: integer(s.timeoutMs, 600000, 1000, 1800000, "UPSTREAM_TIMEOUT_MS"),
     bodyLimitBytes: 8 * 1024 * 1024,

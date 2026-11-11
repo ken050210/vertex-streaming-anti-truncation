@@ -275,7 +275,9 @@ Express 和 Flex 的普通/流式请求均走原生接口。完整模式（服�
 
 只有请求中所有图片都要求同一级别时，图片的 OpenAI `detail` 才转成 Gemini 整个请求共用的媒体分辨率：`low`/`high` 对应 `MEDIA_RESOLUTION_LOW`/`MEDIA_RESOLUTION_HIGH`。只要有图片是 `auto` 或没写 detail（包括文字转图片生成的页面），或各图片级别不同，就保持默认。`extra_body.google.media_resolution` 优先；只有所有图片一致要求另一个级别时才返回 400。system/developer 消息里的图片返回 400（systemInstruction 只收文字）。只有开头连续的 system/developer 消息进入 systemInstruction；聊天记录之后的（如 Post-History、深度注入）按原位置作为 user 文本发送，与 SillyTavern 自带的 Google 连接一致。
 
-客户端自带工具时照常包装：请求带 `tools` 且 `tool_choice` 省略或为 `auto` 时，合成工具排在客户端工具之后，`tool_choice` 改为 `required`（模型必须调用某个工具），末尾格式说明改为“正文放进合成工具，其他工具按需调用”；客户端的 `parallel_tool_calls` 原样保留。回复里合成工具还原为正文，真实工具调用原样交给客户端，结束原因保持 `tool_calls`；流式中真实调用的 `index` 从 0 连续编号，补上合成调用留下的空位。`tool_choice: "none"` 时客户端工具仍声明但不可调用，照旧强制合成工具。带工具调用历史（`assistant.tool_calls`、`role: tool`）的请求也照常包装，格式说明排在工具结果之后。合成工具固定叫 `router_emit`、描述不变，每次请求的工具声明相同，才能命中 Vertex 隐式缓存；客户端工具名以 `router_emit` 开头时，这一次改用随机名，真实调用照常交回，只是这次命不中缓存。
+客户端自带工具时照常包装：请求带 `tools` 且 `tool_choice` 省略或为 `auto` 时，合成工具排在客户端工具之后，`tool_choice` 改为 `required`（模型必须调用某个工具），末尾格式说明改为“正文放进合成工具，其他工具按需调用”；客户端的 `parallel_tool_calls` 原样保留。回复里合成工具还原为正文，真实工具调用原样交给客户端，结束原因保持 `tool_calls`；流式中真实调用的 `index` 从 0 连续编号，补上合成调用留下的空位。`tool_choice: "none"` 时客户端工具仍声明但不可调用，照旧强制合成工具。带工具调用历史（`assistant.tool_calls`、`role: tool`）的请求也照常包装，格式说明排在工具结果之后。
+
+正文传输工具默认叫 `router_emit`。在「连接配置 → 服务等级与传输」填写「正文传输工具名」，或在命令行设置 `TRANSPORT_TOOL_NAME=scene_reply`。固定名称可跨请求复用工具声明。自定义名与客户端工具完全重名时返回 `400 transport_tool_name_conflict`，请求不会发往上游。留空时，如果客户端工具以 `router_emit` 开头，本次请求使用随机传输名。
 
 **多工具参数流（网关 0.16.1 / 插件 0.9.1）**：原生流中的正文逐段还原，客户端工具的参数按调用拼接，完整后连同签名和调用 ID 交付；不会因为声明了客户端工具而等待整条正文。工具历史与内嵌图片可继续走原生流。显式 `parallel_tool_calls` 等无法原生转换的字段仍走兼容回退；自定义上游也仍使用兼容接口。284 项离线测试和 TT 2.4.0 官方 Rust 后端的两轮真实 Gemini 4 Argon 请求通过，含图片、两个测试工具执行与结果回传；WebView 界面和现有角色工作流未验收。
 

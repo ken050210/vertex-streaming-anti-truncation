@@ -360,7 +360,7 @@ test("client tool calls pass through beside the restored text on compatible and 
     const f = await fixture(t, request => {
       if (nativeOnly) {
         const names = request.json.tools[0].functionDeclarations.map(declaration => declaration.name);
-        assert.equal(names[0], "get_weather");
+        assert.deepEqual(names, ["get_weather", "tavern_reply"]);
         assert.deepEqual(request.json.toolConfig, { functionCallingConfig: { mode: "ANY",
           ...(request.url.includes("streamGenerateContent") ? { streamFunctionCallArguments: true } : {}) } });
         const native = { candidates: [{ content: { role: "model", parts: [{ functionCall: { name: names[1], args: { content: "checking" } } },
@@ -368,6 +368,7 @@ test("client tool calls pass through beside the restored text on compatible and 
         return request.url.includes("streamGenerateContent") ? new Response(line(native)) : Response.json(native);
       }
       assert.deepEqual(request.json.tools.slice(0, 1), tools);
+      assert.equal(request.json.tools[1].function.name, "tavern_reply");
       assert.equal(request.json.tool_choice, "required");
       assert.equal(request.json.parallel_tool_calls, request.json.stream ? false : undefined);
       const calls = [{ id: "transport-id", type: "function", function: { name: request.json.tools[1].function.name, arguments: '{"content":"checking"}' } },
@@ -375,7 +376,7 @@ test("client tool calls pass through beside the restored text on compatible and 
       if (!request.json.stream) return Response.json({ choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: calls }, finish_reason: "tool_calls" }] });
       return new Response(line({ choices: [{ index: 0, delta: { role: "assistant", tool_calls: calls.map((call, index) => ({ index, ...call })) }, finish_reason: null }] }) +
         line({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }) + "data: [DONE]\n\n");
-    }, { nativeOnly });
+    }, { nativeOnly, transportToolName: "tavern_reply" });
     const id = nativeOnly ? "vtx.sig" : "weather-id";
     const response = await f.post({ ...payload, tools });
     assert.equal(response.headers.get("x-anti-truncation-transport"), "tool-transport");
@@ -393,9 +394,14 @@ test("client tool calls pass through beside the restored text on compatible and 
     assert.equal(visible(wire), "checking");
     assert.deepEqual(deltas.flatMap(choice => choice.delta?.tool_calls ?? []), [{ index: 0, id, type: "function", function: weather }]);
     assert.equal(deltas.at(-1).finish_reason, "tool_calls");
-    assert.equal(wire.includes("router_emit"), false);
+    assert.equal(wire.includes("tavern_reply"), false);
     assert.equal(f.requests.at(-1).json.toolConfig?.functionCallingConfig?.streamFunctionCallArguments, nativeOnly ? true : undefined);
     assert.deepEqual(f.events.at(-1).antiTruncation, { transport, restored: true, finishReason: "tool_calls", streamDone: true });
+    const before = f.requests.length;
+    const conflict = await f.post({ ...payload, tools: [{ type: "function", function: { name: "tavern_reply" } }] });
+    assert.equal(conflict.status, 400);
+    assert.equal((await conflict.json()).error.code, "transport_tool_name_conflict");
+    assert.equal(f.requests.length, before);
   }
 });
 

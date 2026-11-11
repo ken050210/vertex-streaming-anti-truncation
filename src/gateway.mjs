@@ -239,7 +239,8 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           droppedParams = Object.keys(payload).filter(key => unsupported.has(key));
           payload = dropParams(payload, unsupported);
           if (droppedParams.length) response.setHeader("x-gemini-dropped-params", droppedParams.join(","));
-          const transport = prepareAntiTruncation(payload, route.mode !== "normal" && config.antiTruncation !== false, route.mode === "streaming", { native: !custom });
+          const transport = prepareAntiTruncation(payload, route.mode !== "normal" && config.antiTruncation !== false, route.mode === "streaming",
+            { native: !custom, transportToolName: config.transportToolName });
           const stop = config.tucaoStop && transport.toolName ? createTagStop(transport.toolName, config.stopTag, config.stopCount) : null;
           const buffered = route.mode === "buffered" && Boolean(transport.toolName);
           const upstreamStream = stream && !buffered;
@@ -405,7 +406,8 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       if (status !== 499 && !deadline.aborted) upstreamError = error.upstreamError ?? (error.upstreamBody ? googleErrorDetail(error.upstreamBody, credential) : null);
       integrity = { ...integrity, outcome: status === 499 ? "cancelled" :
         ["empty", "incomplete"].includes(integrity?.outcome) ? integrity.outcome : "error" };
-      const payload = { error: { code, message: upstreamMessage(upstreamError, code), type: "gateway_error", requestId,
+      const detail = code === "transport_tool_name_conflict" ? error.message : code;
+      const payload = { error: { code, message: upstreamMessage(upstreamError, detail), type: "gateway_error", requestId,
         ...integrityLogFields(integrity), ...(error.status === 400 && error.param ? { param: error.param } : {}),
         ...(upstreamError ? { upstreamError } : {}) } };
       if (!response.headersSent) send(response, status === 499 ? 502 : status, payload);

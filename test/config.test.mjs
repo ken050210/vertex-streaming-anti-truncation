@@ -31,6 +31,9 @@ test("config fixes Google hosts, model and defaults while supporting regional en
   const config = await loadConfig(env);
   assert.equal(config.model, MODEL_ID);
   assert.equal(config.port, 4781);
+  assert.equal(config.transportToolName, "");
+  assert.equal((await loadConfig({ ...env, TRANSPORT_TOOL_NAME: "scene_reply" })).transportToolName, "scene_reply");
+  await assert.rejects(loadConfig({ ...env, TRANSPORT_TOOL_NAME: "invalid name" }), { code: "invalid_transport_tool_name" });
   assert.equal(config.timeoutMs, 600000);
   assert.equal(await config.accessToken(), env.VERTEX_ACCESS_TOKEN);
   assert.equal(config.baseUrl, "https://aiplatform.googleapis.com/v1/projects/example-project/locations/global/endpoints/openapi");

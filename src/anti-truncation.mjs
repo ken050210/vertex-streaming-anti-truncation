@@ -1,4 +1,5 @@
 import { supportsNativeRequest } from "./vertex-native.mjs";
+import { DEFAULT_TRANSPORT_TOOL_NAME, validateTransportToolName } from "./transport-tool-name.mjs";
 // Restoration failures describe one reply, not the connection, and keep their code.
 import { isObject, protocolError as failure, sseData, trafficType, transformSse } from "./wire.mjs";
 
@@ -20,15 +21,11 @@ export function antiTruncationLogFields(metadata) {
     } };
 }
 
-// Tool declarations precede the prompt, so the synthetic tool keeps one name and one
-// description; otherwise no two requests share a prefix for Vertex implicit caching.
-const TOOL_NAME = "router_emit";
-
 // Opt-in transport for text replies. Client tools and tool history stay usable next to
 // the synthetic tool. A forced tool choice (no text reply expected, e.g.
 // Tavern Helper's own transport), the legacy functions API, structured output and
 // multi-candidate requests bypass it.
-export function prepareAntiTruncation(payload, enabled, streamArguments = false, { continuation = false, native = true } = {}) {
+export function prepareAntiTruncation(payload, enabled, streamArguments = false, { continuation = false, native = true, transportToolName = "" } = {}) {
     const skip = reason => ({ payload, toolName: null, reason });
     if (!enabled) return skip("disabled");
     if (payload.functions?.length) return skip("existing-tools");
@@ -42,13 +39,19 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
     // Native argument streaming carries both the text transport and client calls.
     // Keep the compatible fallback when native translation would discard fields.
     const nativeStreaming = requested && native && supportsNativeRequest(payload);
-    // Restoration claims calls by name, and a streamed name as soon as its fragments spell the
-    // synthetic one, so a client tool named router_emit or router_emit... would be swallowed.
-    // Such a request takes a random name instead and only loses caching; "router_" plus hex
-    // cannot start with router_emit, since "m" is not a hex digit.
-    const toolName = clientTools.some(tool => typeof tool?.function?.name === "string" && tool.function.name.startsWith(TOOL_NAME))
-        ? "router_" + Array.from(crypto.getRandomValues(new Uint8Array(12)), byte => byte.toString(16).padStart(2, "0")).join("")
-        : TOOL_NAME;
+    // A stable declaration keeps Vertex's cacheable prefix. An explicitly chosen
+    // name can be required by the client, so never silently substitute another.
+    const customName = validateTransportToolName(transportToolName);
+    const clientNames = clientTools.map(tool => tool?.function?.name);
+    let toolName = customName || DEFAULT_TRANSPORT_TOOL_NAME;
+    if (customName && clientNames.includes(customName)) {
+        throw Object.assign(new Error("正文传输工具名与请求中的工具重名。请修改正文传输工具名，或清空以自动避让。"), {
+            code: "transport_tool_name_conflict", status: 400,
+        });
+    }
+    if (!customName && clientNames.some(name => typeof name === "string" && name.startsWith(toolName))) {
+        toolName = "router_" + Array.from(crypto.getRandomValues(new Uint8Array(12)), byte => byte.toString(16).padStart(2, "0")).join("");
+    }
     // Callable client tools turn the forced synthetic call into "call some tool": the text
     // goes through the synthetic one, real calls pass through. "none" keeps them uncallable.
     const callable = clientTools.length > 0 && payload.tool_choice !== "none";
@@ -268,6 +271,7 @@ class StreamRestorer {
     constructor(toolName, tools, stop) {
         this.toolName = toolName;
         this.tools = new Set(tools.map(tool => tool?.function?.name));
+        this.longerToolName = [...this.tools].some(name => typeof name === "string" && name !== toolName && name.startsWith(toolName));
         this.choices = new Map();
         this.restored = false;
         this.failed = false;
@@ -295,7 +299,9 @@ class StreamRestorer {
         slot.pendingBytes += JSON.stringify(call).length;
         slot.pending.push(call);
         if (slot.kind === "unknown") {
-            if (slot.name === this.toolName) slot.kind = "synthetic";
+            // With "emit" and "emit_image", the first name fragment can identify
+            // either call. Arguments confirm that the upstream finished the name.
+            if (slot.name === this.toolName && (!this.longerToolName || call.function?.arguments)) slot.kind = "synthetic";
             // A declared tool named like the start of the synthetic one ("router") is complete
             // once its arguments begin; any other prefix waits for the rest of the name.
             else if (!this.toolName.startsWith(slot.name) || (call.function?.arguments && this.tools.has(slot.name))) slot.kind = "real";
@@ -334,8 +340,11 @@ class StreamRestorer {
             state.terminal = true;
             return reason;
         }
-        if ([...state.calls.values()].some(call => call.kind === "unknown")) throw failure("anti_truncation_missing_tool_name");
-        const synthetic = [...state.calls.values()].filter(call => call.kind === "synthetic");
+        const calls = [...state.calls.values()];
+        if (calls.some(call => call.kind === "unknown" && call.name !== this.toolName)) throw failure("anti_truncation_missing_tool_name");
+        // A cutoff can arrive after the complete transport name but before the
+        // first argument that would have disambiguated it from a longer name.
+        const synthetic = calls.filter(call => call.kind !== "real");
         if (synthetic.length > 1) throw failure("anti_truncation_multiple_calls");
         if (synthetic.some(call => !call.decoder.valid) && !cutShort(reason)) throw failure("anti_truncation_incomplete_arguments");
         state.terminal = true;

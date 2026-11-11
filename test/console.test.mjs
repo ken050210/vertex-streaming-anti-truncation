@@ -32,8 +32,12 @@ test("container console supports an explicit HTTPS origin without weakening logi
   const cookie = login.headers["set-cookie"][0].split(";")[0];
   const headers = { cookie, "x-csrf-token": login.body.csrf };
   assert.equal((await request("/api/config", { revision: "new", settings: f.settings }, { cookie })).status, 403);
-  const saved = await request("/api/config", { revision: "new", settings: f.settings }, headers);
+  const invalidName = await request("/api/validate", { settings: { ...f.settings, transportToolName: "bad name" } }, headers);
+  assert.equal(invalidName.status, 400);
+  assert.match(invalidName.body.error.message, /正文传输工具名/);
+  const saved = await request("/api/config", { revision: "new", settings: { ...f.settings, transportToolName: "scene_reply" } }, headers);
   assert.equal(saved.status, 200);
+  assert.equal((await request("/api/config", undefined, headers)).body.settings.transportToolName, "scene_reply");
   assert.deepEqual(saved.body.status.network, { listenHost: "0.0.0.0", gatewayPublicUrl: "https://api.example/v1" });
   assert.equal((await fetch(`http://127.0.0.1:${f.settings.port}/healthz`)).status, 200);
   assert.equal((await request("/api/logout", {}, headers)).status, 200);

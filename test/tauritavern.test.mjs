@@ -45,7 +45,8 @@ test("TauriTavern requests keep ST's own route and carry the transport in body o
   const original = host(name => new Response(call({ name, args: { content: "好" } }) + finish() + done));
   const controller = new AbortController();
   for (const [mode, stream, live] of [["streaming", true, true], ["streaming", false, false], ["buffered", true, false], ["buffered", false, false]]) {
-    const response = await send(intercept(original, mode), { stream, custom_include_body: '{"labels":{"team":"a"}}' }, { signal: controller.signal });
+    const toolName = mode === "streaming" ? "tavern_reply" : "";
+    const response = await send(intercept(original, mode, { getTransportToolName: () => toolName }), { stream, custom_include_body: '{"labels":{"team":"a"}}' }, { signal: controller.signal });
     assert.equal(response.status, 200);
     const { input, init, sent } = original.calls.at(-1);
     assert.equal(input, GENERATE_PATH);
@@ -62,7 +63,8 @@ test("TauriTavern requests keep ST's own route and carry the transport in body o
     assert.equal(sent.messages.length, 3);
     const included = JSON.parse(sent.custom_include_body);
     const [declaration] = included.tools[0].functionDeclarations;
-    assert.equal(declaration.name, "router_emit");
+    assert.equal(declaration.name, toolName || "router_emit");
+    assert.equal(sent.vertex_transport_tool_name, undefined);
     assert.match(sent.messages[2].content, new RegExp(declaration.name));
     assert.equal(sent.messages[2].role, "user");
     assert.deepEqual(included.toolConfig, { functionCallingConfig: { mode: "ANY", allowedFunctionNames: [declaration.name],

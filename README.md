@@ -12,7 +12,7 @@
 | TauriTavern（TT 酒馆）桌面端或手机 App | 完整仓库里的 UI 扩展，凭据和请求由 TT 后台处理 | [TauriTavern 安装](docs/SILLYTAVERN.md#tauritavern) |
 | 酒馆的自定义 OpenAI 连接、其他兼容客户端，或提供 Gemini 模型的中转 | 独立网关，可用 Node.js 或 Docker 运行 | [启动网关](#启动) |
 
-SillyTavern 用户可以用 0.12.1 安装包同时更新前后端，服务端需要 Node.js 22.9 或更高版本。用 Git 安装的用户分别更新两端，重启酒馆后刷新页面。[下载安装包](https://github.com/ken050210/vertex-streaming-anti-truncation/releases) · [Git 安装与更新](docs/SILLYTAVERN.md#更新与已有手动安装)
+精简后的酒馆面板和自定义正文传输工具名目前在 `main` 分支。使用 Git 安装时，分别更新前后端，重启酒馆后刷新页面。SillyTavern 服务端需要 Node.js 22.9 或更高版本。一键安装包按版本发布。[下载安装包](https://github.com/ken050210/vertex-streaming-anti-truncation/releases) · [Git 安装与更新](docs/SILLYTAVERN.md#更新与已有手动安装)
 
 在 Vertex 面板的「输入转码」里，Unicode 可选当前输入或全部上下文，文字转图支持 ❤️、肤色、旗帜和常见组合 emoji。遇到 Google 拦截输入，酒馆会显示 Google 提供的原因。与 Vertex PayGo 同用时，仍在 PayGo 里选择档位。[输入转码](docs/SILLYTAVERN.md#输入转码) · [PayGo 设置](docs/SILLYTAVERN.md#与-vertex-paygo-同用)
 
@@ -36,7 +36,7 @@ https://raw.githubusercontent.com/ken050210/vertex-streaming-anti-truncation/mai
 
 ## 自定义标签截停
 
-默认在本次抗截断回复的第二对完整 `<tucao>…</tucao>` 处停止。两种酒馆都在 Vertex 面板的「自定义标签截停」里改标签名和次数。例如填 `A`、`1`，模型写出 `开头<A>保留</A>尾巴`，酒馆会收到 `开头<A>保留</A>`。独立网关在控制台的「连接配置」里设置。
+新装酒馆插件时标签截停默认关闭，升级沿用原先的生效状态。开启抗截断后，在 Vertex 面板的「传输与截停」选择标签名和次数。例如填 `A`、`1`，模型写出 `开头<A>保留</A>尾巴`，酒馆会收到 `开头<A>保留</A>`。独立网关在「连接配置」里设置，默认在第二对完整 `<tucao>…</tucao>` 处停止。
 
 结束标签后面的内容会被丢弃，**包括后面的 MVU 更新块**。预设需要在文末写入变量时，可以选最后一个必须保留的块作为截停标签，或关闭截停。每次请求单独计数，点“继续”也会重新开始。TT 用户需将扩展更新到 0.11.0 或更高版本。[酒馆匹配规则](docs/SILLYTAVERN.md#自定义标签截停) · [网关与 CLI 设置](docs/GATEWAY.md#自定义标签截停)
 

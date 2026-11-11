@@ -9,7 +9,7 @@ import { googleErrorDetail, upstreamMessage } from "../../src/wire.mjs";
 // PayGo owns the request URL, single-use ticket, stream flag, service tier and
 // usage observer. Shape only the submitted messages/tools and consume its reply.
 export async function sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, waitForStopUsage, longDecode,
-  unicode, ensureBackend, getRequestHeaders, onStatus }) {
+  unicode, transportToolName, ensureBackend, getRequestHeaders, onStatus }) {
   const signal = init?.signal ?? input?.signal;
   let image;
   if (imageMode !== "off") {
@@ -32,7 +32,7 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
   const continuation = body.type === "continue";
   const capped = capGemini4Output(body, body.model, {stream: body.stream === true});
   if (longDecode && capped.outputLimit) throw new Error("paygo_long_decode_unsupported");
-  const prepared = prepareAntiTruncation(capped.payload, mode !== "off", false, { continuation });
+  const prepared = prepareAntiTruncation(capped.payload, mode !== "off", false, { continuation, transportToolName });
   const payload = JSON.stringify(prepared.payload);
   if (new TextEncoder().encode(payload).byteLength > BODY_LIMIT) throw new Error("request_too_large");
   signal?.throwIfAborted();

@@ -57,10 +57,11 @@ test("PayGo leaves failed preparations, usage, tool signatures and host finish i
     assert.equal(path,nativePath);calls++;
     if(failed) return Response.json({error:{code:"EXPIRED_TICKET"}},{status:410});
     const name=JSON.parse(init.body).tools.at(-1).function.name;
+    assert.equal(name,"tavern_reply");
     const content={role:"model",parts:[{functionCall:{name,args:{content:"正文"}}},
       {functionCall:{name:"lookup",id:"id-1",args:{q:"query"}},thoughtSignature:"signature"}]};
     return Response.json({responseContent:content,choices:[{message:{content:""}}],usageMetadata:{totalTokenCount:19}});
-  },{origin,getMode:()=>"buffered"});
+  },{origin,getMode:()=>"buffered",getTransportToolName:()=>"tavern_reply"});
   const bad=await send(intercept,nativePath,input);
   assert.equal(bad.status,410);
   assert.equal((await bad.json()).error.code,"EXPIRED_TICKET");

@@ -226,7 +226,7 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
       } finally { busy = false; }
     } catch (error) {
       if (res.headersSent) res.destroy();
-      else json(res, error.status || 400, { error: { message: error.code ? "Local operation failed; check file permissions and port availability" : error.message || "Operation failed" } });
+      else json(res, error.status || 400, { error: { message: error.code && error.status !== 400 ? "Local operation failed; check file permissions and port availability" : error.message || "Operation failed" } });
     }
   });
   server.headersTimeout = 10000; server.requestTimeout = 30000;

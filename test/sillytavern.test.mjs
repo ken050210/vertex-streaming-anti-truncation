@@ -4,7 +4,7 @@ import http from "node:http";
 import { once } from "node:events";
 import { prepareSillyTavernRequest, restoreSillyTavernResponse } from "../src/sillytavern.mjs";
 import { createGenerateHandler, connectionForRequest } from "../integrations/sillytavern/server.mjs";
-import { createFetchInterceptor, bypassReason, compareVersions, BODY_LIMIT, GENERATE_PATH, MIN_SERVER_VERSION, PLUGIN_FEATURES, PLUGIN_PATH, PLUGIN_VERSION, TOOLS_FEATURE } from "../integrations/sillytavern/shared.js";
+import { createFetchInterceptor, bypassReason, compareVersions, BODY_LIMIT, GENERATE_PATH, MIN_SERVER_VERSION, PLUGIN_FEATURES, PLUGIN_PATH, PLUGIN_VERSION, TOOLS_FEATURE, TRANSPORT_NAME_FEATURE } from "../integrations/sillytavern/shared.js";
 import { sseData } from "../src/wire.mjs";
 import { CONTINUATION_INSTRUCTION } from "../src/anti-truncation.mjs";
 
@@ -282,7 +282,9 @@ test("ST tool history reaches ST's converter, and client tools are declared befo
 test("real tool calls reach ST as whole Gemini parts beside the restored text", async () => {
   const realPart = { functionCall: { name: "lookup", args: { query: "天气" } }, thoughtSignature: "sig-new" };
   for (const [mode, stream] of [["streaming", true], ["buffered", true], ["buffered", false]]) {
-    const prepared = prepareSillyTavernRequest(request({ tools: [lookupTool], tool_choice: "auto", vertex_anti_truncation: mode, stream }), adapters);
+    const prepared = prepareSillyTavernRequest(request({ tools: [lookupTool], tool_choice: "auto", vertex_anti_truncation: mode,
+      vertex_transport_tool_name: "tavern_reply", stream }), adapters);
+    assert.deepEqual(prepared.body.tools[0].functionDeclarations.map(tool => tool.name), ["lookup", "tavern_reply"]);
     const parts = [{ text: "思考", thought: true }, { functionCall: { name: prepared.toolName, args: { content: "我去查。" } } }, realPart];
     const upstream = prepared.upstreamStream
       ? new Response(sseData({ candidates: [{ content: { role: "model", parts } }] }) + sseData({ candidates: [{ finishReason: "STOP" }] }))
@@ -528,18 +530,42 @@ test("server plugin continues an Argon reply on v1beta1 only when the panel enab
 
 test("the long-decode setting rides only on plugin requests, and the reported limit reaches the panel", async () => {
   const calls = [], statuses = [];
+  let legacyEnabled = true;
   const headers = { "x-gemini-output-tokens-requested": "100000", "x-gemini-output-tokens-applied": "100000", "x-gemini-long-decode": "true" };
   const intercept = createFetchInterceptor(async (...args) => { calls.push(args); return new Response("OK", { headers }); },
-    { origin: "http://localhost", getMode: () => "streaming", getLongDecode: () => true, onStatus: s => statuses.push(s) });
+    { origin: "http://localhost", getMode: () => "streaming", getLongDecode: () => legacyEnabled, onStatus: s => statuses.push(s) });
   await intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify(body) });
   assert.equal(calls.at(-1)[0], PLUGIN_PATH + "/generate");
   assert.equal(JSON.parse(calls.at(-1)[1].body).vertex_long_decode, true);
   assert.deepEqual(statuses.at(-1), { mode: "streaming", outputLimit: { requested: 100000, applied: 100000, longDecode: true } });
+  legacyEnabled = false;
+  await intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify({ ...body, vertex_long_decode: true }) });
+  assert.equal(JSON.parse(calls.at(-1)[1].body).vertex_long_decode, undefined);
   // A request the plugin does not take keeps ST's route and body unchanged.
   const schema = { method: "POST", body: JSON.stringify({ ...body, json_schema: { type: "object" } }) };
   await intercept(GENERATE_PATH, schema);
   assert.deepEqual(calls.at(-1), [GENERATE_PATH, schema]);
   assert.deepEqual(statuses.at(-1), { bypass: "structured-output" });
+});
+
+test("a configured transport name reaches a capable server and never silently falls back on an older one", async () => {
+  let supported = false;
+  const requests = [];
+  const wrapped = createFetchInterceptor(async (url, init) => {
+    requests.push([url, JSON.parse(init.body)]);
+    return Response.json({});
+  }, { origin: "http://localhost", getMode: () => "streaming", getTransportToolName: () => "scene_reply",
+    ensureBackend: feature => { assert.equal(feature, TRANSPORT_NAME_FEATURE); return supported; } });
+  const send = data => wrapped(GENERATE_PATH, { method: "POST", body: JSON.stringify(data) });
+  await assert.rejects(send(body), /transport_tool_name_not_supported/);
+  assert.equal(requests.length, 0);
+  supported = true;
+  await send(body);
+  assert.equal(requests[0][0], PLUGIN_PATH + "/generate");
+  assert.equal(requests[0][1].vertex_transport_tool_name, "scene_reply");
+  await send({ ...body, tool_choice: "required" });
+  assert.equal(requests[1][0], GENERATE_PATH);
+  assert.equal(requests[1][1].vertex_transport_tool_name, undefined);
 });
 
 test("Unicode transforms before off/tools/schema bypass and retains Request metadata", async () => {

@@ -47,6 +47,33 @@ test("opt-in preparation preserves parameters and isolates the original request"
   assert.equal(prepareAntiTruncation(payload, false).payload, payload);
 });
 
+test("a fixed transport name is used verbatim and shares a streamed name prefix with real tools", async () => {
+  const fixed = { transportToolName: "emit" };
+  const tools = [{ type: "function", function: { name: "emit_image" } }];
+  const prepared = prepareAntiTruncation({ ...payload, tools }, true, false, fixed);
+  assert.deepEqual(prepared.payload.tools.map(tool => tool.function.name), ["emit_image", "emit"]);
+  assert.match(prepared.payload.messages.at(-1).content, /one call of emit;/);
+  assert.equal(prepareAntiTruncation(payload, true, false, fixed).payload.tool_choice.function.name, "emit");
+  const pieces = [call("", "emit"), { index: 0, function: { arguments: '{"content":"text"}' } },
+    call("", "emit", 1), { index: 1, function: { name: "_image", arguments: "{}" } }];
+  const wire = [...pieces.map(piece => event(chunk({ tool_calls: [piece] }))), event(chunk({}, "tool_calls")), event("[DONE]")].join("");
+  const restored = parse(await wrapAntiTruncationStream(new Response(wire), "emit", undefined, prepared.payload.tools).text());
+  assert.equal(contents(restored), "text");
+  const real = restored.flatMap(record => record.choices[0].delta.tool_calls ?? []);
+  assert.deepEqual(real.map(delta => delta.function.name), ["emit", "_image"]);
+  assert.deepEqual(real.map(delta => delta.index), [0, 0]);
+  const cutoff = event(chunk({ tool_calls: [call("", "emit")] })) + event(chunk({}, "length")) + event("[DONE]");
+  const ended = parse(await wrapAntiTruncationStream(new Response(cutoff), "emit", undefined, prepared.payload.tools).text());
+  assert.equal(ended.at(-1).choices[0].finish_reason, "length");
+  assert.ok(ended.every(record => !record.choices[0].delta.tool_calls));
+  assert.throws(() => prepareAntiTruncation({ ...payload, tools }, true, false, { transportToolName: "emit_image" }),
+    { code: "transport_tool_name_conflict", status: 400 });
+  for (const invalid of ["9bad", "two words", "a".repeat(65), null]) {
+    assert.throws(() => prepareAntiTruncation(payload, true, false, { transportToolName: invalid }), { code: "invalid_transport_tool_name" });
+  }
+  assert.equal(prepareAntiTruncation({ ...payload, tools, tool_choice: "required" }, true, false, { transportToolName: "emit_image" }).toolName, null);
+});
+
 test("forced tool selection, Tavern transport, legacy functions, JSON and candidate conflicts bypass by identity", () => {
   const tavern = [{ type: "function", function: { name: "tavern_emit" } }];
   for (const extra of [

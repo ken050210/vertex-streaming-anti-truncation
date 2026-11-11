@@ -12,7 +12,7 @@ This experimental transport works with Vertex AI and Gemini. In anti-truncation 
 | TauriTavern (TT), desktop or mobile app | UI extension from the full repository. TT's Rust backend handles credentials and sends the request. | [TauriTavern installation (Chinese)](docs/SILLYTAVERN.md#tauritavern) |
 | SillyTavern's custom OpenAI connection, another compatible client, or a Gemini relay | Standalone gateway, using Node.js or Docker | [Start the gateway](#setup) |
 
-The SillyTavern 0.12.1 installer updates both the UI extension and the server plugin. The server requires Node.js 22.9 or later. For a Git installation, update both copies, restart Tavern and reload the page. [Download the installer](https://github.com/ken050210/vertex-streaming-anti-truncation/releases) · [Git installation and updates (Chinese)](docs/SILLYTAVERN.md#更新与已有手动安装)
+The compact Tavern panel and custom text transport tool name are available on `main`. For a Git installation, update both the UI extension and the server plugin, restart SillyTavern and reload the page. The server requires Node.js 22.9 or later. One-click installers are published with versioned releases. [Download the installer](https://github.com/ken050210/vertex-streaming-anti-truncation/releases) · [Git installation and updates (Chinese)](docs/SILLYTAVERN.md#更新与已有手动安装)
 
 The Vertex panel can encode the current input or the full text context as Unicode. Text-to-image input supports ❤️, skin tones, flags and common emoji sequences. If Google blocks a prompt, Tavern shows the reason Google supplied. When using Vertex PayGo, choose the service tier in PayGo. [Input settings (Chinese)](docs/SILLYTAVERN.md#输入转码) · [PayGo setup (Chinese)](docs/SILLYTAVERN.md#与-vertex-paygo-同用)
 
@@ -36,7 +36,7 @@ When you finish, tell me which files you changed, where the backups are, how to 
 
 ## Custom tag stop
 
-The default rule ends the current anti-truncation reply at the second complete `<tucao>…</tucao>` pair. In either Tavern's Vertex panel, change the tag name and count under **自定义标签截停**. For example, with `A` and `1`, the reply `start<A>keep</A>tail` appears as `start<A>keep</A>`. The gateway has the same controls under Connection settings.
+Tag cutoff is off on a new Tavern installation. Upgrades keep the effective setting. After selecting a transport mode in either Tavern's Vertex panel, open **传输与截停** to set the tag and count. For example, with `A` and `1`, the reply `start<A>keep</A>tail` appears as `start<A>keep</A>`. The gateway configures its rule under Connection settings and defaults to the second complete `<tucao>…</tucao>` pair.
 
 Anything after the closing tag is discarded, including later MVU updates. If a preset writes variables at the end, choose its last required block or turn the rule off. Each request starts its own count, including Continue. On TT, update the extension to 0.11.0 or later. [Tavern matching rules (Chinese)](docs/SILLYTAVERN.md#自定义标签截停) · [Gateway and CLI settings](docs/GATEWAY.en.md#custom-tag-stop)
 

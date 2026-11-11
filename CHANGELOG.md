@@ -2,6 +2,11 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Unreleased
+
+- The Tavern panel groups input encoding and tag cutoff settings. New profiles opt in to tag cutoff, and upgrades keep the effective rule. Users who enabled Argon long decode can still turn it off. New installations enable automatic continuation through the standalone gateway. [Tavern settings (Chinese)](docs/SILLYTAVERN.md#使用)
+- Tavern and the gateway can use a fixed name such as `scene_reply` for the text transport tool. Client tools keep their names. An exact clash with the configured name stops the request before generation. [Text transport tool name (Chinese)](docs/SILLYTAVERN.md#正文传输工具名)
+
 ## SillyTavern 0.13.1 · First request after restart
 
 Optimized input now waits for the first Gemma token count before requesting the second. This lets SillyTavern 1.19 finish loading its tokenizer and use both counts on the first request after a restart.

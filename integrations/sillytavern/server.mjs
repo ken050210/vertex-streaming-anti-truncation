@@ -121,7 +121,7 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
         imageMode !== "off" && request.body?.vertex_anti_truncation === "off" ? "Vertex 图片输入请求失败。" : "Vertex 抗截断请求失败。";
       const location = imageErrorLocation(error);
       const where = location.character ? ` ${location.character}，${location.param}。` : "";
-      const message = upstreamMessage(upstreamError, detail + where);
+      const message = upstreamMessage(upstreamError, ["invalid_transport_tool_name", "transport_tool_name_conflict"].includes(code) ? error.message : detail + where);
       const locationInResponse = response.headersSent ? "流式错误" : `HTTP ${status}`;
       const payload = { error: { code, ...location, message: `${message} (${code}, ${locationInResponse})`, ...(upstreamError ? { upstreamError } : {}) } };
       if (response.headersSent) { response.write(sseData(payload)); response.end(); }

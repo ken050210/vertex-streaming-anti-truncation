@@ -64,7 +64,7 @@ With long decode off, a reply that actually reaches the single-request limit:
 
 ### Turning long decode on
 
-In the standalone gateway, check "Gemini 4 Argon 超长回复自动续写" under 连接配置 → SillyTavern 兼容与重试, or set `GEMINI_LONG_DECODE=true` in CLI mode. In the Tavern plugin, check the option of the same name in the Vertex panel. Both are off by default and saved separately.
+In the standalone gateway, check "Gemini 4 Argon 超长回复自动续写" under 连接配置 → SillyTavern 兼容与重试, or set `GEMINI_LONG_DECODE=true` in CLI mode. New Tavern installations use the single-request cap. The transition version keeps the legacy switch for users who previously enabled it. Turning it off and reloading removes the switch.
 
 - Only Argon requests whose limit exceeds one request's maximum are affected. They use the native `v1beta1` API with the client's limit (1,048,576 at most). When Google ends a request with `CONTINUATION` and a continuation token, the gateway or plugin sends the same request again with the token until Google finishes, and delivers one reply: a single finish reason and usage added up across the requests.
 - Requests are added only when a reply actually exceeds the single-request limit. A short reply is still one request at the same cost.

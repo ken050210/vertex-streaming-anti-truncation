@@ -1,5 +1,6 @@
 import { PLUGIN_ID, PLUGIN_PATH, PLUGIN_VERSION, MIN_SERVER_VERSION, MODES, compareVersions, createFetchInterceptor, latestUserInput } from "./shared.js";
-import { DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT } from "../../src/tag-stop-rule.mjs";
+import { DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
+import { DEFAULT_TRANSPORT_TOOL_NAME, validateTransportToolName } from "../../src/transport-tool-name.mjs";
 
 // TauriTavern has no Node server to host the plugin, so the extension shapes the
 // request and restores the reply itself. Rendering text as images needs the server.
@@ -19,6 +20,7 @@ const errors = { unicode_floor_required: "找不到真实用户楼层，也没�
   paygo_image_backend_required: "PayGo 图片转码需要配套的新版抗截断服务端插件。请更新后重启酒馆。",
   paygo_long_decode_unsupported: "当前 PayGo 后端不支持 Gemini 4 分段续写。请降低最大回复长度，或关闭 long decode 后使用单次上限。",
   tag_stop_not_supported: "服务端插件不支持自定义标签截停。请更新服务端插件并重启酒馆，或关闭此开关。",
+  transport_tool_name_not_supported: "服务端插件不支持自定义正文传输工具名。请更新服务端并重启酒馆，或清空工具名以使用默认值。",
   invalid_tag_stop: "截停标签名须为 1–64 位字母、数字、下划线、点、冒号或连字符，以字母或下划线开头；次数须为正整数。",
   image_input_requires_supported_request: "图片输入不支持此请求，已停止发送，未改用明文。请去掉不支持的内容或换用支持的模型，或关闭图片输入。",
   image_input_unsupported_characters: "图片转码遇到无法绘制的字符。请替换提示位置的字符，或改用“图片·当前轮”。",
@@ -28,13 +30,19 @@ const errors = { unicode_floor_required: "找不到真实用户楼层，也没�
   request_too_large: "请求超过 8 MiB，插件已拒绝发送。请减少附件或聊天历史。",
   gemini4_long_decode_required: "服务端插件较旧，输出上限超过 Gemini 4 Argon 单次上限时会拒绝发送。请更新服务端插件后重启酒馆；或在预设里把最大回复长度降到 32,768（非流式）／65,536（流式）以内。" };
 const updateServer = "用安装包装的，下载新版安装包再运行一次；用 Git 装的，在服务端插件目录运行 git pull --ff-only 和 npm ci --ignore-scripts。之后重启酒馆并重新检查。";
-let status, select, backendReady, backendFeatures = [], backendWarning;
+let status, backendReady, backendFeatures = [], backendWarning;
 function settings() {
   const store = SillyTavern.getContext().extensionSettings;
-  store[PLUGIN_ID] ??= { mode: "off", unicodeInput: false };
+  // Existing profiles without a saved switch used the old enabled default.
+  store[PLUGIN_ID] ??= { mode: "off", unicodeInput: false, tucaoStop: false };
   return store[PLUGIN_ID];
 }
 function mode() { return MODES.includes(settings().mode) ? settings().mode : "off"; }
+function saveSettings(changes) {
+  Object.assign(settings(), changes);
+  context.saveSettingsDebounced();
+  showStatus();
+}
 function showStatus(text = "") {
   if (!status) return;
   // A failed version check stays visible until a later check succeeds.
@@ -89,124 +97,168 @@ async function checkBackend(silent = false) {
   return backendReady;
 }
 
+function mountInputEncoding(panel, saved) {
+  const method = panel.querySelector("#vertex_input_encoding");
+  const scope = panel.querySelector("#vertex_encoding_scope");
+  const summary = panel.querySelector("#vertex_encoding_summary");
+  if (!direct) method.add(new Option("文字转图", "image"));
+  const unicode = saved.unicodeInput;
+  if (unicode === "optimized" || unicode === "optimized-all") method.value = "optimized";
+  else if (unicode === true || unicode === "all") method.value = "unicode";
+  else if (!direct && ["current-turn", "all"].includes(saved.imageInput)) method.value = "image";
+  scope.value = (method.value === "image" ? saved.imageInput === "all" : unicode === "all" || unicode === "optimized-all") ? "all" : "current";
+
+  function render() {
+    const image = method.value === "image";
+    scope.options[0].text = image ? "当前轮" : "当前输入";
+    scope.options[1].text = image ? "全部会话" : "全部上下文";
+    scope.parentElement.hidden = method.value === "off";
+    summary.textContent = method.selectedOptions[0].text + (method.value === "off" ? "" : " · " + scope.selectedOptions[0].text);
+  }
+  function change() {
+    const all = scope.value === "all";
+    const unicodeInput = method.value === "unicode" ? (all ? "all" : true)
+      : method.value === "optimized" ? (all ? "optimized-all" : "optimized") : false;
+    const imageInput = method.value === "image" ? (all ? "all" : "current-turn") : "off";
+    saveSettings({ unicodeInput, imageInput });
+    render();
+  }
+  method.addEventListener("change", change);
+  scope.addEventListener("change", change);
+  render();
+}
+
+function mountTransportOptions(panel, select, saved, payGoInstalled) {
+  const options = panel.querySelector("#vertex_transport_options");
+  const summary = panel.querySelector("#vertex_transport_summary");
+  const stop = panel.querySelector("#vertex_tag_stop");
+  const fields = panel.querySelector("#vertex_tag_fields");
+  const tag = panel.querySelector("#vertex_stop_tag");
+  const count = panel.querySelector("#vertex_stop_count");
+  const wait = panel.querySelector("#vertex_wait_for_stop_usage");
+  const tool = panel.querySelector("#vertex_transport_tool_name");
+  const hostStream = document.getElementById("stream_toggle");
+  stop.checked = saved.tucaoStop ?? true;
+  tag.value = saved.stopTag ?? DEFAULT_STOP_TAG;
+  count.value = saved.stopCount ?? DEFAULT_STOP_COUNT;
+  wait.checked = saved.waitForStopUsage === true;
+  tool.placeholder = DEFAULT_TRANSPORT_TOOL_NAME;
+  tool.value = saved.transportToolName ?? "";
+
+  function render() {
+    options.hidden = select.value === "off";
+    fields.hidden = !stop.checked;
+    // TT always reads SSE. PayGo can also buffer a streamed host reply.
+    const streaming = hostStream?.checked ?? context.chatCompletionSettings?.stream_openai;
+    const payGo = payGoInstalled || typeof window.vertexPayGoGemini4GenerateInterceptor === "function";
+    wait.parentElement.hidden = !(direct || (streaming && (select.value === "streaming" || payGo)));
+    summary.textContent = stop.checked ? `第 ${count.value} 对 <${tag.value}> 后停止` : "标签截停已关闭";
+  }
+  select.addEventListener("change", () => { saveSettings({ mode: select.value }); render(); });
+  stop.addEventListener("change", () => { saveSettings({ tucaoStop: stop.checked }); render(); });
+  wait.addEventListener("change", () => saveSettings({ waitForStopUsage: wait.checked }));
+  function changeRule() {
+    try {
+      const rule = validateTagStopRule({ tag: tag.value.trim(), count: count.valueAsNumber });
+      tag.value = rule.tag;
+      saveSettings({ stopTag: rule.tag, stopCount: rule.count });
+    } catch (error) {
+      tag.value = settings().stopTag ?? DEFAULT_STOP_TAG;
+      count.value = settings().stopCount ?? DEFAULT_STOP_COUNT;
+      showStatus(error.message + " 已恢复上次设置。");
+    }
+    render();
+  }
+  tag.addEventListener("change", changeRule);
+  count.addEventListener("change", changeRule);
+  tool.addEventListener("change", () => {
+    try {
+      tool.value = validateTransportToolName(tool.value.trim());
+      saveSettings({ transportToolName: tool.value });
+    } catch (error) {
+      tool.value = settings().transportToolName ?? "";
+      showStatus(error.message + " 已恢复上次设置。");
+    }
+  });
+  hostStream?.addEventListener("change", render);
+  if (events.OAI_PRESET_CHANGED_AFTER) context.eventSource.on(events.OAI_PRESET_CHANGED_AFTER, render);
+  render();
+}
+
 function mount() {
   if (document.getElementById("vertex_anti_truncation_settings")) return;
   const parent = document.getElementById("vertexai_form");
   if (!parent) { console.warn("[Vertex 抗截断] 找不到 Vertex 连接面板。兼容目标为 SillyTavern 1.19。"); return; }
   const panel = document.createElement("div");
   panel.id = "vertex_anti_truncation_settings";
-  const label = document.createElement("label");
-  label.htmlFor = "vertex_anti_truncation_mode";
-  label.textContent = "抗截断传输";
-  select = document.createElement("select");
-  select.id = label.htmlFor;
-  select.className = "text_pole";
+  panel.innerHTML = `
+    <label for="vertex_anti_truncation_mode">抗截断传输</label>
+    <select id="vertex_anti_truncation_mode" class="text_pole"></select>
+    <details>
+      <summary>输入转码 <span id="vertex_encoding_summary"></span></summary>
+      <div class="vertex-fields">
+        <label>转码方式<select id="vertex_input_encoding" class="text_pole">
+          <option value="off">关闭</option><option value="unicode">Unicode</option><option value="optimized">优化转码（实验）</option>
+        </select></label>
+        <label>转码范围<select id="vertex_encoding_scope" class="text_pole">
+          <option value="current">当前输入</option><option value="all">全部上下文</option>
+        </select></label>
+      </div>
+    </details>
+    <details id="vertex_transport_options">
+      <summary>传输与截停 <span id="vertex_transport_summary"></span></summary>
+      <div class="vertex-fields">
+        <label class="checkbox_label"><input type="checkbox" id="vertex_tag_stop"> 自定义标签截停</label>
+        <div class="vertex-fields" id="vertex_tag_fields">
+          <label>截停标签名（不含尖括号）<input class="text_pole" id="vertex_stop_tag" maxlength="64"></label>
+          <label>完整出现次数<input class="text_pole" id="vertex_stop_count" type="number" min="1" step="1"></label>
+          <small>命中的结束标签会保留，之后的内容会丢弃，包括 MVU 变量更新。</small>
+          <label class="checkbox_label"><input type="checkbox" id="vertex_wait_for_stop_usage"> 截停后最多等 250 毫秒接收 Google 用量，期间生成的 token 可能计费。</label>
+        </div>
+        <label>正文传输工具名<input class="text_pole" id="vertex_transport_tool_name" maxlength="64" spellcheck="false" aria-describedby="vertex_tool_name_help"></label>
+        <small id="vertex_tool_name_help">留空自动命名。预设或上游要求固定名称时填写，其他工具沿用原名。</small>
+      </div>
+    </details>
+    <div class="vertex-connection">
+      <small class="vertex-antitruncation-status" role="status" aria-live="polite" hidden></small>
+    </div>`;
+  const select = panel.querySelector("#vertex_anti_truncation_mode");
   for (const value of MODES) select.add(new Option(labels[value], value));
   select.value = mode();
-  select.addEventListener("change", () => {
-    settings().mode = select.value;
-    context.saveSettingsDebounced();
-    showStatus();
-  });
-  status = document.createElement("small");
-  status.hidden = true;
-  status.className = "vertex-antitruncation-status";
-  status.setAttribute("role", "status");
-  status.setAttribute("aria-live", "polite");
-  const check = document.createElement("button");
-  check.type = "button";
-  check.className = "menu_button";
-  check.textContent = "检查插件连接";
-  check.title = "只检查酒馆服务端插件，不调用模型";
-  check.addEventListener("click", () => checkBackend());
-  const inputLabel = document.createElement("label");
-  inputLabel.htmlFor = "vertex_input_encoding";
-  inputLabel.textContent = "输入转码";
-  const input = document.createElement("select");
-  input.id = inputLabel.htmlFor;
-  input.className = "text_pole";
-  for (const [value, text] of [
-    ["off", "关闭（保持原文）"],
-    ["unicode", "Unicode · 当前输入（最新用户楼层或“我的行动”及其副本）"],
-    ["unicode-all", "Unicode · 全部上下文（含系统提示、历史和当前输入）"],
-    ["optimized", "优化转码 · 当前输入（实验）"],
-    ["optimized-all", "优化转码 · 全部上下文（实验）"],
-    ["current-turn", "图片·当前轮（本轮用户文本）"],
-    ["all", "图片·全部会话（用户与 AI 文本）"],
-  ]) if (!direct || !["current-turn", "all"].includes(value)) input.add(new Option(text, value));
   const saved = settings();
-  input.value = ["optimized", "optimized-all"].includes(saved.unicodeInput) ? saved.unicodeInput
-    : saved.unicodeInput === "all" ? "unicode-all" : saved.unicodeInput === true ? "unicode"
-    : !direct && ["current-turn", "all"].includes(saved.imageInput) ? saved.imageInput : "off";
-  input.addEventListener("change", () => {
-    const current = settings();
-    current.unicodeInput = ["optimized", "optimized-all"].includes(input.value) ? input.value
-      : input.value === "unicode-all" ? "all" : input.value === "unicode";
-    current.imageInput = ["current-turn", "all"].includes(input.value) ? input.value : "off";
-    context.saveSettingsDebounced();
-    showStatus();
-  });
-  panel.append(label, select, inputLabel, input);
-  const tagStop = document.createElement("label");
-  tagStop.className = "checkbox_label";
-  tagStop.htmlFor = "vertex_tag_stop";
-  const stopBox = Object.assign(document.createElement("input"), { type: "checkbox", id: tagStop.htmlFor, checked: saved.tucaoStop ?? true });
-  const tagLabel = Object.assign(document.createElement("label"), { htmlFor: "vertex_stop_tag", textContent: "截停标签名（不含尖括号）" });
-  const tagInput = Object.assign(document.createElement("input"), { type: "text", id: tagLabel.htmlFor, className: "text_pole", value: saved.stopTag ?? DEFAULT_STOP_TAG, maxLength: 64, placeholder: "tucao 或 A" });
-  const countLabel = Object.assign(document.createElement("label"), { htmlFor: "vertex_stop_count", textContent: "完整出现次数" });
-  const countInput = Object.assign(document.createElement("input"), { type: "number", id: countLabel.htmlFor, className: "text_pole", min: "1", step: "1", value: saved.stopCount ?? DEFAULT_STOP_COUNT });
-  const waitLabel = Object.assign(document.createElement("label"), { className: "checkbox_label", htmlFor: "vertex_wait_for_stop_usage" });
-  const waitBox = Object.assign(document.createElement("input"), { type: "checkbox", id: waitLabel.htmlFor, checked: saved.waitForStopUsage === true });
-  waitLabel.append(waitBox, Object.assign(document.createElement("span"), { textContent: "截停后最多等 250 毫秒接收 Google 用量" }));
-  waitBox.addEventListener("change", () => {
-    settings().waitForStopUsage = waitBox.checked;
-    context.saveSettingsDebounced();
-  });
-  tagInput.disabled = countInput.disabled = waitBox.disabled = !stopBox.checked;
-  stopBox.addEventListener("change", () => {
-    settings().tucaoStop = stopBox.checked;
-    tagInput.disabled = countInput.disabled = waitBox.disabled = !stopBox.checked;
-    context.saveSettingsDebounced();
-    showStatus();
-  });
-  for (const field of [tagInput, countInput]) field.addEventListener("change", () => {
-    settings().stopTag = tagInput.value.trim();
-    settings().stopCount = Number(countInput.value);
-    context.saveSettingsDebounced();
-  });
-  tagStop.append(stopBox, Object.assign(document.createElement("span"), { textContent: "自定义标签截停" }));
-  panel.append(tagStop, tagLabel, tagInput, countLabel, countInput, Object.assign(document.createElement("small"), { textContent:
-    "默认在本次正文的第二个完整 <tucao>…</tucao> 后停止。标签区分大小写，只匹配无属性的标签。结束标签会保留，后面的内容会被丢弃，包括 MVU 更新块。仅在抗截断开启时生效。" }));
-  panel.append(waitLabel, Object.assign(document.createElement("small"), { textContent:
-    "默认立即断流，并保留已收到的用量。开启后正文仍停在标签处，等待期间产生的 token 可能计费。超长回复分段续写时仍立即断流。" }));
-  // TauriTavern's own backend sends the request, so it cannot follow long-decode continuation tokens.
-  if (!direct) {
-    const longDecode = document.createElement("label");
-    longDecode.className = "checkbox_label";
-    longDecode.htmlFor = "vertex_long_decode";
-    const box = Object.assign(document.createElement("input"), { type: "checkbox", id: longDecode.htmlFor, checked: saved.longDecode === true });
-    box.addEventListener("change", () => {
-      settings().longDecode = box.checked;
-      context.saveSettingsDebounced();
-      showStatus();
-    });
-    longDecode.append(box, Object.assign(document.createElement("span"), { textContent: "Gemini 4 Argon 超长回复自动续写（long decode，实验）" }));
-    panel.append(longDecode, Object.assign(document.createElement("small"), { textContent:
-      "关闭时，最大回复长度超过单次上限（流式 65,536、非流式 32,768 token，含思考）会按单次上限发送，不再报错；回复写满就停止并标记为长度截断，非流式抗截断写满时可能拿不到正文。"
-      + "开启后改用 Google 的 v1beta1 接口，写满后自动续写并拼成一条回复，最多写到预设的长度。只有真写超单次上限才会追加请求；每续写一段都重发完整上下文，费用和等待时间随之增加，整次请求最长 10 分钟。" }));
+  const payGoInstalled = !direct && window.fetch.name === "payGoFetch";
+  const connection = panel.querySelector(".vertex-connection");
+  status = connection.querySelector("[role=status]");
+  mountInputEncoding(panel, saved);
+  mountTransportOptions(panel, select, saved, payGoInstalled);
+  if (direct) {
+    connection.append(Object.assign(document.createElement("small"), { textContent: "TauriTavern 扩展已加载。" }));
+  } else {
+    if (saved.longDecode === true) {
+      const legacy = document.createElement("div");
+      legacy.className = "vertex-fields";
+      legacy.innerHTML = `<label class="checkbox_label"><input type="checkbox" id="vertex_long_decode" checked> Argon 超长自动续写（旧设置）</label>
+        <small>每段续写会重发上下文并计费。下个插件版本将移除此功能，届时请在独立网关开启。关闭并刷新后，此入口会收起。</small>`;
+      const box = legacy.querySelector("input");
+      box.addEventListener("change", () => saveSettings({ longDecode: box.checked }));
+      connection.before(legacy);
+    }
+    const check = Object.assign(document.createElement("button"), { type: "button", className: "menu_button",
+      textContent: "检查插件连接", title: "只检查酒馆服务端插件，不调用模型" });
+    check.addEventListener("click", () => checkBackend());
+    connection.append(check);
   }
-  panel.append(status, direct ? Object.assign(document.createElement("small"),
-    { textContent: "TauriTavern：抗截断由本扩展直接完成，无需服务端插件；不支持图片输入和超长回复自动续写。" }) : check);
   parent.append(panel);
   // Install once and chain any previously installed fetch wrapper.
   const key = Symbol.for("vertex-anti-truncation.fetch");
   if (!window[key]) {
     window[key] = true;
     window.fetch = createFetchInterceptor(window.fetch.bind(window), { origin: location.origin, getMode: mode,
-      payGoInstalled: !direct && window.fetch.name === "payGoFetch",
+      payGoInstalled,
       getRequestHeaders: () => SillyTavern.getContext().getRequestHeaders(),
       getImageInput: () => direct ? "off" : settings().imageInput || "off",
       getUnicodeInput: () => settings().unicodeInput,
+      getTransportToolName: () => settings().transportToolName ?? "",
       getLongDecode: () => !direct && settings().longDecode === true,
       getWaitForStopUsage: () => settings().waitForStopUsage === true,
       getTagStop: () => settings().tucaoStop === false ? null

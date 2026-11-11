@@ -26,7 +26,7 @@ function includedBody(value) {
   } catch { return null; }
 }
 
-export function prepareTauriTavernRequest(body, mode, tagStop) {
+export function prepareTauriTavernRequest(body, mode, tagStop, transportToolName) {
   const included = includedBody(body.custom_include_body);
   if (!included) return { bypass: "additional-parameters" };
   // The upstream request is always streamGenerateContent here, and TauriTavern's backend
@@ -35,7 +35,7 @@ export function prepareTauriTavernRequest(body, mode, tagStop) {
   body = payload;
   const continuation = body.type === "continue";
   const upstreamStream = mode === "streaming" && body.stream === true;
-  const prepared = prepareAntiTruncation({ messages: body.messages, tools: body.tools, tool_choice: body.tool_choice }, true, false, { continuation });
+  const prepared = prepareAntiTruncation({ messages: body.messages, tools: body.tools, tool_choice: body.tool_choice }, true, false, { continuation, transportToolName });
   const native = nativeRequestBody({ ...prepared.payload, messages: [] });
   if (upstreamStream) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   return {

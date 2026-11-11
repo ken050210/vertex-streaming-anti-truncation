@@ -6,10 +6,31 @@
   padding-top: 12px;
   border-top: 1px solid var(--SmartThemeBorderColor);
 }
-#vertex_anti_truncation_settings small { line-height: 1.5; overflow-wrap: anywhere; }
-#vertex_anti_truncation_settings small[hidden],
+#vertex_anti_truncation_settings small { line-height: 1.5; max-inline-size: 68ch; overflow-wrap: anywhere; }
+#vertex_anti_truncation_settings [hidden] { display: none !important; }
 #vertexai_form .toggle-description:has(> [data-i18n="vertexai_service_tier_desc"]) { display: none; }
+#vertex_anti_truncation_settings summary {
+  cursor: pointer;
+  padding-block: 6px;
+  overflow-wrap: anywhere;
+}
+#vertex_anti_truncation_settings summary span { margin-inline-start: .5em; font-size: .9em; }
+#vertex_anti_truncation_settings .vertex-fields,
+#vertex_anti_truncation_settings .vertex-connection {
+  display: grid;
+  gap: 8px;
+  min-inline-size: 0;
+}
+#vertex_anti_truncation_settings details > .vertex-fields {
+  margin: 6px 0 8px;
+  padding-inline-start: .8em;
+  border-inline-start: 1px solid var(--SmartThemeBorderColor);
+}
+#vertex_anti_truncation_settings .vertex-fields label:not(.checkbox_label) { display: grid; gap: 4px; }
+#vertex_anti_truncation_settings .vertex-fields input.text_pole,
+#vertex_anti_truncation_settings .vertex-fields select { width: 100%; min-width: 0; }
 #vertex_anti_truncation_settings .menu_button {
+  justify-self: start;
   align-self: flex-start;
   flex: 0 0 auto;
   width: auto;
@@ -18,5 +39,6 @@
   white-space: nowrap;
 }
 #vertex_anti_truncation_settings select:focus-visible,
+#vertex_anti_truncation_settings summary:focus-visible,
 #vertex_anti_truncation_settings input:focus-visible,
 #vertex_anti_truncation_settings button:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: 2px; }

@@ -14,7 +14,8 @@ export const MIN_SERVER_VERSION = "0.3.1";
 export const TOOLS_FEATURE = "client-tools";
 export const TUCAO_FEATURE = "stop-after-second-tucao";
 export const TAG_STOP_FEATURE = "stop-after-tag-pairs";
-export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, "image-input-convert", "tag-stop-usage"];
+export const TRANSPORT_NAME_FEATURE = "custom-transport-tool-name";
+export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, "image-input-convert", "tag-stop-usage", TRANSPORT_NAME_FEATURE];
 export const MODES = ["off", "buffered", "streaming"];
 export const GENERATE_PATH = "/api/backends/chat-completions/generate";
 const PAYGO_GENERATE_PATH = "/api/plugins/vertex-paygo/native-gemini/generate";
@@ -114,7 +115,7 @@ export function bypassReason(body, mode, payGo = false) {
 
 // ST 1.19 exposes a settings event, but not a generation-URL override. Intercept
 // only its same-origin Vertex POST; preserve the original fetch for everything else.
-export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getTagStop = () => null, getWaitForStopUsage = () => false, getUserFloor = () => "", ensureBackend = async () => true, onStatus = () => {}, direct, payGoInstalled = false, getRequestHeaders = () => ({ "Content-Type": "application/json" }) }) {
+export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getTransportToolName = () => "", getTagStop = () => null, getWaitForStopUsage = () => false, getUserFloor = () => "", ensureBackend = async () => true, onStatus = () => {}, direct, payGoInstalled = false, getRequestHeaders = () => ({ "Content-Type": "application/json" }) }) {
   return async function vertexFetch(input, init) {
     let url;
     try { url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, origin); }
@@ -158,7 +159,10 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     let reason = bypassReason(body, imageEnabled && mode === "off" ? "buffered" : mode, ownPayGoProxy);
     if (!reason && !direct && !payGo && usesTools(body) && !await ensureBackend(TOOLS_FEATURE)) reason = "server-tools";
     const tagStop = !reason && mode !== "off" ? getTagStop() : null;
+    const transportToolName = !reason && mode !== "off" ? getTransportToolName() : "";
     const waitForStopUsage = Boolean(tagStop && getWaitForStopUsage());
+    delete body.vertex_long_decode;
+    delete body.vertex_transport_tool_name;
     delete body.vertex_wait_for_stop_usage;
     delete body.vertex_tucao_stop;
     delete body.vertex_tag_stop;
@@ -166,8 +170,8 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     // own request here and restores the reply below.
     let prepared;
     if (direct && !reason) {
-      try { prepared = direct.prepare(body, mode, tagStop); }
-      catch (error) { onStatus({ error: error.code || "invalid_request" }); throw error; }
+      try { prepared = direct.prepare(body, mode, tagStop, transportToolName); }
+      catch (error) { onStatus({ error: error.code || "invalid_request", message: error.message }); throw error; }
       prepared.waitForStopUsage = waitForStopUsage;
       reason = prepared.bypass ?? null;
     }
@@ -185,7 +189,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (payGo && !reason) {
       const { sendPayGoRequest } = await import("./paygo.js");
       try {
-        const reply = await sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, waitForStopUsage, unicode, longDecode: getLongDecode() === true,
+        const reply = await sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, waitForStopUsage, unicode, transportToolName, longDecode: getLongDecode() === true,
           ensureBackend, getRequestHeaders, onStatus });
         return await reportResponse(reply, onStatus);
       } catch (error) {
@@ -195,11 +199,15 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
       }
     }
     let payload = reason ? null : JSON.stringify(prepared?.body ??
-      { ...body, vertex_anti_truncation: mode, ...(tagStop ? { vertex_tag_stop: tagStop } : {}), ...(waitForStopUsage ? { vertex_wait_for_stop_usage: true } : {}), ...(getLongDecode() === true ? { vertex_long_decode: true } : {}) });
+      { ...body, vertex_anti_truncation: mode, ...(transportToolName ? { vertex_transport_tool_name: transportToolName } : {}),
+        ...(tagStop ? { vertex_tag_stop: tagStop } : {}), ...(waitForStopUsage ? { vertex_wait_for_stop_usage: true } : {}), ...(getLongDecode() === true ? { vertex_long_decode: true } : {}) });
     // The plugin rejects bodies over its limit; keep ST's own route for plain
     // anti-truncation. Image input never falls back to plaintext.
     if (payload && !imageEnabled && new TextEncoder().encode(payload).length > BODY_LIMIT) reason = "too-large";
     if (reason && !unicodeEnabled) { onStatus({ bypass: reason }); return originalFetch(input, init); }
+    if (!reason && !direct && transportToolName && !await ensureBackend(TRANSPORT_NAME_FEATURE)) {
+      onStatus({ error: "transport_tool_name_not_supported" }); throw new Error("transport_tool_name_not_supported");
+    }
     // Old plugins ignore image settings and Continue semantics. Check only
     // eligible plugin requests; disabled/bypass routes retain ST's behavior.
     if (!reason && !direct && (imageEnabled || body.type === "continue") && !await ensureBackend()) {

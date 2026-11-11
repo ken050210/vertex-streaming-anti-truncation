@@ -117,7 +117,7 @@ git clone --depth 1 https://github.com/ken050210/vertex-streaming-anti-truncatio
 - TauriTavern 的用户目录固定叫 `default-user`。
 - 必须是完整仓库。不要把 `dist/sillytavern/extension/` 或 Release 压缩包里的前端文件夹拷进来，它们不含 TauriTavern 需要的模块，扩展会加载失败且没有界面提示。
 
-启动 TT 后，在「API 连接 → Google Vertex AI」核对「抗截断传输」和面板底部的 TauriTavern 说明。含 TT 截停功能的源码还会显示「自定义标签截停」、标签名和次数。全新安装的默认值是 `tucao` 和 `2`。这些控件可在发送任何模型请求之前检查。
+启动 TT 后，在「API 连接 → Google Vertex AI」核对「抗截断传输」和底部的「TauriTavern 扩展已加载」。启用抗截断后可展开「传输与截停」，新配置的标签截停默认关闭。检查界面无需发送模型请求。
 
 如果无法查看界面，可对照安装前后 `<数据目录>/default-user/settings.json` 里的 `extension_settings`。首次出现 `vertex-anti-truncation` 说明扩展已加载。已有这个键时，需要通过面板确认本次更新。
 
@@ -126,7 +126,7 @@ git clone --depth 1 https://github.com/ken050210/vertex-streaming-anti-truncatio
 ## 装完后告诉用户
 
 - 插件默认关闭。到 **API 连接 → Google Vertex AI → 抗截断传输** 选择“非流式抗截断”或“流式抗截断”；选流式时还要打开酒馆自己的流式传输。
-- 标签截停默认勾选，只对抗截断回复生效。结束标签后的内容会被丢弃，包括后续 MVU 更新块。[规则和示例](SILLYTAVERN.md#自定义标签截停)
+- 标签截停由新用户按需启用，升级保留旧配置的生效状态。命中后会丢弃结束标签之后的内容，包括后续 MVU 更新块。[规则和示例](SILLYTAVERN.md#自定义标签截停)
 - 它使用酒馆里已保存的 Vertex 凭据。安装过程不需要、也不应该读取或填写任何密钥。
 - 开关由用户在界面里选择，不要替用户修改酒馆的设置文件来打开它。
 - 你做了哪些改动、备份文件在哪里。
