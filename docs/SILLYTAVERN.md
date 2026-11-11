@@ -58,7 +58,7 @@ SillyTavern 需要 Node.js 22.9+。扩展按 1.19.0 的 Vertex 面板、提示�
 
 ### 一键安装包
 
-1. 从 [Release `sillytavern-v0.12.0`](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.12.0) 下载 `vertex-anti-truncation-sillytavern-0.12.0.zip`。同页有 `SHA256.txt` 可校验。酒馆至少要启动过一次，生成 `config.yaml`。
+1. 从[项目发布页](https://github.com/ken050210/vertex-streaming-anti-truncation/releases)选择以 `sillytavern-v` 开头的版本，下载对应的酒馆 ZIP 安装包。同页有 `SHA256.txt` 可校验。酒馆至少要启动过一次，生成 `config.yaml`。
 2. 关闭酒馆并解压。Windows 双击 `install-windows.cmd`，按提示拖入酒馆文件夹。macOS、Linux 或 Termux 运行 `sh install.sh 酒馆文件夹路径`。命令行代装用 `node install.mjs "酒馆文件夹路径"`。
 3. 重启酒馆，刷新网页，按下方[确认安装](#确认安装)检查。
 
@@ -131,7 +131,11 @@ SillyTavern 的「Gemini 4 Argon 超长回复自动续写」默认关闭，此�
 
 **命中的结束标签会保留，它之后的内容全部丢弃。** 例如 Izumi 预设若把同轮 MVU 更新写在第二段吐槽后，默认规则会把变量更新一起截掉。这种布局可以改用最后一个必要块的标签，或关闭截停。额外模型的变量更新是独立请求，有自己的计数。
 
-TT 在本地结束响应流。SillyTavern 的服务端在流式模式下取消上游读取，在非流式模式下裁剪已经收到的完整回复。截停不会返回估算的最终 token 数，上游已经产生的费用仍按实际用量结算。SillyTavern 的服务端需要报告 `stop-after-tag-pairs` 能力，面板提示版本太旧时可更新服务端或关闭此开关。
+0.12.1 起，流式回复在标签处立即停显。默认读完当前已收到的数据块并断流。勾选「截停后最多等 250 毫秒接收 Google 用量」后，插件会短暂等待同一请求的结束帧和用量，超时即断开。标签后的文字和工具调用都会丢弃，等待期间生成的 token 可能计费。已启用分段续写的请求仍立即断流。非流式原生回复已由 Google 完成，会保留整次请求的用量，包括裁掉的部分。
+
+原生酒馆、TauriTavern 和 PayGo 的费用扩展均可从标准字段 `usageMetadata` 读取截停请求的最终用量。插件在 JSON 回复内或流式 `[DONE]` 前提供一次 `vertexUsageReceipt`。其中 `final: false` 表示缺少完整的服务端计数，已收到的字段保存在回执内部。原生酒馆服务端还可用实际发送的文本和可见正文生成 `estimate`，标明分词方法与是否为纯文本。缓存命中和思考 token 只能由 Google 提供。金额由费用扩展按单价估算，实际费用以账单为准。
+
+SillyTavern 的服务端需要报告 `stop-after-tag-pairs` 能力，面板提示版本太旧时可更新服务端或关闭此开关。
 
 ## 继续已有回复
 

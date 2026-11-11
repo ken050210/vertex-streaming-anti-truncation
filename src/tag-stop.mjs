@@ -1,5 +1,12 @@
-import { createSseParser, sseData } from "./wire.mjs";
+import { createSseParser, isObject, sseData } from "./wire.mjs";
 import { DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT } from "./tag-stop-rule.mjs";
+
+export const STOP_USAGE_WAIT_MS = 250;
+
+export function hasUsageTotals(usage) {
+  const count = value => Number.isSafeInteger(value) && value >= 0;
+  return count(usage?.promptTokenCount) && (count(usage.candidatesTokenCount) || count(usage.totalTokenCount));
+}
 
 // Count complete outermost tag pairs in this reply's visible text. Exact opening
 // and closing tags can span any number of events; unmatched closings do not count.
@@ -7,6 +14,22 @@ import { DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT } from "./tag-stop-rule.mjs";
 export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_STOP_COUNT) {
   const opening = `<${tag}>`, closing = `</${tag}>`;
   let tail = "", channel, currentTool, matched = false, depth = 0, pairs = 0;
+  let latestUsage, terminalUsage, upstreamFinished = false;
+  // Observe the provider's finish reason before clipping replaces it with STOP.
+  const observe = (frame, buffered) => {
+    const reason = frame?.candidates?.[0]?.finishReason;
+    if (buffered || (reason && reason !== "CONTINUATION" && reason !== "FINISH_REASON_UNSPECIFIED")) upstreamFinished = true;
+    const usage = frame?.usageMetadata;
+    if (!frame?.error && isObject(usage)) {
+      latestUsage = { ...latestUsage, ...usage };
+      if (upstreamFinished) {
+        terminalUsage = { ...terminalUsage, ...usage };
+        for (const key of ["trafficType", "serviceTier"]) {
+          if (latestUsage[key] != null) terminalUsage[key] = latestUsage[key];
+        }
+      }
+    }
+  };
   const clip = (text, kind) => {
     if (matched) return "";
     if (!text) return text;
@@ -31,7 +54,8 @@ export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_
     tail = joined.slice(cursor).slice(-(closing.length - 1));
     return text;
   };
-  const process = frame => {
+  const process = (frame, buffered = false) => {
+    observe(frame, buffered);
     if (frame.error || frame.candidates?.length !== 1) return;
     const candidate = frame.candidates[0], parts = candidate.content?.parts;
     if (!Array.isArray(parts)) return;
@@ -62,7 +86,7 @@ export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_
         parts.length = index + 1;
         candidate.finishReason = "STOP";
         delete candidate.continuationToken;
-        // This is a local stop, so no final upstream usage is available here.
+        // Only the receipt can distinguish interim counts from a provider finish.
         delete frame.usageMetadata;
         return;
       }
@@ -72,28 +96,86 @@ export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_
     clip,
     process,
     marker: () => matched ? closing : undefined,
-    stream(response) {
-      const encoder = new TextEncoder();
-      let controller;
+    receipt: () => {
+      const final = hasUsageTotals(terminalUsage);
+      return { final, usageMetadata: final ? terminalUsage : latestUsage };
+    },
+    stream(response, waitForUsage = false, normalizeError) {
+      const reader = response.body.getReader(), encoder = new TextEncoder();
+      let output, timer, deadline, emitted, closed = false, tailEnded = false;
+      const emit = text => { output.enqueue(encoder.encode(text)); emitted = true; };
       const parser = createSseParser(({ raw, data, event }) => {
-        if (!data || data.trim() === "[DONE]" || event === "error") { controller.enqueue(encoder.encode(raw + "\n\n")); return; }
+        if (!data || data.trim() === "[DONE]" || event === "error") {
+          if (!matched) emit(raw + "\n\n");
+          else if (data || event === "error") { tailEnded = true; return false; }
+          return;
+        }
         let frame;
-        // Preserve the existing native decoder's error contract before a stop.
         try { frame = JSON.parse(data); }
-        catch { controller.enqueue(encoder.encode(raw + "\n\n")); return; }
-        process(frame);
-        controller.enqueue(encoder.encode(sseData(frame)));
-        if (matched) return false;
+        catch {
+          if (!matched) emit(raw + "\n\n");
+          else { tailEnded = true; return false; }
+          return;
+        }
+        if (matched) {
+          // Only metering survives the boundary, including later events in the same read.
+          observe(frame, false);
+          if (frame?.error) { tailEnded = true; return false; }
+          if (hasUsageTotals(terminalUsage)) tailEnded = true;
+          return;
+        }
+        const hostError = normalizeError?.(frame);
+        if (hostError) frame = hostError;
+        else process(frame);
+        emit(sseData(frame));
+        if (matched && hasUsageTotals(terminalUsage)) tailEnded = true;
       });
-      const body = response.body.pipeThrough(new TransformStream({
-        transform(bytes, current) {
-          controller = current;
-          parser.push(bytes);
-          // terminate closes the readable side and cancels upstream immediately.
-          if (matched) current.terminate();
+      const finishCutoff = () => {
+        if (closed) return;
+        closed = true;
+        clearTimeout(timer);
+        output.close();
+        // A failed or tee'd upstream may reject or delay cancellation after the cutoff.
+        void reader.cancel().catch(() => {});
+      };
+      const body = new ReadableStream({
+        start(controller) { output = controller; },
+        async pull(controller) {
+          emitted = false;
+          do {
+            try {
+              const next = await reader.read();
+              if (closed) return;
+              if (next.done) {
+                parser.finish();
+                clearTimeout(timer);
+                closed = true;
+                controller.close();
+                return;
+              }
+              parser.push(next.value);
+            } catch (error) {
+              if (closed) return;
+              if (!matched) {
+                controller.error(error);
+                void reader.cancel(error).catch(() => {});
+                return;
+              }
+              tailEnded = true;
+            }
+            if (matched) {
+              deadline ??= Date.now() + STOP_USAGE_WAIT_MS;
+              if (tailEnded || !waitForUsage || Date.now() >= deadline) finishCutoff();
+              else timer ??= setTimeout(finishCutoff, STOP_USAGE_WAIT_MS);
+            }
+          } while (!closed && !emitted);
         },
-        flush(current) { controller = current; parser.finish(); },
-      }));
+        cancel(reason) {
+          closed = true;
+          clearTimeout(timer);
+          return reader.cancel(reason);
+        },
+      });
       return new Response(body, { status: response.status, headers: response.headers });
     },
   };

@@ -1,13 +1,14 @@
 import { prepareAntiTruncation } from "../../src/anti-truncation.mjs";
 import { capGemini4Output } from "../../src/gemini4.mjs";
 import { createTagStop } from "../../src/tag-stop.mjs";
+import { receiptFields } from "../../src/sillytavern.mjs";
 import { restoreBrowserStream } from "../../src/tauritavern.mjs";
 import { BODY_LIMIT, PLUGIN_PATH } from "./shared.js";
 import { googleErrorDetail, upstreamMessage } from "../../src/wire.mjs";
 
 // PayGo owns the request URL, single-use ticket, stream flag, service tier and
 // usage observer. Shape only the submitted messages/tools and consume its reply.
-export async function sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, longDecode,
+export async function sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, waitForStopUsage, longDecode,
   unicode, ensureBackend, getRequestHeaders, onStatus }) {
   const signal = init?.signal ?? input?.signal;
   let image;
@@ -43,7 +44,7 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
   if (reply.body) {
     if (body.stream && prepared.toolName) {
       delivered = await restoreBrowserStream(reply, { toolName: prepared.toolName, tools: prepared.payload.tools,
-        model: body.model, continuation, stream: true, upstreamStream: live, tagStop, outputLimit: capped.outputLimit }, signal);
+        model: body.model, continuation, stream: true, upstreamStream: live, tagStop, waitForStopUsage, outputLimit: capped.outputLimit }, signal);
     } else if (!body.stream) {
       const data = await reply.json();
       if (data?.error || data?.promptFeedback?.blockReason) {
@@ -69,8 +70,18 @@ function restorePayGoJson(data, toolName, tagStop) {
   if (!Array.isArray(candidate.content?.parts)) throw new Error("invalid_upstream_json");
   const stop = tagStop && createTagStop(toolName, tagStop.tag, tagStop.count);
   if (stop) {
-    stop.process({candidates:[candidate]});
-    if (stop.marker()) data.vertexStopAfter = stop.marker();
+    stop.process({ candidates: [candidate], usageMetadata: data.usageMetadata }, true);
+    if (stop.marker()) {
+      data.vertexStopAfter = stop.marker();
+      const receipt = stop.receipt();
+      if (!receipt.final && data.usageMetadata) {
+        delete data.usageMetadata;
+        delete data.usage;
+      }
+      const fields = receiptFields(receipt);
+      if (receipt.final && data.usage) delete fields.usage; // Keep PayGo's original normalized details.
+      Object.assign(data, fields);
+    }
   }
   let restored = false;
   const parts = candidate.content.parts.map(part => {

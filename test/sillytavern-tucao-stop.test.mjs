@@ -155,3 +155,74 @@ test("buffered SillyTavern replies honor a custom tag and count", async () => {
   assert.equal(result.choices[0].message.content, body);
   assert.equal(result.vertexStopAfter, "</A>");
 });
+
+
+const countedUsage = { promptTokenCount: 900, cachedContentTokenCount: 400, candidatesTokenCount: 18,
+  thoughtsTokenCount: 7, totalTokenCount: 925 };
+const stopped = { ...prepared, stopTag: "A", stopCount: 1 };
+
+test("the cutoff emits text immediately, then a single final receipt for a separately delivered usage frame", { timeout: 3000 }, async () => {
+  const encoder = new TextEncoder();
+  let upstream, cancelled = false;
+  const response = new Response(new ReadableStream({
+    start(controller) { upstream = controller; }, cancel() { cancelled = true; },
+  }));
+  const restored = await restoreSillyTavernResponse(response, { ...stopped, waitForStopUsage: true });
+  const reader = restored.body.getReader(), decoder = new TextDecoder();
+  upstream.enqueue(encoder.encode(sseData({ usageMetadata: { trafficType: "ON_DEMAND_FLEX" } }) + start() + part("<A>visible</A>hidden")));
+  let wire = "";
+  while (!text(wire).includes("</A>")) wire += decoder.decode((await reader.read()).value);
+  assert.equal(cancelled, false);
+  upstream.enqueue(encoder.encode(sseData(frame([{ text: "hidden-tail" }])) + sseData({ candidates: [{ finishReason: "STOP" }] })));
+  upstream.enqueue(encoder.encode(sseData({ usageMetadata: countedUsage })));
+  for (let next = await reader.read(); !next.done; next = await reader.read()) wire += decoder.decode(next.value);
+  assert.equal(text(wire), "<A>visible</A>");
+  assert.doesNotMatch(wire, /hidden/);
+  const output = events(wire);
+  const receipts = output.filter(e => e.vertexUsageReceipt);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].vertexUsageReceipt.final, true);
+  assert.deepEqual(receipts[0].usageMetadata, { ...countedUsage, trafficType: "ON_DEMAND_FLEX" });
+  assert.equal(output.filter(e => e.usage || e.usageMetadata).length, 1);
+  assert.equal(output.flatMap(e => e.candidates || []).filter(c => c.finishReason).length, 1);
+  assert.equal(wire.split("data: [DONE]").length, 2);
+  assert.equal(cancelled, true);
+});
+
+test("grace expires on a silent upstream and never promotes an earlier complete-looking snapshot", { timeout: 3000 }, async () => {
+  let cancelled = false;
+  // A real finish with no new counts is insufficient to confirm an interim snapshot.
+  const response = new Response(new ReadableStream({
+    start(c) { c.enqueue(new TextEncoder().encode(sseData({ usageMetadata: countedUsage }) +
+      sseData(frame([{ text: "<A>ok</A>" }])) + sseData({ candidates: [{ finishReason: "STOP" }] }))); },
+    cancel() { cancelled = true; },
+  }));
+  const wire = await (await restoreSillyTavernResponse(response, { ...stopped, waitForStopUsage: true })).text();
+  assert.equal(cancelled, true);
+  assert.equal(text(wire), "<A>ok</A>");
+  const output = events(wire);
+  assert.ok(output.every(e => !e.usage && !e.usageMetadata));
+  assert.deepEqual(output.find(e => e.vertexUsageReceipt).vertexUsageReceipt, { final: false, usageMetadata: countedUsage });
+});
+
+test("a failing tail cannot undo a clipped reply and cancelling the reader ends the wait", async () => {
+  for (const abort of [false, true]) {
+    let upstream, cancelled = false;
+    const input = new Response(new ReadableStream({ start(c) { upstream = c; }, cancel() { cancelled = true; } }));
+    const result = await restoreSillyTavernResponse(input, { ...stopped, waitForStopUsage: true });
+    const reader = result.body.getReader(), decoder = new TextDecoder();
+    upstream.enqueue(new TextEncoder().encode(sseData(frame([{ text: "<A>ok</A>" }]))));
+    let wire = "";
+    while (!text(wire).includes("</A>")) wire += decoder.decode((await reader.read()).value);
+    if (abort) {
+      await reader.cancel();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(cancelled, true);
+    } else {
+      upstream.error(new Error("tail disconnected"));
+      for (let next = await reader.read(); !next.done; next = await reader.read()) wire += decoder.decode(next.value);
+      assert.equal(events(wire).find(e => e.vertexUsageReceipt).vertexUsageReceipt.final, false);
+      assert.ok(wire.includes("data: [DONE]"));
+    }
+  }
+});

@@ -11,6 +11,8 @@ import { googleErrorDetail, sseData, upstreamMessage } from "../../src/wire.mjs"
 import { waitWithSignal } from "../../src/abort.mjs";
 import { BODY_LIMIT, PLUGIN_FEATURES, PLUGIN_ID, PLUGIN_VERSION } from "./shared.js";
 
+import { loadUsageEstimator } from "./google-usage-estimate.mjs";
+
 export const info = { id: PLUGIN_ID, name: "Vertex AI Anti-Truncation", description: "Native Vertex text transport using SillyTavern's saved credentials." };
 
 function imageErrorLocation(error) {
@@ -93,7 +95,7 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       });
       const upstream = await (longDecode ? fetchLongDecode(post, prepared.body, prepared.upstreamStream) : post(prepared.body));
       stage = "restoration";
-      const restored = await restoreSillyTavernResponse(upstream, prepared, credential);
+      const restored = await restoreSillyTavernResponse(upstream, prepared, credential, upstream.ok ? await loadUsageEstimator() : undefined);
       // ST's global compression() would hold SSE chunks until the reply ends; no-transform opts out.
       response.setHeader("cache-control", prepared.stream ? "no-store, no-transform" : "no-store");
       response.setHeader("x-content-type-options", "nosniff");

@@ -1,5 +1,5 @@
 import { CONTINUATION_INSTRUCTION, prepareAntiTruncation, restoreAntiTruncationCompletion, wrapAntiTruncationStream } from "./anti-truncation.mjs";
-import { SIGNATURE_ID_PREFIX, nativeRequestBody } from "./vertex-native.mjs";
+import { SIGNATURE_ID_PREFIX, nativeRequestBody, translateUsage } from "./vertex-native.mjs";
 import { translateNativeCompletion } from "./vertex-protocol.mjs";
 import { wrapNativeTextStream } from "./vertex-text-stream.mjs";
 import { inspectCompletion, guardCompletionStream } from "./completion-integrity.mjs";
@@ -8,7 +8,7 @@ import { documentedUnsupported } from "./unsupported-params.mjs";
 import { isObject, protocolError, readUpstreamError, sseData, transformSse } from "./wire.mjs";
 import { bypassReason, BODY_LIMIT } from "../integrations/sillytavern/shared.js";
 import { isGemini4Argon, gemini4OutputLimit, gemini4ThinkingLevel, gemini4ToolMetadata } from "./gemini4.mjs";
-import { createTagStop } from "./tag-stop.mjs";
+import { createTagStop, hasUsageTotals } from "./tag-stop.mjs";
 import { validateTagStopRule } from "./tag-stop-rule.mjs";
 
 export const requestError = code => Object.assign(new Error(code), { status: 400, code });
@@ -82,6 +82,7 @@ export function prepareSillyTavernRequest(request, adapters) {
   if (body.vertex_tucao_stop != null && typeof body.vertex_tucao_stop !== "boolean") throw requestError("invalid_tucao_stop");
   const tagStop = body.vertex_tag_stop == null ? null : validateTagStopRule(body.vertex_tag_stop);
   return { body: native, toolName: prepared.toolName, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit,
+    waitForStopUsage: body.vertex_wait_for_stop_usage === true && !outputLimit?.longDecode,
     tucaoStop: tagStop !== null || body.vertex_tucao_stop === true, stopTag: tagStop?.tag, stopCount: tagStop?.count };
 }
 
@@ -110,12 +111,31 @@ function nativeUsage(usage) {
   } : undefined;
 }
 
+// Legacy observers read the normal usage fields. Give them provider-confirmed
+// totals only; the receipt carries partial observations and local estimates.
+export function receiptFields(receipt, estimateText, visibleText) {
+  if (!receipt) return {};
+  if (!receipt.final && estimateText) receipt.estimate = estimateText(visibleText);
+  const fields = { vertexUsageReceipt: receipt };
+  if (receipt.final) {
+    const native = receipt.usageMetadata;
+    fields.usageMetadata = native;
+    if (Number.isSafeInteger(native.candidatesTokenCount)) fields.usage = translateUsage(native);
+  }
+  return fields;
+}
+
 // Vertex's ST streaming reader expects native candidates[].content.parts, while
 // its non-streaming reader expects choices[] plus responseContent. Match both.
-export function toSillyTavernStream(response, getNativeUsage = () => undefined, model, getStopAfter = () => undefined, getTextSignature) {
+export function toSillyTavernStream(response, getNativeUsage = () => undefined, model, getStopAfter = () => undefined, getTextSignature, getReceipt, estimateText) {
+  let visibleText = "";
   return transformSse(response, ({ data }, emit) => {
     if (!data) return;
-    if (data.trim() === "[DONE]") return emit(sseData("[DONE]"));
+    if (data.trim() === "[DONE]") {
+      const receipt = getReceipt?.();
+      if (receipt) emit(sseData({ candidates: [], ...receiptFields(receipt, estimateText, visibleText) }));
+      return emit(sseData("[DONE]"));
+    }
     const parsed = JSON.parse(data);
     if (parsed.error) return emit(sseData(parsed));
     const output = { candidates: [] };
@@ -126,7 +146,10 @@ export function toSillyTavernStream(response, getNativeUsage = () => undefined, 
         content: { role: "model", parts: delta.tool_calls.map(call => functionCallPart(call, model)) } }] }));
       const parts = [];
       if (delta.reasoning_content) parts.push({ thought: true, text: delta.reasoning_content });
-      if (delta.content) parts.push({ text: delta.content });
+      if (delta.content) {
+        parts.push({ text: delta.content });
+        if (estimateText) visibleText += delta.content;
+      }
       const candidate = { index: choice.index ?? 0, content: { role: "model", parts } };
       if (choice.finish_reason != null) {
         candidate.finishReason = choice.native_finish_reason ?? finishReasons[choice.finish_reason] ?? "OTHER";
@@ -135,7 +158,10 @@ export function toSillyTavernStream(response, getNativeUsage = () => undefined, 
       }
       output.candidates.push(candidate);
     }
-    if (parsed.usage && !getStopAfter()) { output.usage = parsed.usage; output.usageMetadata = getNativeUsage() ?? nativeUsage(parsed.usage); }
+    if (parsed.usage && !getStopAfter()) {
+      output.usageMetadata = getNativeUsage() ?? nativeUsage(parsed.usage);
+      if (hasUsageTotals(output.usageMetadata)) output.usage = parsed.usage;
+    }
     if (parsed.router_anti_truncation) output.vertexAntiTruncation = parsed.router_anti_truncation;
     if (getStopAfter()) output.vertexStopAfter = getStopAfter();
     emit(sseData(output));
@@ -144,16 +170,18 @@ export function toSillyTavernStream(response, getNativeUsage = () => undefined, 
 
 // A checked, complete reply in the shape ST asked for. Also used in a WebView,
 // where older WebKit has no Response.json.
-export function completedSillyTavernResponse(completion, prepared, usageMetadata, stopAfter, textSignature) {
+export function completedSillyTavernResponse(completion, prepared, usageMetadata, stopAfter, textSignature, getReceipt, estimateText) {
   const message = completion.choices[0].message;
-  if (prepared.stream) return toSillyTavernStream(guardCompletionStream(completionStream(completion, true), () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stopAfter, () => textSignature);
+  if (prepared.stream) return toSillyTavernStream(guardCompletionStream(completionStream(completion, true), () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stopAfter, () => textSignature, getReceipt, estimateText);
   const parts = [];
   if (message.reasoning_content) parts.push({ thought: true, text: message.reasoning_content });
   if (message.content) parts.push({ text: message.content });
   if (textSignature && !completion.router_anti_truncation?.restored && !stopAfter) parts.push({text:"",thoughtSignature:textSignature});
   for (const call of message.tool_calls ?? []) parts.push(functionCallPart(call, prepared.model));
-  return new Response(JSON.stringify({ ...completion, responseContent: { role: "model", parts }, usageMetadata,
-    vertexAntiTruncation: completion.router_anti_truncation, ...(stopAfter ? { vertexStopAfter: stopAfter } : {}) }), { headers: { "content-type": "application/json" } });
+  const receipt = getReceipt?.();
+  return new Response(JSON.stringify({ ...completion, usage: receipt ? undefined : completion.usage,
+    usageMetadata: stopAfter && receipt ? undefined : usageMetadata, responseContent: { role: "model", parts },
+    ...receiptFields(receipt, estimateText, message.content || ""), vertexAntiTruncation: completion.router_anti_truncation, ...(stopAfter ? { vertexStopAfter: stopAfter } : {}) }), { headers: { "content-type": "application/json" } });
 }
 
 async function readJson(response) {
@@ -168,24 +196,30 @@ async function readJson(response) {
   catch { throw protocolError("invalid_upstream_json"); }
 }
 
-export async function restoreSillyTavernResponse(upstream, prepared, credential) {
+export async function restoreSillyTavernResponse(upstream, prepared, credential, estimateUsage) {
   if (!upstream.ok) {
     throw Object.assign(protocolError("vertex_upstream_http_error"), {
       status: upstream.status, upstreamError: await readUpstreamError(upstream, credential)
     });
   }
   const stop = prepared.toolName && prepared.tucaoStop ? createTagStop(prepared.toolName, prepared.stopTag, prepared.stopCount) : null;
+  let usageMetadata;
+  const getReceipt = () => {
+    if (stop?.marker()) return stop.receipt();
+    if (!hasUsageTotals(usageMetadata) && (usageMetadata || estimateUsage)) return { final: false, usageMetadata };
+  };
+  const estimateText = estimateUsage && (text => estimateUsage(prepared.body, text));
   if (prepared.upstreamStream && !upstream.headers.get("content-type")?.includes("application/json")) {
     if (!upstream.body) throw protocolError("empty_upstream_stream");
-    if (stop) upstream = stop.stream(upstream);
-    let usageMetadata;
+    if (stop) upstream = stop.stream(upstream, prepared.waitForStopUsage);
     const translated = wrapNativeTextStream(upstream, prepared.toolName, prepared.model,
       usage => { usageMetadata = usage; }, true, prepared.tools);
     const restored = wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools);
-    return toSillyTavernStream(guardCompletionStream(restored, () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stop?.marker());
+    return toSillyTavernStream(guardCompletionStream(restored, () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stop?.marker(), undefined, getReceipt, estimateText);
   }
   const raw = await readJson(upstream);
-  stop?.process(raw);
+  usageMetadata = raw.usageMetadata;
+  stop?.process(raw, true);
   if (raw.candidates?.length > 1) throw protocolError("unexpected_candidates");
   const translated = translateNativeCompletion(raw, prepared.model);
   const inspected = inspectCompletion(translated);
@@ -193,5 +227,5 @@ export async function restoreSillyTavernResponse(upstream, prepared, credential)
   const completion = prepared.toolName ? restoreAntiTruncationCompletion(translated, prepared.toolName) : translated;
   const restored = inspectCompletion(completion);
   if (!restored.valid) throw protocolError(restored.reason);
-  return completedSillyTavernResponse(completion, prepared, raw.usageMetadata, stop?.marker());
+  return completedSillyTavernResponse(completion, prepared, usageMetadata, stop?.marker(), undefined, getReceipt, estimateText);
 }

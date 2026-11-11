@@ -99,3 +99,33 @@ test("PayGo's signed text fallback survives live and buffered SSE delivery",asyn
     assert.match(wire,/"thoughtSignature":"paygo-fixture-signature"/);
   }
 });
+
+
+test("PayGo usage observers get one native final with clipped text in either fetch order and delivery mode", async () => {
+  const usageMetadata = { promptTokenCount: 250, cachedContentTokenCount: 160, candidatesTokenCount: 8, totalTokenCount: 258 };
+  for (const path of [GENERATE_PATH, nativePath]) for (const stream of [false, true]) {
+    const marked = path === GENERATE_PATH;
+    const proxy = marked ? "vertex-paygo-blocked://request" : "http://127.0.0.1:1234/proxy/fixture";
+    let calls = 0;
+    const intercept = createFetchInterceptor(async (target, init) => {
+      calls++;
+      assert.equal(target, path);
+      const sent = JSON.parse(init.body);
+      assert.equal(sent.vertex_wait_for_stop_usage, undefined);
+      assert.equal(sent.reverse_proxy, proxy);
+      const name = sent.tools.at(-1).function.name;
+      const content = { role: "model", parts: [{ functionCall: { name, args: { content: "<A>done</A>hidden" } } }] };
+      if (!stream) return Response.json({ responseContent: content, choices: [{ message: {} }], usageMetadata });
+      return new Response(sseData({ candidates: [{ content }] }) + sseData({ candidates: [{ finishReason: "STOP" }], usageMetadata }));
+    }, { origin, getMode: () => "streaming", getTagStop: () => ({ tag: "A", count: 1 }), getWaitForStopUsage: () => true });
+    const response = await send(intercept, path, { ...body, stream, reverse_proxy: proxy, proxy_password: "fixture",
+      ...(marked ? { __vertexPayGoRequestState: { state: { tier: "flex", paygoOnly: true }, sink: proxy } } : {}) });
+    const wire = await response.text();
+    assert.equal(calls, 1);
+    assert.match(wire, /<A>done<\/A>/);
+    assert.doesNotMatch(wire, /hidden/);
+    const frames = stream ? wire.split("\n").filter(l => l.startsWith("data: {")).map(l => JSON.parse(l.slice(6))) : [JSON.parse(wire)];
+    assert.deepEqual(frames.filter(e => e.usageMetadata).map(e => e.usageMetadata), [usageMetadata]);
+    assert.deepEqual(frames.filter(e => e.vertexUsageReceipt).map(e => e.vertexUsageReceipt.final), [true]);
+  }
+});

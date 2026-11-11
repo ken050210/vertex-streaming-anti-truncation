@@ -157,6 +157,7 @@ test("TT stops at a split tag, preserves earlier client tools and cancels the op
   assert.deepEqual(frames.flatMap(e => e.candidates ?? []).map(c => c.finishReason).filter(Boolean), ["STOP"]);
   assert.ok(frames.some(e => e.vertexStopAfter === "</tucao>"));
   assert.ok(frames.every(e => !e.usage && !e.usageMetadata && !e.error));
+  assert.deepEqual(frames.find(e => e.vertexUsageReceipt)?.vertexUsageReceipt, { final: false, usageMetadata });
   assert.equal(wire.split("data: [DONE]").length - 1, 1);
   assert.equal(cancelled, true);
   assert.equal(original.calls.length, 1);
@@ -173,15 +174,19 @@ test("TT buffered delivery clips complete tool arguments and plain text in both 
         const wire = await response.text();
         assert.equal(contents(wire), prefix);
         assert.ok(events(wire).some(e => e.vertexStopAfter === "</A>"));
-        assert.ok(events(wire).every(e => !e.usage && !e.usageMetadata));
+        const receipts = events(wire).filter(e => e.vertexUsageReceipt);
+        assert.equal(receipts.length, 1);
+        assert.equal(receipts[0].vertexUsageReceipt.final, true);
+        assert.deepEqual(receipts[0].usageMetadata, usageMetadata);
       } else {
         const result = await response.json();
         assert.equal(result.choices[0].message.content, prefix);
         assert.equal(result.choices[0].finish_reason, "stop");
         assert.deepEqual(result.responseContent.parts, [{ text: prefix }]);
         assert.equal(result.vertexStopAfter, "</A>");
-        assert.equal(result.usage, undefined);
-        assert.equal(result.usageMetadata, undefined);
+        assert.equal(result.vertexUsageReceipt.final, true);
+        assert.equal(result.usage.total_tokens, usageMetadata.totalTokenCount);
+        assert.deepEqual(result.usageMetadata, usageMetadata);
       }
     }
   }

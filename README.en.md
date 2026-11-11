@@ -12,7 +12,7 @@ This experimental transport works with Vertex AI and Gemini. In anti-truncation 
 | TauriTavern (TT), desktop or mobile app | UI extension from the full repository. TT's Rust backend handles credentials and sends the request. | [TauriTavern installation (Chinese)](docs/SILLYTAVERN.md#tauritavern) |
 | SillyTavern's custom OpenAI connection, another compatible client, or a Gemini relay | Standalone gateway, using Node.js or Docker | [Start the gateway](#setup) |
 
-The SillyTavern 0.12.0 installer updates both the UI extension and the server plugin. The server requires Node.js 22.9 or later. For a Git installation, update both copies, restart Tavern and reload the page. [Download the installer](https://github.com/ken050210/vertex-streaming-anti-truncation/releases/tag/sillytavern-v0.12.0) · [Git installation and updates (Chinese)](docs/SILLYTAVERN.md#更新与已有手动安装)
+The SillyTavern 0.12.1 installer updates both the UI extension and the server plugin. The server requires Node.js 22.9 or later. For a Git installation, update both copies, restart Tavern and reload the page. [Download the installer](https://github.com/ken050210/vertex-streaming-anti-truncation/releases) · [Git installation and updates (Chinese)](docs/SILLYTAVERN.md#更新与已有手动安装)
 
 The Vertex panel can encode the current input or the full text context as Unicode. Text-to-image input supports ❤️, skin tones, flags and common emoji sequences. If Google blocks a prompt, Tavern shows the reason Google supplied. When using Vertex PayGo, choose the service tier in PayGo. [Input settings (Chinese)](docs/SILLYTAVERN.md#输入转码) · [PayGo setup (Chinese)](docs/SILLYTAVERN.md#与-vertex-paygo-同用)
 

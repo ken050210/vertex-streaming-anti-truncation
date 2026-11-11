@@ -2,6 +2,10 @@
 
 中文 | [English](CHANGELOG.md)
 
+## 酒馆插件 0.12.1 · 截停时保留用量
+
+标签截停时保留 Google 回报的完整用量和缓存计数。缺少最终用量时，回执会标出已收到的字段，原生酒馆服务端还可估算文本 token。Vertex 面板可选最多等 250 毫秒接收尾包。[标签截停与用量](docs/SILLYTAVERN.md#自定义标签截停)
+
 ## 网关 0.18.0 · Gemini 4 Carbon（2026-11-10）
 
 新增 `gemini-4-carbon` 的普通、非流式抗截断和流式抗截断入口。即使账号设置了其他地区，Carbon 也会发往 Vertex 的 `global` 端点。Express 需要填写密钥所属的项目 ID。已有模型列表可在控制台勾选版本后点「添加 Gemini 4 Carbon（global）」并保存。[网关手册](docs/GATEWAY.md#添加多个模型及版本)

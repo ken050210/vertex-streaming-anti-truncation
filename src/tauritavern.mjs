@@ -50,21 +50,18 @@ export function prepareTauriTavernRequest(body, mode, tagStop) {
 // ids, usage or finishReason. Give it an ending so its text arrives as written
 // instead of as an interrupted reply.
 const only = (value, ...allowed) => isObject(value) && Object.keys(value).every(key => allowed.includes(key));
-function normalizeTauriStream(response, stop) {
+function tauriErrorFrame(parsed) {
+  const candidate = only(parsed, "candidates") && parsed.candidates?.length === 1 ? parsed.candidates[0] : null;
+  const part = only(candidate, "index", "content") && only(candidate.content, "parts") && candidate.content.parts?.length === 1 ? candidate.content.parts[0] : null;
+  if (only(part, "text") && typeof part.text === "string") return { candidates: [{ ...candidate, finishReason: "STOP" }] };
+}
+
+function normalizeTauriStream(response) {
   return transformSse(response, ({ raw, data }, emit) => {
     let parsed;
     try { parsed = JSON.parse(data); } catch { return emit(raw + "\n\n"); }
-    const candidate = only(parsed, "candidates") && parsed.candidates?.length === 1 ? parsed.candidates[0] : null;
-    const part = only(candidate, "index", "content") && only(candidate.content, "parts") && candidate.content.parts?.length === 1 ? candidate.content.parts[0] : null;
-    if (only(part, "text") && typeof part.text === "string") {
-      return emit(sseData({ candidates: [{ ...candidate, finishReason: "STOP" }] }));
-    }
-    stop?.process(parsed);
-    if (stop?.marker()) {
-      emit(sseData(parsed));
-      return false; // Close the TT response reader at the matching frame.
-    }
-    emit(raw + "\n\n");
+    const error = tauriErrorFrame(parsed);
+    emit(error ? sseData(error) : raw + "\n\n");
   });
 }
 
@@ -138,25 +135,22 @@ export async function restoreBrowserStream(response, prepared, signal, tauri = f
   const rule = prepared.tagStop;
   const stop = rule && createTagStop(prepared.toolName, rule.tag, rule.count);
   let usageMetadata, textSignature;
-  const native = tauri ? normalizeTauriStream(response, stop) : stop ? stop.stream(response) : response;
+  const getReceipt = () => stop?.marker() ? stop.receipt() : undefined;
+  const native = stop ? stop.stream(response, prepared.waitForStopUsage, tauri ? tauriErrorFrame : undefined)
+    : tauri ? normalizeTauriStream(response) : response;
   const translated = wrapNativeTextStream(native, prepared.toolName, prepared.model,
     usage => { usageMetadata = usage; }, true, prepared.tools, tauri ? undefined : signature => { textSignature = signature; });
   const restored = guardCompletionStream(wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools), () => {}, null, BODY_LIMIT);
   const headers = { ...(prepared.continuation ? { "x-vertex-continuation": "suffix" } : {}), ...outputLimitHeaders(prepared.outputLimit) };
   if (prepared.upstreamStream) {
-    return new Response(reportStreamFailure(toSillyTavernStream(restored, () => usageMetadata, prepared.model, stop?.marker, () => textSignature).body, signal),
+    return new Response(reportStreamFailure(toSillyTavernStream(restored, () => usageMetadata, prepared.model, stop?.marker, () => textSignature, getReceipt).body, signal),
       { headers: { ...headers, "content-type": "text/event-stream; charset=utf-8" } });
   }
   let delivered;
   try {
     const completion = await collectCompletion(restored, prepared.model);
     const stopAfter = stop?.marker();
-    if (stopAfter) {
-      // TT can send interim usage before the matching frame.
-      delete completion.usage;
-      usageMetadata = undefined;
-    }
-    delivered = completedSillyTavernResponse(completion, prepared, usageMetadata, stopAfter, textSignature);
+    delivered = completedSillyTavernResponse(completion, prepared, usageMetadata, stopAfter, textSignature, getReceipt);
   } catch (error) {
     signal?.throwIfAborted();
     return new Response(JSON.stringify(failure(error)), { status: error.status ?? 502, headers: { "content-type": "application/json" } });

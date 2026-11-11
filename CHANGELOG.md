@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## SillyTavern 0.12.1 · Usage at tag cutoff
+
+A clipped reply carries Google's final token and cache counts when the provider supplies them. With partial data, the receipt preserves known fields and the native server can estimate visible text locally. The Vertex panel offers an optional 250 ms wait for the final usage event. [Tag cutoff and metering](docs/SILLYTAVERN.md#自定义标签截停)
+
 ## Gateway 0.18.0 · Gemini 4 Carbon (2026-11-10)
 
 The gateway routes all three `gemini-4-carbon` profiles to Vertex `global`, including when the account uses a regional endpoint for other models. Express users must supply their Google Cloud project ID. To add Carbon to a saved model list, select the variants in the console and click **添加 Gemini 4 Carbon（global）**. [Gateway guide](docs/GATEWAY.en.md#model-library-and-variants)

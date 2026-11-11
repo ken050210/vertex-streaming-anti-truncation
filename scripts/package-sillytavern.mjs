@@ -10,7 +10,7 @@ const name = "vertex-anti-truncation";
 const frontend = ["manifest.json", "integrations/sillytavern/index.js", "integrations/sillytavern/shared.js", "integrations/sillytavern/paygo.js", "integrations/sillytavern/style.css",
   ...["anti-truncation", "completion-integrity", "completion-stream", "gemini4", "sillytavern", "tag-stop", "tag-stop-rule",
     "tauritavern", "unicode-input", "unsupported-params", "vertex-native", "vertex-partial-args", "vertex-protocol", "vertex-schema", "vertex-text-stream", "wire"].map(name => "src/" + name + ".mjs")];
-const backend = ["package.json", "package-lock.json", "assets/fonts/NotoSansCJKsc-Regular.otf", "assets/fonts/OFL.txt", "assets/fonts/NotoColorEmoji.ttf", "assets/fonts/NotoEmoji-OFL.txt", "integrations/sillytavern/server.mjs", "integrations/sillytavern/shared.js",
+const backend = ["package.json", "package-lock.json", "assets/fonts/NotoSansCJKsc-Regular.otf", "assets/fonts/OFL.txt", "assets/fonts/NotoColorEmoji.ttf", "assets/fonts/NotoEmoji-OFL.txt", "integrations/sillytavern/server.mjs", "integrations/sillytavern/shared.js", "integrations/sillytavern/google-usage-estimate.mjs",
   ...(await readdir(path.join(root, "src"))).filter(file => file.endsWith(".mjs")).map(file => `src/${file}`)];
 const notices = ["LICENSE", "NOTICE.md", "LICENSES/Antigravity-gateway-MIT.txt", "docs/SILLYTAVERN.md"];
 // Placed at the package root so users can run the installer directly.

@@ -148,10 +148,17 @@ function mount() {
   const tagInput = Object.assign(document.createElement("input"), { type: "text", id: tagLabel.htmlFor, className: "text_pole", value: saved.stopTag ?? DEFAULT_STOP_TAG, maxLength: 64, placeholder: "tucao 或 A" });
   const countLabel = Object.assign(document.createElement("label"), { htmlFor: "vertex_stop_count", textContent: "完整出现次数" });
   const countInput = Object.assign(document.createElement("input"), { type: "number", id: countLabel.htmlFor, className: "text_pole", min: "1", step: "1", value: saved.stopCount ?? DEFAULT_STOP_COUNT });
-  tagInput.disabled = countInput.disabled = !stopBox.checked;
+  const waitLabel = Object.assign(document.createElement("label"), { className: "checkbox_label", htmlFor: "vertex_wait_for_stop_usage" });
+  const waitBox = Object.assign(document.createElement("input"), { type: "checkbox", id: waitLabel.htmlFor, checked: saved.waitForStopUsage === true });
+  waitLabel.append(waitBox, Object.assign(document.createElement("span"), { textContent: "截停后最多等 250 毫秒接收 Google 用量" }));
+  waitBox.addEventListener("change", () => {
+    settings().waitForStopUsage = waitBox.checked;
+    context.saveSettingsDebounced();
+  });
+  tagInput.disabled = countInput.disabled = waitBox.disabled = !stopBox.checked;
   stopBox.addEventListener("change", () => {
     settings().tucaoStop = stopBox.checked;
-    tagInput.disabled = countInput.disabled = !stopBox.checked;
+    tagInput.disabled = countInput.disabled = waitBox.disabled = !stopBox.checked;
     context.saveSettingsDebounced();
     showStatus();
   });
@@ -163,6 +170,8 @@ function mount() {
   tagStop.append(stopBox, Object.assign(document.createElement("span"), { textContent: "自定义标签截停" }));
   panel.append(tagStop, tagLabel, tagInput, countLabel, countInput, Object.assign(document.createElement("small"), { textContent:
     "默认在本次正文的第二个完整 <tucao>…</tucao> 后停止。标签区分大小写，只匹配无属性的标签。结束标签会保留，后面的内容会被丢弃，包括 MVU 更新块。仅在抗截断开启时生效。" }));
+  panel.append(waitLabel, Object.assign(document.createElement("small"), { textContent:
+    "默认立即断流，并保留已收到的用量。开启后正文仍停在标签处，等待期间产生的 token 可能计费。超长回复分段续写时仍立即断流。" }));
   // TauriTavern's own backend sends the request, so it cannot follow long-decode continuation tokens.
   if (!direct) {
     const longDecode = document.createElement("label");
@@ -192,6 +201,7 @@ function mount() {
       getImageInput: () => direct ? "off" : settings().imageInput || "off",
       getUnicodeInput: () => settings().unicodeInput,
       getLongDecode: () => !direct && settings().longDecode === true,
+      getWaitForStopUsage: () => settings().waitForStopUsage === true,
       getTagStop: () => settings().tucaoStop === false ? null
         : { tag: settings().stopTag ?? DEFAULT_STOP_TAG, count: settings().stopCount ?? DEFAULT_STOP_COUNT },
       getUserFloor: () => {
