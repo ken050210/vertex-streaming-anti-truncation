@@ -51,6 +51,9 @@ function updateStatus(result) {
     return showStatus((errors[result.error] || `请求失败（${code}）。请查看酒馆错误提示；未自动重试。`) + where + cause);
   }
   const unicode = result.unicode ? { encoded: result.unicode.method === "all-context" ? `已对全部上下文中的 ${result.unicode.matchedMessages} 条消息转码。` : "已对当前用户输入的匹配文本转码。", "floor-not-found": "请求中没有找到当前用户输入的原文，按原文发送。", "no-encodable-text": "所选范围没有需要转码的字符。" }[result.unicode.reason] || "" : "";
+  const format = { alternate: "隔字 Unicode", table: "高频字表" }[result.unicode?.format];
+  const basis = { gemma: "酒馆 Gemma 分词估算", utf8: "分词器不可用，按 UTF-8 长度估算", "body-limit": "另一种格式超过请求大小限制" }[result.unicode?.selection];
+  const optimized = format ? format + "（" + basis + "）。" : "";
   const noText = result.image?.mode === "current-turn"
     ? "图片·当前轮：最后一条 AI 消息之后没有可转换的文本（如点击“继续”或以 AI 消息结尾的预填充），本次按原文发送。"
     : "图片·全部会话：没有可转换的文本，本次按原文发送。";
@@ -63,7 +66,7 @@ function updateStatus(result) {
   const output = !limit ? "" : limit.longDecode
     ? `本次输出上限 ${tokens(limit.applied)} token（含思考）超过单次上限，写满后自动续写。`
     : `本次输出上限按单次上限 ${tokens(limit.applied)} token（含思考）发送，预设未改动；写满会停止并标记为长度截断。`;
-  showStatus([result.payGo && "本次通过 Vertex PayGo 发送。", unicode, image, delivery, bypass, continuation, output].filter(Boolean).join(" "));
+  showStatus([result.payGo && "本次通过 Vertex PayGo 发送。", unicode, optimized, image, delivery, bypass, continuation, output].filter(Boolean).join(" "));
 }
 
 async function checkBackend(silent = false) {
@@ -126,15 +129,19 @@ function mount() {
     ["off", "关闭（保持原文）"],
     ["unicode", "Unicode · 当前输入（最新用户楼层或“我的行动”及其副本）"],
     ["unicode-all", "Unicode · 全部上下文（含系统提示、历史和当前输入）"],
+    ["optimized", "优化转码 · 当前输入（实验）"],
+    ["optimized-all", "优化转码 · 全部上下文（实验）"],
     ["current-turn", "图片·当前轮（本轮用户文本）"],
     ["all", "图片·全部会话（用户与 AI 文本）"],
   ]) if (!direct || !["current-turn", "all"].includes(value)) input.add(new Option(text, value));
   const saved = settings();
-  input.value = saved.unicodeInput === "all" ? "unicode-all" : saved.unicodeInput === true ? "unicode"
+  input.value = ["optimized", "optimized-all"].includes(saved.unicodeInput) ? saved.unicodeInput
+    : saved.unicodeInput === "all" ? "unicode-all" : saved.unicodeInput === true ? "unicode"
     : !direct && ["current-turn", "all"].includes(saved.imageInput) ? saved.imageInput : "off";
   input.addEventListener("change", () => {
     const current = settings();
-    current.unicodeInput = input.value === "unicode-all" ? "all" : input.value === "unicode";
+    current.unicodeInput = ["optimized", "optimized-all"].includes(input.value) ? input.value
+      : input.value === "unicode-all" ? "all" : input.value === "unicode";
     current.imageInput = ["current-turn", "all"].includes(input.value) ? input.value : "off";
     context.saveSettingsDebounced();
     showStatus();

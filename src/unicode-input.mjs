@@ -36,13 +36,14 @@ function inputError(status, code, message) {
   return Object.assign(new Error(message), { status, code });
 }
 
-export function prepareUnicodeInput(input, enabled, limitBytes) {
+export function prepareUnicodeInput(input, enabled, limitBytes, codec) {
   const supplied = Object.hasOwn(input, "router_unicode_input");
   const source = input.router_unicode_input;
   let payload = input;
   // This local extension never goes upstream, even on an ordinary model.
   if (supplied) { payload = { ...input }; delete payload.router_unicode_input; }
   if (!enabled) return { payload, metadata: null };
+  const encode = codec?.encode ?? encodeUnicodeText;
   const all = enabled === "all";
   if (!all && (!source || typeof source !== "object" || Array.isArray(source) ||
       Object.keys(source).some(key => key !== "user_floor") || typeof source.user_floor !== "string" || !source.user_floor.length)) {
@@ -51,7 +52,7 @@ export function prepareUnicodeInput(input, enabled, limitBytes) {
   const floor = all ? "" : source.user_floor;
   // Longest form first, so at one position the original wins over its trimmed copy.
   const variants = [...new Set([floor, floor.trim(), floor.replace(/\r\n?/g, "\n")].filter(Boolean))]
-    .map(text => ({ text, encoded: encodeUnicodeText(text) })).filter(variant => variant.encoded.text !== variant.text)
+    .map(text => ({ text, encoded: encode(text) })).filter(variant => variant.encoded.count)
     .sort((left, right) => right.text.length - left.text.length);
   const metadata = { reason: all ? "no-encodable-text" : "floor-not-found", method: all ? "all-context" : "chat-floor-match", encodedCharacters: 0, matchedMessages: 0, occurrences: 0 };
   // One left-to-right pass, so an inserted block is never matched again. Unlike the
@@ -61,7 +62,7 @@ export function prepareUnicodeInput(input, enabled, limitBytes) {
   const replaceText = text => {
     const value = String(text ?? "");
     if (all) {
-      const encoded = encodeUnicodeText(value);
+      const encoded = encode(value);
       if (encoded.count) {
         metadata.occurrences++;
         metadata.encodedCharacters += encoded.count;
@@ -69,7 +70,8 @@ export function prepareUnicodeInput(input, enabled, limitBytes) {
       return encoded.text;
     }
     if (!variants.some(variant => value.includes(variant.text))) return value;
-    const spans = [...value.matchAll(/<[^<>\n]*>|⟦U:[0-9a-fA-F\s]+⟧/g)].map(match => [match.index, match.index + match[0].length]);
+    const protectedText = codec?.protectedText ?? /<[^<>\n]*>|⟦U:[0-9a-fA-F\s]+⟧/g;
+    const spans = [...value.matchAll(protectedText)].map(match => [match.index, match.index + match[0].length]);
     const isProtected = (at, length) => {
       let low = 0, high = spans.length;
       while (low < high) { const mid = (low + high) >> 1; if (spans[mid][0] <= at) low = mid + 1; else high = mid; }
@@ -95,24 +97,34 @@ export function prepareUnicodeInput(input, enabled, limitBytes) {
     }
     return result + value.slice(from);
   };
+  // Compare candidate costs on the changed fields, including the shared reading guide once.
+  const fields = [];
+  const transformField = text => {
+    const before = metadata.occurrences;
+    const result = replaceText(text);
+    if (!codec || before === metadata.occurrences) return result;
+    const field = fields.length ? result : codec.guide + result;
+    fields.push(field);
+    return field;
+  };
   const messages = payload.messages.map(message => {
     if (!message || typeof message !== "object") return message;
     // A tool result may itself be structured JSON consumed by another tool.
-    if (all && !["system", "developer", "user", "assistant"].includes(message.role)) return message;
+    if ((all || codec) && !["system", "developer", "user", "assistant"].includes(message.role)) return message;
     const before = metadata.occurrences;
-    const content = typeof message.content === "string" ? replaceText(message.content)
-      : Array.isArray(message.content) ? message.content.map(part => typeof part === "string" ? replaceText(part)
-        : part?.type === "text" && typeof part.text === "string" ? { ...part, text: replaceText(part.text) } : part)
+    const content = typeof message.content === "string" ? transformField(message.content)
+      : Array.isArray(message.content) ? message.content.map(part => typeof part === "string" ? transformField(part)
+        : part?.type === "text" && typeof part.text === "string" ? { ...part, text: transformField(part.text) } : part)
         : message.content;
     if (metadata.occurrences === before) return message;
     metadata.matchedMessages++;
     return { ...message, content };
   });
   if (metadata.occurrences) payload = { ...payload, messages };
-  else if (!all && !encodeUnicodeText(floor).count) metadata.reason = "no-encodable-text";
+  else if (!all && !variants.length) metadata.reason = "no-encodable-text";
   if (metadata.occurrences) metadata.reason = "encoded";
   if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > limitBytes) {
     throw inputError(413, "unicode_input_too_large", "Unicode-encoded request exceeds the configured body limit");
   }
-  return { payload, metadata };
+  return codec ? { payload, metadata, fields } : { payload, metadata };
 }

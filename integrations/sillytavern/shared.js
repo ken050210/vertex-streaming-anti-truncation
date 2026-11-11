@@ -1,9 +1,10 @@
 import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
+import { prepareOptimizedInput } from "./optimized-input.js";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
 import { validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.12.1";
+export const PLUGIN_VERSION = "0.13.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -121,7 +122,8 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     const mode = getMode();
     const unicodeMode = getUnicodeInput();
-    const unicodeEnabled = unicodeMode === true || unicodeMode === "all";
+    const optimized = unicodeMode === "optimized" || unicodeMode === "optimized-all";
+    const unicodeEnabled = optimized || unicodeMode === true || unicodeMode === "all";
     const imageMode = getImageInput();
     const imageEnabled = imageMode !== "off";
     if ((mode === "off" && !unicodeEnabled && !imageEnabled) || url.origin !== origin || ![GENERATE_PATH, PAYGO_GENERATE_PATH].includes(url.pathname) || method.toUpperCase() !== "POST") {
@@ -137,8 +139,12 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     let unicode;
     if (unicodeEnabled) {
       try {
-        const input = unicodeMode === "all" ? body : { ...body, router_unicode_input: { user_floor: getUserFloor() } };
-        const prepared = prepareUnicodeInput(input, unicodeMode, BODY_LIMIT);
+        const scope = unicodeMode === "all" || unicodeMode === "optimized-all" ? "all" : true;
+        const source = scope === "all" ? body : { ...body, router_unicode_input: { user_floor: getUserFloor() } };
+        const prepared = optimized
+          ? await prepareOptimizedInput(source, scope, BODY_LIMIT, { originalFetch, headers: getRequestHeaders(),
+            signal: init?.signal ?? (input instanceof Request ? input.signal : undefined) })
+          : prepareUnicodeInput(source, scope, BODY_LIMIT);
         body = prepared.payload; unicode = prepared.metadata;
       } catch (error) { onStatus({ error: error.code || "unicode_input_failed" }); throw error; }
     }

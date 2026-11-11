@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## SillyTavern 0.13.0 · Optional Chinese input encoding
+
+The Vertex panel offers optimized encoding for the current input or the full context. It compares alternating Unicode escapes with a shared table of frequent characters, includes the reading guide in the estimate, and shows the selected format. Existing selections carry over. [Input encoding guide](docs/SILLYTAVERN.md#优化转码实验)
+
 ## SillyTavern 0.12.1 · Usage at tag cutoff
 
 A clipped reply carries Google's final token and cache counts when the provider supplies them. With partial data, the receipt preserves known fields and the native server can estimate visible text locally. The Vertex panel offers an optional 250 ms wait for the final usage event. [Tag cutoff and metering](docs/SILLYTAVERN.md#自定义标签截停)
