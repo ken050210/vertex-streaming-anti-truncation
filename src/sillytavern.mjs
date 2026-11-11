@@ -9,7 +9,7 @@ import { isObject, protocolError, readUpstreamError, sseData, transformSse } fro
 import { bypassReason, BODY_LIMIT } from "../integrations/sillytavern/shared.js";
 import { isGemini4Argon, gemini4OutputLimit, gemini4ThinkingLevel, gemini4ToolMetadata } from "./gemini4.mjs";
 import { createTagStop, hasUsageTotals } from "./tag-stop.mjs";
-import { validateTagStopRule } from "./tag-stop-rule.mjs";
+import { normalizeStopUsageWait, validateTagStopRule } from "./tag-stop-rule.mjs";
 
 export const requestError = code => Object.assign(new Error(code), { status: 400, code });
 
@@ -83,7 +83,7 @@ export function prepareSillyTavernRequest(request, adapters) {
   if (body.vertex_tucao_stop != null && typeof body.vertex_tucao_stop !== "boolean") throw requestError("invalid_tucao_stop");
   const tagStop = body.vertex_tag_stop == null ? null : validateTagStopRule(body.vertex_tag_stop);
   return { body: native, toolName: prepared.toolName, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit,
-    waitForStopUsage: body.vertex_wait_for_stop_usage === true && !outputLimit?.longDecode,
+    waitForStopUsage: !outputLimit?.longDecode && normalizeStopUsageWait(body.vertex_wait_for_stop_usage),
     tucaoStop: tagStop !== null || body.vertex_tucao_stop === true, stopTag: tagStop?.tag, stopCount: tagStop?.count };
 }
 

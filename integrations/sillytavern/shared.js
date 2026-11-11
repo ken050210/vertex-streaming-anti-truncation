@@ -1,10 +1,10 @@
 import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 import { prepareOptimizedInput } from "./optimized-input.js";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
-import { validateTagStopRule } from "../../src/tag-stop-rule.mjs";
+import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.13.1";
+export const PLUGIN_VERSION = "0.14.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -14,8 +14,9 @@ export const MIN_SERVER_VERSION = "0.3.1";
 export const TOOLS_FEATURE = "client-tools";
 export const TUCAO_FEATURE = "stop-after-second-tucao";
 export const TAG_STOP_FEATURE = "stop-after-tag-pairs";
+export const NATURAL_STOP_USAGE_FEATURE = "tag-stop-natural-usage";
 export const TRANSPORT_NAME_FEATURE = "custom-transport-tool-name";
-export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, "image-input-convert", "tag-stop-usage", TRANSPORT_NAME_FEATURE];
+export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, NATURAL_STOP_USAGE_FEATURE, "image-input-convert", "tag-stop-usage", TRANSPORT_NAME_FEATURE];
 export const MODES = ["off", "buffered", "streaming"];
 export const GENERATE_PATH = "/api/backends/chat-completions/generate";
 const PAYGO_GENERATE_PATH = "/api/plugins/vertex-paygo/native-gemini/generate";
@@ -160,7 +161,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (!reason && !direct && !payGo && usesTools(body) && !await ensureBackend(TOOLS_FEATURE)) reason = "server-tools";
     const tagStop = !reason && mode !== "off" ? getTagStop() : null;
     const transportToolName = !reason && mode !== "off" ? getTransportToolName() : "";
-    const waitForStopUsage = Boolean(tagStop && getWaitForStopUsage());
+    const waitForStopUsage = normalizeStopUsageWait(tagStop && getWaitForStopUsage());
     delete body.vertex_long_decode;
     delete body.vertex_transport_tool_name;
     delete body.vertex_wait_for_stop_usage;
@@ -181,6 +182,9 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
       if (!direct && !payGo && !await ensureBackend(TAG_STOP_FEATURE)) {
         onStatus({ error: "tag_stop_not_supported" }); throw new Error("tag_stop_not_supported");
       }
+      if (!direct && !payGo && mode === "streaming" && body.stream === true && waitForStopUsage === "natural" && !await ensureBackend(NATURAL_STOP_USAGE_FEATURE)) {
+        onStatus({ error: "natural_stop_usage_not_supported" }); throw new Error("natural_stop_usage_not_supported");
+      }
     }
     if (imageEnabled) {
       if (!["current-turn", "all"].includes(imageMode) || reason) { onStatus({ error: "image_input_requires_supported_request", bypass: reason }); throw new Error("image_input_requires_supported_request"); }
@@ -200,7 +204,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     }
     let payload = reason ? null : JSON.stringify(prepared?.body ??
       { ...body, vertex_anti_truncation: mode, ...(transportToolName ? { vertex_transport_tool_name: transportToolName } : {}),
-        ...(tagStop ? { vertex_tag_stop: tagStop } : {}), ...(waitForStopUsage ? { vertex_wait_for_stop_usage: true } : {}), ...(getLongDecode() === true ? { vertex_long_decode: true } : {}) });
+        ...(tagStop ? { vertex_tag_stop: tagStop } : {}), ...(waitForStopUsage ? { vertex_wait_for_stop_usage: waitForStopUsage } : {}), ...(getLongDecode() === true ? { vertex_long_decode: true } : {}) });
     // The plugin rejects bodies over its limit; keep ST's own route for plain
     // anti-truncation. Image input never falls back to plaintext.
     if (payload && !imageEnabled && new TextEncoder().encode(payload).length > BODY_LIMIT) reason = "too-large";

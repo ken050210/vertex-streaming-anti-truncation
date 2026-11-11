@@ -4,8 +4,13 @@
 
 ## Unreleased
 
+- The standalone gateway can use a custom name for the text transport tool.
+
+## SillyTavern 0.14.0 · Final usage after a tag cutoff
+
+- The optional natural-end mode streams text up to the configured tag and reads the same request to its end for Google's final usage. Generation beyond the tag can be billed. Existing profiles keep immediate cutoff or the 250 ms wait. [Tag cutoff and usage (Chinese)](docs/SILLYTAVERN.md#自定义标签截停)
 - The Tavern panel groups input encoding and tag cutoff settings. New profiles opt in to tag cutoff, and upgrades keep the effective rule. Users who enabled Argon long decode can still turn it off. New installations enable automatic continuation through the standalone gateway. [Tavern settings (Chinese)](docs/SILLYTAVERN.md#使用)
-- Tavern and the gateway can use a fixed name such as `scene_reply` for the text transport tool. Client tools keep their names. An exact clash with the configured name stops the request before generation. [Text transport tool name (Chinese)](docs/SILLYTAVERN.md#正文传输工具名)
+- Tavern can use a fixed name such as `scene_reply` for the text transport tool. Client tools keep their names. An exact clash with the configured name stops the request before generation. [Text transport tool name (Chinese)](docs/SILLYTAVERN.md#正文传输工具名)
 
 ## SillyTavern 0.13.1 · First request after restart
 

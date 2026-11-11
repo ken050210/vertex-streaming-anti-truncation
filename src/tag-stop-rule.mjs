@@ -1,6 +1,11 @@
 export const DEFAULT_STOP_TAG = "tucao";
 export const DEFAULT_STOP_COUNT = 2;
 
+// Existing profiles and older clients use booleans for immediate cutoff and 250 ms.
+export function normalizeStopUsageWait(value) {
+  return value === "natural" ? value : value === true;
+}
+
 export function validateTagStopRule(rule) {
   if (!rule || typeof rule !== "object" || Array.isArray(rule) ||
       Object.keys(rule).some(key => !["tag", "count"].includes(key)) ||

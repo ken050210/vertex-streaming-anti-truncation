@@ -14,19 +14,27 @@ export function hasUsageTotals(usage) {
 export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_STOP_COUNT) {
   const opening = `<${tag}>`, closing = `</${tag}>`;
   let tail = "", channel, currentTool, matched = false, depth = 0, pairs = 0;
-  let latestUsage, terminalUsage, upstreamFinished = false;
+  let latestUsage, terminalUsage, pendingTailUsage, upstreamFinished = false;
   // Observe the provider's finish reason before clipping replaces it with STOP.
   const observe = (frame, buffered) => {
-    const reason = frame?.candidates?.[0]?.finishReason;
-    if (buffered || (reason && reason !== "CONTINUATION" && reason !== "FINISH_REASON_UNSPECIFIED")) upstreamFinished = true;
+    if (frame?.error) return;
+    const candidate = frame?.candidates?.[0], reason = candidate?.finishReason;
+    const finished = buffered || (reason && reason !== "CONTINUATION" && reason !== "FINISH_REASON_UNSPECIFIED");
     const usage = frame?.usageMetadata;
-    if (!frame?.error && isObject(usage)) {
-      latestUsage = { ...latestUsage, ...usage };
-      if (upstreamFinished) {
-        terminalUsage = { ...terminalUsage, ...usage };
-        for (const key of ["trafficType", "serviceTier"]) {
-          if (latestUsage[key] != null) terminalUsage[key] = latestUsage[key];
-        }
+    let finalUsage = usage;
+    // A usage-only tail can precede a separate finish. Any intervening candidate
+    // invalidates it, including more content in the finish frame itself.
+    if (matched && !upstreamFinished) {
+      if (!frame?.candidates?.length && isObject(usage)) pendingTailUsage = { ...pendingTailUsage, ...usage };
+      else if (finished && !candidate?.content?.parts?.length && pendingTailUsage) finalUsage = { ...pendingTailUsage, ...usage };
+      else if (candidate) pendingTailUsage = undefined;
+    }
+    if (isObject(usage)) latestUsage = { ...latestUsage, ...usage };
+    if (finished) upstreamFinished = true;
+    if (upstreamFinished && isObject(finalUsage)) {
+      terminalUsage = { ...terminalUsage, ...finalUsage };
+      for (const key of ["trafficType", "serviceTier"]) {
+        if (latestUsage[key] != null) terminalUsage[key] = latestUsage[key];
       }
     }
   };
@@ -119,16 +127,14 @@ export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_
         }
         if (matched) {
           // Only metering survives the boundary, including later events in the same read.
-          observe(frame, false);
           if (frame?.error) { tailEnded = true; return false; }
-          if (hasUsageTotals(terminalUsage)) tailEnded = true;
+          observe(frame, false);
           return;
         }
         const hostError = normalizeError?.(frame);
         if (hostError) frame = hostError;
         else process(frame);
         emit(sseData(frame));
-        if (matched && hasUsageTotals(terminalUsage)) tailEnded = true;
       });
       const finishCutoff = () => {
         if (closed) return;
@@ -164,9 +170,12 @@ export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_
               tailEnded = true;
             }
             if (matched) {
-              deadline ??= Date.now() + STOP_USAGE_WAIT_MS;
-              if (tailEnded || !waitForUsage || Date.now() >= deadline) finishCutoff();
-              else timer ??= setTimeout(finishCutoff, STOP_USAGE_WAIT_MS);
+              if (tailEnded || !waitForUsage || (waitForUsage === true && hasUsageTotals(terminalUsage))) finishCutoff();
+              else if (waitForUsage === true) {
+                deadline ??= Date.now() + STOP_USAGE_WAIT_MS;
+                if (Date.now() >= deadline) finishCutoff();
+                else timer ??= setTimeout(finishCutoff, STOP_USAGE_WAIT_MS);
+              }
             }
           } while (!closed && !emitted);
         },

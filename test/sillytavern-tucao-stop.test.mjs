@@ -2,9 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import http from "node:http";
-import { restoreSillyTavernResponse } from "../src/sillytavern.mjs";
+import { prepareSillyTavernRequest, restoreSillyTavernResponse } from "../src/sillytavern.mjs";
 import { createGenerateHandler } from "../integrations/sillytavern/server.mjs";
-import { compareVersions } from "../integrations/sillytavern/shared.js";
+import { prepareTauriTavernRequest, restoreTauriTavernResponse } from "../src/tauritavern.mjs";
+import { compareVersions, createFetchInterceptor, GENERATE_PATH, PLUGIN_PATH, NATURAL_STOP_USAGE_FEATURE } from "../integrations/sillytavern/shared.js";
 import { sseData } from "../src/wire.mjs";
 
 const name = "router_emit", tag = "</tucao>";
@@ -206,10 +207,10 @@ test("grace expires on a silent upstream and never promotes an earlier complete-
 });
 
 test("a failing tail cannot undo a clipped reply and cancelling the reader ends the wait", async () => {
-  for (const abort of [false, true]) {
+  for (const waitForStopUsage of [true, "natural"]) for (const abort of [false, true]) {
     let upstream, cancelled = false;
     const input = new Response(new ReadableStream({ start(c) { upstream = c; }, cancel() { cancelled = true; } }));
-    const result = await restoreSillyTavernResponse(input, { ...stopped, waitForStopUsage: true });
+    const result = await restoreSillyTavernResponse(input, { ...stopped, waitForStopUsage });
     const reader = result.body.getReader(), decoder = new TextDecoder();
     upstream.enqueue(new TextEncoder().encode(sseData(frame([{ text: "<A>ok</A>" }]))));
     let wire = "";
@@ -225,4 +226,87 @@ test("a failing tail cannot undo a clipped reply and cancelling the reader ends 
       assert.ok(wire.includes("data: [DONE]"));
     }
   }
+});
+
+test("natural waiting streams the cutoff, then reads one request through EOF on native, PayGo and TauriTavern", { timeout: 8000 }, async () => {
+  const origin = "http://localhost";
+  const paygo = "/api/plugins/vertex-paygo/native-gemini/generate";
+  const payload = { chat_completion_source: "vertexai", model: "gemini-4-argon", stream: true,
+    messages: [{ role: "user", content: "fixture" }], max_tokens: 30000 };
+  for (const route of ["native", "paygo", "tauri"]) {
+    let upstream, cancelled = false, calls = 0;
+    const intercept = createFetchInterceptor(async (url, init) => {
+      calls++;
+      const body = JSON.parse(init.body);
+      const response = new Response(new ReadableStream({ start(c) { upstream = c; }, cancel() { cancelled = true; } }));
+      if (route === "native") {
+        assert.equal(url, PLUGIN_PATH + "/generate");
+        assert.equal(body.vertex_wait_for_stop_usage, "natural");
+        const request = prepareSillyTavernRequest({ body }, {
+          getPromptNames: () => ({}), convertGooglePrompt: () => ({ contents: [] }), safetySettings: [],
+        });
+        return restoreSillyTavernResponse(response, request);
+      }
+      assert.equal(url, route === "paygo" ? paygo : GENERATE_PATH);
+      assert.equal(body.vertex_wait_for_stop_usage, undefined);
+      return response;
+    }, { origin, getMode: () => "streaming", getWaitForStopUsage: () => "natural",
+      getTagStop: () => ({ tag: "A", count: 1 }),
+      direct: route === "tauri" ? { prepare: prepareTauriTavernRequest, restore: restoreTauriTavernResponse } : null });
+
+    const response = await intercept(route === "paygo" ? paygo : GENERATE_PATH, { method: "POST", body: JSON.stringify(payload) });
+    const reader = response.body.getReader(), decoder = new TextDecoder();
+    const send = event => upstream.enqueue(new TextEncoder().encode(sseData(event)));
+    send(frame([{ text: "<A>visible</A>discarded" }]));
+    let wire = "";
+    while (!text(wire).includes("</A>")) wire += decoder.decode((await reader.read()).value);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    assert.equal(cancelled, false, route);
+    send({ candidates: [{ index: 0, content: { parts: [{ text: "discarded" }] } }] });
+    send(frame([{ text: "discarded", thought: true }, { functionCall: { name: "discarded", args: {} } }]));
+    send({ candidates: [{ finishReason: "STOP" }], usageMetadata: countedUsage });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(cancelled, false, route);
+    const finalUsage = { ...countedUsage, cachedContentTokenCount: 425 };
+    send({ usageMetadata: finalUsage });
+    upstream.close();
+    for (let next = await reader.read(); !next.done; next = await reader.read()) wire += decoder.decode(next.value);
+    assert.equal(calls, 1);
+    assert.equal(text(wire), "<A>visible</A>");
+    assert.doesNotMatch(wire, /discarded/);
+    assert.deepEqual(events(wire).filter(x => x.vertexUsageReceipt).map(x => x.vertexUsageReceipt), [{ final: true, usageMetadata: finalUsage }]);
+    assert.equal(wire.split("data: [DONE]").length, 2);
+  }
+});
+
+test("a post-cutoff usage-only frame is final only with a confirming finish and no more generated content", async () => {
+  const clipped = sseData({ usageMetadata: { trafficType: "ON_DEMAND_FLEX" } }) + sseData(frame([{ text: "<A>visible</A>" }]));
+  const metering = sseData({ usageMetadata: countedUsage });
+  const finish = sseData({ candidates: [{ finishReason: "STOP" }] });
+  for (const [tail, final] of [[metering + finish, true], [metering, false],
+    [metering + sseData(frame([{ text: "discarded" }])) + finish, false],
+    [metering + sseData({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: "discarded" }] } }] }), false]]) {
+    const wire = await (await restoreSillyTavernResponse(new Response(clipped + tail), { ...stopped, waitForStopUsage: "natural" })).text();
+    assert.doesNotMatch(wire, /discarded/);
+    const [receipt] = events(wire).filter(e => e.vertexUsageReceipt);
+    assert.equal(receipt.vertexUsageReceipt.final, final);
+    assert.equal(receipt.usageMetadata?.cachedContentTokenCount, final ? 400 : undefined);
+    assert.equal(receipt.vertexUsageReceipt.usageMetadata.trafficType, "ON_DEMAND_FLEX");
+  }
+});
+
+test("natural wait requires a capable streaming backend and cannot trigger paid long-decode continuations after the tag", async () => {
+  const payload = { chat_completion_source: "vertexai", model: "gemini-4-argon", stream: true,
+    messages: [{ role: "user", content: "fixture" }], max_tokens: 130000 };
+  const intercept = createFetchInterceptor(() => assert.fail("old backend must not receive a generation"), {
+    origin: "http://localhost", getMode: () => "streaming", getWaitForStopUsage: () => "natural",
+    getTagStop: () => ({ tag: "A", count: 1 }), ensureBackend: feature => feature !== NATURAL_STOP_USAGE_FEATURE,
+  });
+  await assert.rejects(intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify(payload) }), /natural_stop_usage_not_supported/);
+  const request = prepareSillyTavernRequest({ body: { ...payload, vertex_anti_truncation: "streaming", vertex_long_decode: true,
+    vertex_wait_for_stop_usage: "natural", vertex_tag_stop: { tag: "A", count: 1 } } }, {
+    getPromptNames: () => ({}), convertGooglePrompt: () => ({ contents: [] }), safetySettings: [],
+  });
+  assert.equal(request.outputLimit.longDecode, true);
+  assert.equal(request.waitForStopUsage, false);
 });

@@ -1,5 +1,5 @@
 import { PLUGIN_ID, PLUGIN_PATH, PLUGIN_VERSION, MIN_SERVER_VERSION, MODES, compareVersions, createFetchInterceptor, latestUserInput } from "./shared.js";
-import { DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
+import { normalizeStopUsageWait, DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { DEFAULT_TRANSPORT_TOOL_NAME, validateTransportToolName } from "../../src/transport-tool-name.mjs";
 
 // TauriTavern has no Node server to host the plugin, so the extension shapes the
@@ -19,6 +19,7 @@ const errors = { unicode_floor_required: "找不到真实用户楼层，也没�
   plugin_not_ready: "服务端插件未就绪或版本太旧，本次请求已停止发送。点“检查插件连接”查看原因和更新办法。",
   paygo_image_backend_required: "PayGo 图片转码需要配套的新版抗截断服务端插件。请更新后重启酒馆。",
   paygo_long_decode_unsupported: "当前 PayGo 后端不支持 Gemini 4 分段续写。请降低最大回复长度，或关闭 long decode 后使用单次上限。",
+  natural_stop_usage_not_supported: "当前服务端插件不支持等待 Google 自然结束。请更新服务端并重启酒馆，或选择其他截停等待方式。",
   tag_stop_not_supported: "服务端插件不支持自定义标签截停。请更新服务端插件并重启酒馆，或关闭此开关。",
   transport_tool_name_not_supported: "服务端插件不支持自定义正文传输工具名。请更新服务端并重启酒馆，或清空工具名以使用默认值。",
   invalid_tag_stop: "截停标签名须为 1–64 位字母、数字、下划线、点、冒号或连字符，以字母或下划线开头；次数须为正整数。",
@@ -141,7 +142,7 @@ function mountTransportOptions(panel, select, saved, payGoInstalled) {
   stop.checked = saved.tucaoStop ?? true;
   tag.value = saved.stopTag ?? DEFAULT_STOP_TAG;
   count.value = saved.stopCount ?? DEFAULT_STOP_COUNT;
-  wait.checked = saved.waitForStopUsage === true;
+  wait.value = String(normalizeStopUsageWait(saved.waitForStopUsage));
   tool.placeholder = DEFAULT_TRANSPORT_TOOL_NAME;
   tool.value = saved.transportToolName ?? "";
 
@@ -156,7 +157,7 @@ function mountTransportOptions(panel, select, saved, payGoInstalled) {
   }
   select.addEventListener("change", () => { saveSettings({ mode: select.value }); render(); });
   stop.addEventListener("change", () => { saveSettings({ tucaoStop: stop.checked }); render(); });
-  wait.addEventListener("change", () => saveSettings({ waitForStopUsage: wait.checked }));
+  wait.addEventListener("change", () => saveSettings({ waitForStopUsage: wait.value === "natural" ? "natural" : wait.value === "true" }));
   function changeRule() {
     try {
       const rule = validateTagStopRule({ tag: tag.value.trim(), count: count.valueAsNumber });
@@ -213,7 +214,11 @@ function mount() {
           <label>截停标签名（不含尖括号）<input class="text_pole" id="vertex_stop_tag" maxlength="64"></label>
           <label>完整出现次数<input class="text_pole" id="vertex_stop_count" type="number" min="1" step="1"></label>
           <small>命中的结束标签会保留，之后的内容会丢弃，包括 MVU 变量更新。</small>
-          <label class="checkbox_label"><input type="checkbox" id="vertex_wait_for_stop_usage"> 截停后最多等 250 毫秒接收 Google 用量，期间生成的 token 可能计费。</label>
+          <label>截停后接收用量<select class="text_pole" id="vertex_wait_for_stop_usage">
+            <option value="false">立即断流</option>
+            <option value="true">最多等 250 毫秒</option>
+            <option value="natural">等 Google 自然结束</option>
+          </select><small>命中标签后正文立即停显。等待期间 Google 生成的 token 会计入用量，点酒馆的停止按钮可提前断开。分段续写请求仍立即断流。</small></label>
         </div>
         <label>正文传输工具名<input class="text_pole" id="vertex_transport_tool_name" maxlength="64" spellcheck="false" aria-describedby="vertex_tool_name_help"></label>
         <small id="vertex_tool_name_help">留空自动命名。预设或上游要求固定名称时填写，其他工具沿用原名。</small>
@@ -260,7 +265,7 @@ function mount() {
       getUnicodeInput: () => settings().unicodeInput,
       getTransportToolName: () => settings().transportToolName ?? "",
       getLongDecode: () => !direct && settings().longDecode === true,
-      getWaitForStopUsage: () => settings().waitForStopUsage === true,
+      getWaitForStopUsage: () => settings().waitForStopUsage,
       getTagStop: () => settings().tucaoStop === false ? null
         : { tag: settings().stopTag ?? DEFAULT_STOP_TAG, count: settings().stopCount ?? DEFAULT_STOP_COUNT },
       getUserFloor: () => {
