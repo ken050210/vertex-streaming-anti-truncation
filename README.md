@@ -12,7 +12,7 @@
 | TauriTavern（TT 酒馆）桌面端或手机 App | 完整仓库里的 UI 扩展，凭据和请求由 TT 后台处理 | [TauriTavern 安装](docs/SILLYTAVERN.md#tauritavern) |
 | 酒馆的自定义 OpenAI 连接、其他兼容客户端，或提供 Gemini 模型的中转 | 独立网关，可用 Node.js 或 Docker 运行 | [启动网关](#启动) |
 
-精简后的酒馆面板和自定义正文传输工具名目前在 `main` 分支。使用 Git 安装时，分别更新前后端，重启酒馆后刷新页面。SillyTavern 服务端需要 Node.js 22.9 或更高版本。一键安装包按版本发布。[下载安装包](https://github.com/ken050210/vertex-streaming-anti-truncation/releases) · [Git 安装与更新](docs/SILLYTAVERN.md#更新与已有手动安装)
+酒馆预设已有正文工具时，可在「传输与截停」填写其名称，例如 `game_content`。留空使用内置工具。使用 Git 安装时，分别更新前后端，重启酒馆后刷新页面。SillyTavern 服务端需要 Node.js 22.9 或更高版本。一键安装包按版本发布。[下载安装包](https://github.com/ken050210/vertex-streaming-anti-truncation/releases) · [Git 安装与更新](docs/SILLYTAVERN.md#更新与已有手动安装)
 
 在 Vertex 面板的「输入转码」里，Unicode 可选当前输入或全部上下文，文字转图支持 ❤️、肤色、旗帜和常见组合 emoji。遇到 Google 拦截输入，酒馆会显示 Google 提供的原因。与 Vertex PayGo 同用时，仍在 PayGo 里选择档位。[输入转码](docs/SILLYTAVERN.md#输入转码) · [PayGo 设置](docs/SILLYTAVERN.md#与-vertex-paygo-同用)
 

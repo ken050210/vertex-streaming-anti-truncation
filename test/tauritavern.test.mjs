@@ -5,6 +5,7 @@ import { prepareTauriTavernRequest, restoreTauriTavernResponse } from "../src/ta
 import { createFetchInterceptor, GENERATE_PATH } from "../integrations/sillytavern/shared.js";
 import { CONTINUATION_INSTRUCTION } from "../src/anti-truncation.mjs";
 import { sseData } from "../src/wire.mjs";
+import { presetTextTool } from "./fixtures/preset-text-tool.mjs";
 
 // What ST sends under TauriTavern: its own Vertex request plus the user's
 // Additional Parameters as text (empty by default).
@@ -45,8 +46,11 @@ test("TauriTavern requests keep ST's own route and carry the transport in body o
   const original = host(name => new Response(call({ name, args: { content: "好" } }) + finish() + done));
   const controller = new AbortController();
   for (const [mode, stream, live] of [["streaming", true, true], ["streaming", false, false], ["buffered", true, false], ["buffered", false, false]]) {
-    const toolName = mode === "streaming" ? "tavern_reply" : "";
-    const response = await send(intercept(original, mode, { getTransportToolName: () => toolName }), { stream, custom_include_body: '{"labels":{"team":"a"}}' }, { signal: controller.signal });
+    const toolName = mode === "streaming" ? "game_content" : "";
+    const response = await send(intercept(original, mode, { getTransportToolName: () => toolName }), {
+      stream, ...(toolName ? { tools: [presetTextTool], tool_choice: { type: "function", function: { name: toolName } } } : {}),
+      custom_include_body: '{"labels":{"team":"a"}}',
+    }, { signal: controller.signal });
     assert.equal(response.status, 200);
     const { input, init, sent } = original.calls.at(-1);
     assert.equal(input, GENERATE_PATH);
@@ -63,6 +67,8 @@ test("TauriTavern requests keep ST's own route and carry the transport in body o
     assert.equal(sent.messages.length, 3);
     const included = JSON.parse(sent.custom_include_body);
     const [declaration] = included.tools[0].functionDeclarations;
+    assert.equal(included.tools[0].functionDeclarations.length, 1);
+    if (toolName) assert.equal(declaration.description, presetTextTool.function.description);
     assert.equal(declaration.name, toolName || "router_emit");
     assert.equal(sent.vertex_transport_tool_name, undefined);
     assert.match(sent.messages[2].content, new RegExp(declaration.name));

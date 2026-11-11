@@ -34,7 +34,7 @@ test("container console supports an explicit HTTPS origin without weakening logi
   assert.equal((await request("/api/config", { revision: "new", settings: f.settings }, { cookie })).status, 403);
   const invalidName = await request("/api/validate", { settings: { ...f.settings, transportToolName: "bad name" } }, headers);
   assert.equal(invalidName.status, 400);
-  assert.match(invalidName.body.error.message, /正文传输工具名/);
+  assert.match(invalidName.body.error.message, /预设正文工具名/);
   const saved = await request("/api/config", { revision: "new", settings: { ...f.settings, transportToolName: "scene_reply" } }, headers);
   assert.equal(saved.status, 200);
   assert.equal((await request("/api/config", undefined, headers)).body.settings.transportToolName, "scene_reply");

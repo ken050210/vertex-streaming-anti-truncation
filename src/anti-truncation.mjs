@@ -1,10 +1,11 @@
 import { supportsNativeRequest } from "./vertex-native.mjs";
-import { DEFAULT_TRANSPORT_TOOL_NAME, validateTransportToolName } from "./transport-tool-name.mjs";
+import { DEFAULT_TRANSPORT_TOOL_NAME, transportToolBypassReason } from "./transport-tool-name.mjs";
 // Restoration failures describe one reply, not the connection, and keep their code.
 import { isObject, protocolError as failure, sseData, trafficType, transformSse } from "./wire.mjs";
 
 const auditTransports = new Set(["disabled", "existing-tools", "tool-choice", "structured-output", "multiple-candidates",
-    "tool-history", "tool-transport", "tool-transport-buffered", "tool-transport-buffered-fields", "tool-transport-native-streaming"]);
+    "tool-history", "target-tool-choice", "target-tool-missing", "target-tool-schema",
+    "tool-transport", "tool-transport-buffered", "tool-transport-buffered-fields", "tool-transport-native-streaming"]);
 const auditFinishReasons = new Set(["stop", "length", "content_filter", "tool_calls", "function_call"]);
 
 export const CONTINUATION_INSTRUCTION = "Follow the existing continuation context and extend the message being continued from its exact end. Output only the new text to append; do not repeat, summarize, rewrite or restart the existing text. Preserve its language, point of view, formatting and any unfinished sentence or markup. Do not add a preamble, continuation label, speaker prefix or enclosing quotes unless they belong to the continuation itself.";
@@ -21,40 +22,29 @@ export function antiTruncationLogFields(metadata) {
     } };
 }
 
-// Opt-in transport for text replies. Client tools and tool history stay usable next to
-// the synthetic tool. A forced tool choice (no text reply expected, e.g.
-// Tavern Helper's own transport), the legacy functions API, structured output and
-// multi-candidate requests bypass it.
+// An empty setting adds our text tool. An explicit name selects the preset's
+// declaration for this request; the other tools remain owned by the client.
 export function prepareAntiTruncation(payload, enabled, streamArguments = false, { continuation = false, native = true, transportToolName = "" } = {}) {
     const skip = reason => ({ payload, toolName: null, reason });
     if (!enabled) return skip("disabled");
     if (payload.functions?.length) return skip("existing-tools");
-    if (payload.function_call != null || (payload.tool_choice != null &&
-        payload.tool_choice !== "auto" && payload.tool_choice !== "none")) return skip("tool-choice");
+    if (payload.function_call != null) return skip("tool-choice");
     if (payload.response_format && payload.response_format.type !== "text") return skip("structured-output");
     if ((payload.n != null && payload.n !== 1) || (payload.best_of != null && payload.best_of !== 1)) return skip("multiple-candidates");
     if (payload.messages.some(message => message.role === "function" || message.function_call)) return skip("tool-history");
+    const bypass = transportToolBypassReason(payload, transportToolName);
+    if (bypass) return skip(bypass);
     const clientTools = Array.isArray(payload.tools) ? payload.tools : [];
     const requested = streamArguments && payload.stream === true;
     // Native argument streaming carries both the text transport and client calls.
     // Keep the compatible fallback when native translation would discard fields.
     const nativeStreaming = requested && native && supportsNativeRequest(payload);
-    // A stable declaration keeps Vertex's cacheable prefix. An explicitly chosen
-    // name can be required by the client, so never silently substitute another.
-    const customName = validateTransportToolName(transportToolName);
-    const clientNames = clientTools.map(tool => tool?.function?.name);
-    let toolName = customName || DEFAULT_TRANSPORT_TOOL_NAME;
-    if (customName && clientNames.includes(customName)) {
-        throw Object.assign(new Error("正文传输工具名与请求中的工具重名。请修改正文传输工具名，或清空以自动避让。"), {
-            code: "transport_tool_name_conflict", status: 400,
-        });
-    }
-    if (!customName && clientNames.some(name => typeof name === "string" && name.startsWith(toolName))) {
+    let toolName = transportToolName || DEFAULT_TRANSPORT_TOOL_NAME;
+    if (!transportToolName && clientTools.some(tool => typeof tool?.function?.name === "string" && tool.function.name.startsWith(toolName))) {
         toolName = "router_" + Array.from(crypto.getRandomValues(new Uint8Array(12)), byte => byte.toString(16).padStart(2, "0")).join("");
     }
-    // Callable client tools turn the forced synthetic call into "call some tool": the text
-    // goes through the synthetic one, real calls pass through. "none" keeps them uncallable.
-    const callable = clientTools.length > 0 && payload.tool_choice !== "none";
+    const callable = clientTools.some(tool => tool?.function?.name !== toolName) &&
+        payload.tool_choice !== "none" && payload.tool_choice?.type !== "function";
     const text = continuation ? "only the new continuation text" : "the entire user-visible answer";
     return {
         toolName,
@@ -70,7 +60,7 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
                     + " This transport does not change the task. Do not add unsolicited commentary about this transport, tool selection or serialization. Once the requested content is complete, end the call without repeating finished content or adding filler. Preserve repetition explicitly requested by the task."
                     + (continuation ? "\n" + CONTINUATION_INSTRUCTION : ""),
             }],
-            tools: [...clientTools, { type: "function", function: {
+            tools: transportToolName ? clientTools : [...clientTools, { type: "function", function: {
                 name: toolName,
                 description: "Deliver the complete user-visible reply as text; end the call when the requested content is complete.",
                 parameters: { type: "object", properties: { content: { type: "string",

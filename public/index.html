@@ -87,9 +87,8 @@
                   <label class="option-card"><input type="radio" name="serviceTier" value="priority"><span><strong>Priority</strong><small>优先按量服务</small></span></label>
                 </fieldset><div id="tier-help" class="notice">使用标准档位，不自动升级服务等级。</div>
                 <button class="text-button" type="button" data-go="models">在“模型与版本”中分别设置正常、非流式和流式抗截断 →</button>
-                <label class="field" for="transport-tool-name">正文传输工具名<input id="transport-tool-name" maxlength="64" placeholder="router_emit" aria-describedby="transport-tool-help"></label>
-                <p id="transport-tool-help" class="hint">留空自动命名。需要固定名称时在此填写，客户端工具沿用自己的名称。</p>
-                <p class="hint">指定必须调用某个工具或要求结构化输出时会跳过包装。若预设也有同类脚本，只保留一处包装。</p>
+                <label class="field" for="transport-tool-name">预设正文工具名<input id="transport-tool-name" maxlength="64" placeholder="例如 game_content" aria-describedby="transport-tool-help"></label>
+                <p id="transport-tool-help" class="hint">填写预设已声明的工具名，将它的 content 字符串显示为正文。留空使用内置工具。</p>
               </section>
               <section class="panel"><div class="panel-head"><h2><span class="step">03</span> 本地网关</h2></div>
                 <div class="form-grid"><div class="field"><label for="port">API 端口</label><input id="port" name="port" type="number" min="1" max="65535" value="4781" required aria-describedby="port-help"><p id="port-help" class="hint">仅监听 127.0.0.1，与控制台端口分开。</p></div><div class="field"><label for="timeout">上游超时（秒）</label><input id="timeout" type="number" min="1" max="1800" value="600" required aria-describedby="timeout-help"><p id="timeout-help" class="hint">单次请求从开始到回复结束的总时长上限（含流式输出），默认 600 秒；长回复或 Flex 可调高。</p></div></div>

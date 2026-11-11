@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createFetchInterceptor, GENERATE_PATH, PLUGIN_PATH } from "../integrations/sillytavern/shared.js";
 import { prepareImageInput } from "../src/image-input.mjs";
 import { sseData } from "../src/wire.mjs";
+import { presetTextTool } from "./fixtures/preset-text-tool.mjs";
 
 const origin = "http://localhost";
 const nativePath = "/api/plugins/vertex-paygo/native-gemini/generate";
@@ -51,27 +52,45 @@ test("PayGo owns the marked and prepared generation routes, including image-only
 });
 
 test("PayGo leaves failed preparations, usage, tool signatures and host finish information intact",async()=>{
-  const input={...body,stream:false,reverse_proxy:"http://127.0.0.1:1234/proxy/test",proxy_password:"fixture"};
+  const input={...body,stream:false,reverse_proxy:"http://127.0.0.1:1234/proxy/test",proxy_password:"fixture",
+    tools:[presetTextTool,{type:"function",function:{name:"lookup"}}]};
   let calls=0, failed=true;
   const intercept=createFetchInterceptor(async(path,init)=>{
     assert.equal(path,nativePath);calls++;
     if(failed) return Response.json({error:{code:"EXPIRED_TICKET"}},{status:410});
-    const name=JSON.parse(init.body).tools.at(-1).function.name;
-    assert.equal(name,"tavern_reply");
+    const sent=JSON.parse(init.body);
+    assert.deepEqual(sent.tools,input.tools);
+    const name=sent.tools[0].function.name;
     const content={role:"model",parts:[{functionCall:{name,args:{content:"正文"}}},
       {functionCall:{name:"lookup",id:"id-1",args:{q:"query"}},thoughtSignature:"signature"}]};
     return Response.json({responseContent:content,choices:[{message:{content:""}}],usageMetadata:{totalTokenCount:19}});
-  },{origin,getMode:()=>"buffered",getTransportToolName:()=>"tavern_reply"});
+  },{origin,getMode:()=>"buffered",getTransportToolName:()=>"game_content"});
   const bad=await send(intercept,nativePath,input);
   assert.equal(bad.status,410);
   assert.equal((await bad.json()).error.code,"EXPIRED_TICKET");
   failed=false;
-  const result=await (await send(intercept,nativePath,{...input,tools:[{type:"function",function:{name:"lookup"}}]})).json();
+  const result=await (await send(intercept,nativePath,input)).json();
   assert.equal(calls,2);
   assert.equal(result.choices[0].message.content,"正文");
   assert.equal(result.choices[0].finish_reason,undefined);
   assert.equal(result.responseContent.parts[1].thoughtSignature,"signature");
   assert.equal(result.usageMetadata.totalTokenCount,19);
+});
+
+test("PayGo consumes the preset call once when the host mirrors it in both reply formats", async () => {
+  const target = { id: "text", type: "function", function: { name: "game_content", arguments: '{"content":"正文"}' } };
+  const lookup = { id: "real", type: "function", function: { name: "lookup", arguments: "{}" } };
+  for (const calls of [[target], [target, lookup]]) {
+    const intercepted = createFetchInterceptor(async () => Response.json({
+      responseContent: { parts: calls.map(call => ({ functionCall: { name: call.function.name, args: JSON.parse(call.function.arguments) } })) },
+      choices: [{ message: { content: "", tool_calls: calls }, finish_reason: "tool_calls" }],
+    }), { origin, getMode: () => "buffered", getTransportToolName: () => "game_content" });
+    const result = await (await send(intercepted, nativePath, { ...body, stream: false, tools: [presetTextTool, { type: "function", function: { name: "lookup" } }] })).json();
+    assert.equal(result.choices[0].message.content, "正文");
+    assert.deepEqual(result.choices[0].message.tool_calls ?? [], calls.slice(1));
+    assert.equal(result.choices[0].finish_reason, calls.length > 1 ? "tool_calls" : "stop");
+    assert.deepEqual(result.responseContent.parts.filter(part => part.text), [{ text: "正文" }]);
+  }
 });
 
 test("PayGo image conversion failure stops before generation",async()=>{

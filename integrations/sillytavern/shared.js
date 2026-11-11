@@ -1,6 +1,7 @@
 import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 import { prepareOptimizedInput } from "./optimized-input.js";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
+import { transportToolBypassReason } from "../../src/transport-tool-name.mjs";
 import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
@@ -15,7 +16,7 @@ export const TOOLS_FEATURE = "client-tools";
 export const TUCAO_FEATURE = "stop-after-second-tucao";
 export const TAG_STOP_FEATURE = "stop-after-tag-pairs";
 export const NATURAL_STOP_USAGE_FEATURE = "tag-stop-natural-usage";
-export const TRANSPORT_NAME_FEATURE = "custom-transport-tool-name";
+export const TRANSPORT_NAME_FEATURE = "preset-transport-tool";
 export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, NATURAL_STOP_USAGE_FEATURE, "image-input-convert", "tag-stop-usage", TRANSPORT_NAME_FEATURE];
 export const MODES = ["off", "buffered", "streaming"];
 export const GENERATE_PATH = "/api/backends/chat-completions/generate";
@@ -96,14 +97,12 @@ function nativeTool(tool) {
 }
 
 // Shared by both sides: unsupported requests keep SillyTavern's original route.
-export function bypassReason(body, mode, payGo = false) {
+export function bypassReason(body, mode, payGo = false, transportToolName = "") {
   if (mode === "off" || !MODES.includes(mode)) return "disabled";
   if (body?.chat_completion_source !== "vertexai") return "other-provider";
   if (body.reverse_proxy && !payGo) return "reverse-proxy";
   if (!/^gemini-[\w.-]+$/.test(body.model || "") || /image|embedding/i.test(body.model)) return "model";
   if (body.functions?.length || body.function_call != null) return "existing-tools";
-  // Client tools stay callable next to the transport tool; a forced choice asks for a call, not text.
-  if (body.tool_choice != null && body.tool_choice !== "auto" && body.tool_choice !== "none") return "tool-choice";
   if (body.tools != null && (!Array.isArray(body.tools) || !body.tools.every(nativeTool))) return "tool-schema";
   if (body.json_schema || body.responseSchema || (body.responseMimeType && body.responseMimeType !== "text/plain") ||
       (body.response_format && body.response_format.type !== "text")) return "structured-output";
@@ -111,7 +110,7 @@ export function bypassReason(body, mode, payGo = false) {
   if (body.enable_web_search) return "web-search";
   if (body.request_images) return "image-generation";
   if (Array.isArray(body.messages) && body.messages.some(message => message?.role === "function" || message?.function_call)) return "tool-history";
-  return null;
+  return transportToolBypassReason(body, transportToolName);
 }
 
 // ST 1.19 exposes a settings event, but not a generation-URL override. Intercept
@@ -157,10 +156,13 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const payGo = !direct && (payGoInstalled || marked || url.pathname === PAYGO_GENERATE_PATH
       || (ticket && typeof globalThis.vertexPayGoGemini4GenerateInterceptor === "function"));
     const ownPayGoProxy = payGo && (ticket || (marked?.sink === body.reverse_proxy && body.reverse_proxy === "vertex-paygo-blocked://request"));
-    let reason = bypassReason(body, imageEnabled && mode === "off" ? "buffered" : mode, ownPayGoProxy);
+    const transportToolName = mode !== "off" ? getTransportToolName() : "";
+    let reason = bypassReason(body, imageEnabled && mode === "off" ? "buffered" : mode, ownPayGoProxy, transportToolName);
+    // Image conversion still needs its normal backend when only the text tool is skipped.
+    const imageOnlyBypass = imageEnabled && reason?.startsWith("target-tool-") ? reason : null;
+    if (imageOnlyBypass) reason = null;
     if (!reason && !direct && !payGo && usesTools(body) && !await ensureBackend(TOOLS_FEATURE)) reason = "server-tools";
-    const tagStop = !reason && mode !== "off" ? getTagStop() : null;
-    const transportToolName = !reason && mode !== "off" ? getTransportToolName() : "";
+    const tagStop = !reason && !imageOnlyBypass && mode !== "off" ? getTagStop() : null;
     const waitForStopUsage = normalizeStopUsageWait(tagStop && getWaitForStopUsage());
     delete body.vertex_long_decode;
     delete body.vertex_transport_tool_name;
@@ -217,7 +219,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (!reason && !direct && (imageEnabled || body.type === "continue") && !await ensureBackend()) {
       onStatus({ error: "plugin_not_ready" }); throw new Error("plugin_not_ready");
     }
-    onStatus({ mode, bypass: reason, unicode });
+    onStatus({ mode, bypass: reason ?? imageOnlyBypass, unicode });
     if (reason) payload = JSON.stringify(body);
     const target = reason || direct ? url.href : new URL(`${PLUGIN_PATH}/generate`, origin).href;
     let response;
@@ -241,6 +243,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (response.ok && !reason && (imageEnabled || body.type === "continue" || outputLimit)) {
       // The plugin reports whether any text was converted; "no-text" was sent as plain text.
       onStatus({ mode,
+        ...(imageOnlyBypass ? { bypass: imageOnlyBypass } : {}),
         ...(unicode ? { unicode } : {}),
         ...(outputLimit ? { outputLimit } : {}),
         ...(response.headers.get("x-vertex-continuation") === "suffix" ? { continuation: true } : {}),

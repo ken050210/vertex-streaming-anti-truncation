@@ -4,7 +4,7 @@
 
 ## Unreleased
 
-- The standalone gateway can use a custom name for the text transport tool.
+- The gateway and Tavern plugin now use the text tool name setting to select a tool already declared by the preset, such as `game_content(content)`. An empty field keeps the built-in transport.
 
 ## SillyTavern 0.14.0 · Final usage after a tag cutoff
 

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { presetTextTool } from "./fixtures/preset-text-tool.mjs";
 import { antiTruncationLogFields, prepareAntiTruncation, restoreAntiTruncationCompletion, wrapAntiTruncationStream } from "../src/anti-truncation.mjs";
 
 const name = "router_emit_test";
@@ -47,13 +48,20 @@ test("opt-in preparation preserves parameters and isolates the original request"
   assert.equal(prepareAntiTruncation(payload, false).payload, payload);
 });
 
-test("a fixed transport name is used verbatim and shares a streamed name prefix with real tools", async () => {
+test("a preset transport keeps its declaration and disambiguates a streamed name prefix", async () => {
   const fixed = { transportToolName: "emit" };
-  const tools = [{ type: "function", function: { name: "emit_image" } }];
+  const target = { ...presetTextTool, function: { ...presetTextTool.function, name: "emit" } };
+  const tools = [target, { type: "function", function: { name: "emit_image" } }];
   const prepared = prepareAntiTruncation({ ...payload, tools }, true, false, fixed);
-  assert.deepEqual(prepared.payload.tools.map(tool => tool.function.name), ["emit_image", "emit"]);
+  assert.equal(prepared.payload.tools, tools);
+  assert.equal(prepared.payload.tool_choice, "required");
   assert.match(prepared.payload.messages.at(-1).content, /one call of emit;/);
-  assert.equal(prepareAntiTruncation(payload, true, false, fixed).payload.tool_choice.function.name, "emit");
+  const named = { type: "function", function: { name: "emit" } };
+  for (const request of [{ tools: [target] }, { tools, tool_choice: named }, { tools: [target], tool_choice: "required" }]) {
+    const selected = prepareAntiTruncation({ ...payload, ...request }, true, false, fixed);
+    assert.deepEqual(selected.payload.tool_choice, named);
+    assert.equal(selected.payload.tools, request.tools);
+  }
   const pieces = [call("", "emit"), { index: 0, function: { arguments: '{"content":"text"}' } },
     call("", "emit", 1), { index: 1, function: { name: "_image", arguments: "{}" } }];
   const wire = [...pieces.map(piece => event(chunk({ tool_calls: [piece] }))), event(chunk({}, "tool_calls")), event("[DONE]")].join("");
@@ -66,12 +74,28 @@ test("a fixed transport name is used verbatim and shares a streamed name prefix 
   const ended = parse(await wrapAntiTruncationStream(new Response(cutoff), "emit", undefined, prepared.payload.tools).text());
   assert.equal(ended.at(-1).choices[0].finish_reason, "length");
   assert.ok(ended.every(record => !record.choices[0].delta.tool_calls));
-  assert.throws(() => prepareAntiTruncation({ ...payload, tools }, true, false, { transportToolName: "emit_image" }),
-    { code: "transport_tool_name_conflict", status: 400 });
   for (const invalid of ["9bad", "two words", "a".repeat(65), null]) {
     assert.throws(() => prepareAntiTruncation(payload, true, false, { transportToolName: invalid }), { code: "invalid_transport_tool_name" });
   }
-  assert.equal(prepareAntiTruncation({ ...payload, tools, tool_choice: "required" }, true, false, { transportToolName: "emit_image" }).toolName, null);
+});
+
+test("a missing, incompatible or disabled preset target leaves the client's request intact", () => {
+  const incompatible = { ...presetTextTool, function: { ...presetTextTool.function,
+    parameters: { ...presetTextTool.function.parameters, properties: { content: { type: "string" }, action: { type: "string" } } } } };
+  for (const [patch, reason] of [
+    [{}, "target-tool-missing"],
+    [{ tools: [incompatible] }, "target-tool-schema"],
+    [{ tools: [presetTextTool, presetTextTool] }, "target-tool-schema"],
+    [{ tools: [presetTextTool], tool_choice: "none" }, "target-tool-choice"],
+    [{ tools: [presetTextTool], tool_choice: { type: "function", function: { name: "lookup" } } }, "target-tool-choice"],
+    [{ tools: [presetTextTool], response_format: { type: "json_object" } }, "structured-output"],
+  ]) {
+    const request = { ...payload, ...patch };
+    const result = prepareAntiTruncation(request, true, true, { transportToolName: "game_content" });
+    assert.equal(result.payload, request);
+    assert.equal(result.toolName, null);
+    assert.equal(result.reason, reason);
+  }
 });
 
 test("forced tool selection, Tavern transport, legacy functions, JSON and candidate conflicts bypass by identity", () => {

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import http from "node:http";
+import { presetTextTool } from "./fixtures/preset-text-tool.mjs";
 import { createGatewayServer, upstreamDispatcher } from "../src/gateway.mjs";
 import { buildConfig, DEFAULT_SETTINGS, loadConfig, MODEL_ID, UPSTREAM_MODEL } from "../src/config.mjs";
 
@@ -353,22 +354,22 @@ test("Unicode is independent of client tools and schema bypass, and missing/expa
 });
 
 test("client tool calls pass through beside the restored text on compatible and native routes", async t => {
-  const tools = [{ type: "function", function: { name: "get_weather", parameters: { type: "object", properties: { city: { type: "string" } } } } }];
+  const tools = [{ type: "function", function: { name: "get_weather", parameters: { type: "object", properties: { city: { type: "string" } } } } }, presetTextTool];
   const weather = { name: "get_weather", arguments: '{"city":"Paris"}' };
   const line = value => "data: " + JSON.stringify(value) + "\n\n";
   for (const nativeOnly of [false, true]) {
     const f = await fixture(t, request => {
       if (nativeOnly) {
         const names = request.json.tools[0].functionDeclarations.map(declaration => declaration.name);
-        assert.deepEqual(names, ["get_weather", "tavern_reply"]);
+        assert.deepEqual(names, ["get_weather", "game_content"]);
+        assert.equal(request.json.tools[0].functionDeclarations[1].description, presetTextTool.function.description);
         assert.deepEqual(request.json.toolConfig, { functionCallingConfig: { mode: "ANY",
           ...(request.url.includes("streamGenerateContent") ? { streamFunctionCallArguments: true } : {}) } });
         const native = { candidates: [{ content: { role: "model", parts: [{ functionCall: { name: names[1], args: { content: "checking" } } },
           { functionCall: { name: "get_weather", args: { city: "Paris" } }, thoughtSignature: "sig" }] }, finishReason: "STOP" }] };
         return request.url.includes("streamGenerateContent") ? new Response(line(native)) : Response.json(native);
       }
-      assert.deepEqual(request.json.tools.slice(0, 1), tools);
-      assert.equal(request.json.tools[1].function.name, "tavern_reply");
+      assert.deepEqual(request.json.tools, tools);
       assert.equal(request.json.tool_choice, "required");
       assert.equal(request.json.parallel_tool_calls, request.json.stream ? false : undefined);
       const calls = [{ id: "transport-id", type: "function", function: { name: request.json.tools[1].function.name, arguments: '{"content":"checking"}' } },
@@ -376,7 +377,7 @@ test("client tool calls pass through beside the restored text on compatible and 
       if (!request.json.stream) return Response.json({ choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: calls }, finish_reason: "tool_calls" }] });
       return new Response(line({ choices: [{ index: 0, delta: { role: "assistant", tool_calls: calls.map((call, index) => ({ index, ...call })) }, finish_reason: null }] }) +
         line({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }) + "data: [DONE]\n\n");
-    }, { nativeOnly, transportToolName: "tavern_reply" });
+    }, { nativeOnly, transportToolName: "game_content" });
     const id = nativeOnly ? "vtx.sig" : "weather-id";
     const response = await f.post({ ...payload, tools });
     assert.equal(response.headers.get("x-anti-truncation-transport"), "tool-transport");
@@ -394,15 +395,23 @@ test("client tool calls pass through beside the restored text on compatible and 
     assert.equal(visible(wire), "checking");
     assert.deepEqual(deltas.flatMap(choice => choice.delta?.tool_calls ?? []), [{ index: 0, id, type: "function", function: weather }]);
     assert.equal(deltas.at(-1).finish_reason, "tool_calls");
-    assert.equal(wire.includes("tavern_reply"), false);
+    assert.equal(wire.includes("game_content"), false);
     assert.equal(f.requests.at(-1).json.toolConfig?.functionCallingConfig?.streamFunctionCallArguments, nativeOnly ? true : undefined);
     assert.deepEqual(f.events.at(-1).antiTruncation, { transport, restored: true, finishReason: "tool_calls", streamDone: true });
-    const before = f.requests.length;
-    const conflict = await f.post({ ...payload, tools: [{ type: "function", function: { name: "tavern_reply" } }] });
-    assert.equal(conflict.status, 400);
-    assert.equal((await conflict.json()).error.code, "transport_tool_name_conflict");
-    assert.equal(f.requests.length, before);
   }
+});
+
+test("the gateway forwards a request without the selected text tool and reports the reason", async t => {
+  const f = await fixture(t, ({ json }) => {
+    assert.deepEqual(json.messages, payload.messages);
+    assert.equal(json.tools, undefined);
+    return Response.json({ choices: [{ message: { role: "assistant", content: "plain" }, finish_reason: "stop" }] });
+  }, { transportToolName: "game_content" });
+  const response = await f.post(payload);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-anti-truncation-transport"), "target-tool-missing");
+  assert.equal((await response.json()).choices[0].message.content, "plain");
+  assert.equal(f.events.at(-1).antiTruncation.transport, "target-tool-missing");
 });
 
 test("a streamed client tool named like the start of the transport tool still passes through", async t => {

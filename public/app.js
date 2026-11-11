@@ -6,6 +6,7 @@ const pageNames = { overview: "总览", connection: "连接配置", models: "模
 const modeNames = { normal: "正常", buffered: "非流式抗截断", streaming: "流式抗截断" };
 const transportNames = { "tool-transport-native-streaming": "原生参数流", "tool-transport-buffered": "完整还原", "tool-transport": "非流式还原",
   "tool-transport-buffered-fields": "兼容接口回退（可能等全文）", "existing-tools": "跳过：旧版 functions", "tool-choice": "跳过：指定工具调用",
+  "target-tool-missing": "未声明指定的正文工具", "target-tool-schema": "正文工具重名或参数不匹配", "target-tool-choice": "工具已禁用或请求指定了其他工具",
   "structured-output": "跳过：结构化输出", "multiple-candidates": "跳过：多候选", "tool-history": "跳过：旧版 function 历史", unknown: "未知" };
 const consoleDown = "无法连接本地控制台，请确认控制台进程仍在运行。";
 const replyInterrupted = "回复中途中断（网关已断开连接），请按请求 ID 在请求日志查看错误码。";

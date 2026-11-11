@@ -26,8 +26,9 @@ export function prepareSillyTavernRequest(request, adapters) {
   const imageEnabled = ["current-turn", "all"].includes(body.vertex_image_input);
   if (body.vertex_image_input != null && !["off", "current-turn", "all"].includes(body.vertex_image_input)) throw requestError("invalid_image_input_mode");
   if (!["buffered", "streaming"].includes(mode) && !(mode === "off" && imageEnabled)) throw requestError("invalid_transport_mode");
-  const bypass = bypassReason(body, mode === "off" && imageEnabled ? "buffered" : mode);
-  if (bypass) throw requestError("unsupported_request_" + bypass.replaceAll("-", "_"));
+  const bypass = bypassReason(body, mode === "off" && imageEnabled ? "buffered" : mode, false,
+    mode === "off" ? "" : body.vertex_transport_tool_name);
+  if (bypass && !bypass.startsWith("target-tool-")) throw requestError("unsupported_request_" + bypass.replaceAll("-", "_"));
   let messages = structuredClone(body.messages);
   // ST's Google converter only recognizes system/user/assistant roles. Keep
   // developer instructions at the same priority instead of sending an invalid
@@ -79,7 +80,7 @@ export function prepareSillyTavernRequest(request, adapters) {
   const upstreamStream = mode === "streaming" && body.stream === true;
   const outputLimit = gemini4OutputLimit(config.maxOutputTokens, body.model, { stream: upstreamStream, longDecode: body.vertex_long_decode === true });
   if (outputLimit) config.maxOutputTokens = outputLimit.applied;
-  if (upstreamStream) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
+  if (upstreamStream && native.toolConfig) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   if (body.vertex_tucao_stop != null && typeof body.vertex_tucao_stop !== "boolean") throw requestError("invalid_tucao_stop");
   const tagStop = body.vertex_tag_stop == null ? null : validateTagStopRule(body.vertex_tag_stop);
   return { body: native, toolName: prepared.toolName, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit,

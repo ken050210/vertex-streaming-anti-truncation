@@ -1,6 +1,6 @@
 import { PLUGIN_ID, PLUGIN_PATH, PLUGIN_VERSION, MIN_SERVER_VERSION, MODES, compareVersions, createFetchInterceptor, latestUserInput } from "./shared.js";
 import { normalizeStopUsageWait, DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
-import { DEFAULT_TRANSPORT_TOOL_NAME, validateTransportToolName } from "../../src/transport-tool-name.mjs";
+import { validateTransportToolName } from "../../src/transport-tool-name.mjs";
 
 // TauriTavern has no Node server to host the plugin, so the extension shapes the
 // request and restores the reply itself. Rendering text as images needs the server.
@@ -10,6 +10,8 @@ const context = SillyTavern.getContext();
 const events = context.eventTypes ?? context.event_types;
 const labels = { off: "关闭（普通 Vertex）", buffered: "非流式抗截断", streaming: "流式抗截断" };
 const reasons = { "existing-tools": "旧版 functions 工具", "tool-choice": "请求指定必须调用工具", "tool-schema": "工具定义无法转为 Vertex 原生格式",
+  "target-tool-missing": "本次请求未声明指定的正文工具", "target-tool-schema": "正文工具需唯一同名，且只有一个必填字符串参数 content",
+  "target-tool-choice": "本次请求禁用了工具或指定了其他工具",
   "server-tools": "服务端插件较旧，不支持工具调用；更新服务端插件后重启酒馆",
   "structured-output": "结构化输出", "multiple-candidates": "多个候选回复",
   "tool-history": "旧版 function 工具历史", "web-search": "联网搜索", "image-generation": "图片生成", "reverse-proxy": "反向代理",
@@ -21,7 +23,7 @@ const errors = { unicode_floor_required: "找不到真实用户楼层，也没�
   paygo_long_decode_unsupported: "当前 PayGo 后端不支持 Gemini 4 分段续写。请降低最大回复长度，或关闭 long decode 后使用单次上限。",
   natural_stop_usage_not_supported: "当前服务端插件不支持等待 Google 自然结束。请更新服务端并重启酒馆，或选择其他截停等待方式。",
   tag_stop_not_supported: "服务端插件不支持自定义标签截停。请更新服务端插件并重启酒馆，或关闭此开关。",
-  transport_tool_name_not_supported: "服务端插件不支持自定义正文传输工具名。请更新服务端并重启酒馆，或清空工具名以使用默认值。",
+  transport_tool_name_not_supported: "服务端插件不支持复用预设正文工具。请更新服务端并重启酒馆。",
   invalid_tag_stop: "截停标签名须为 1–64 位字母、数字、下划线、点、冒号或连字符，以字母或下划线开头；次数须为正整数。",
   image_input_requires_supported_request: "图片输入不支持此请求，已停止发送，未改用明文。请去掉不支持的内容或换用支持的模型，或关闭图片输入。",
   image_input_unsupported_characters: "图片转码遇到无法绘制的字符。请替换提示位置的字符，或改用“图片·当前轮”。",
@@ -69,7 +71,7 @@ function updateStatus(result) {
   const image = result.image ? { encoded: `已将文本转为图片发送${result.image.pages ? `（${result.image.pages} 页）` : ""}。`,
     "no-text": noText }[result.image.reason] || "" : "";
   const delivery = result.image && { "native-streaming": "正文按流式接收。", "paygo-streaming": "正文经 PayGo 流式接收。", buffered: "正文整段返回。" }[result.image.transport];
-  const bypass = result.bypass && result.bypass !== "disabled" ? `本次使用普通 Vertex：${reasons[result.bypass] ?? result.bypass}。` : "";
+  const bypass = result.bypass && result.bypass !== "disabled" ? `本次跳过抗截断。${reasons[result.bypass] ?? result.bypass}。` : "";
   const continuation = result.continuation ? "本次“继续”已请求仅生成新增续文，由酒馆追加到原消息。" : "";
   const limit = result.outputLimit, tokens = value => value.toLocaleString("en-US");
   const output = !limit ? "" : limit.longDecode
@@ -143,7 +145,6 @@ function mountTransportOptions(panel, select, saved, payGoInstalled) {
   tag.value = saved.stopTag ?? DEFAULT_STOP_TAG;
   count.value = saved.stopCount ?? DEFAULT_STOP_COUNT;
   wait.value = String(normalizeStopUsageWait(saved.waitForStopUsage));
-  tool.placeholder = DEFAULT_TRANSPORT_TOOL_NAME;
   tool.value = saved.transportToolName ?? "";
 
   function render() {
@@ -220,8 +221,8 @@ function mount() {
             <option value="natural">等 Google 自然结束</option>
           </select><small>命中标签后正文立即停显。等待期间 Google 生成的 token 会计入用量，点酒馆的停止按钮可提前断开。分段续写请求仍立即断流。</small></label>
         </div>
-        <label>正文传输工具名<input class="text_pole" id="vertex_transport_tool_name" maxlength="64" spellcheck="false" aria-describedby="vertex_tool_name_help"></label>
-        <small id="vertex_tool_name_help">留空自动命名。预设或上游要求固定名称时填写，其他工具沿用原名。</small>
+        <label>预设正文工具名<input class="text_pole" id="vertex_transport_tool_name" placeholder="例如 game_content" maxlength="64" spellcheck="false" aria-describedby="vertex_tool_name_help"></label>
+        <small id="vertex_tool_name_help">填写预设已声明的工具名，将它的 content 字符串显示为正文。留空使用内置工具。</small>
       </div>
     </details>
     <div class="vertex-connection">

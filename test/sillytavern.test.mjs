@@ -7,6 +7,7 @@ import { createGenerateHandler, connectionForRequest } from "../integrations/sil
 import { createFetchInterceptor, bypassReason, compareVersions, BODY_LIMIT, GENERATE_PATH, MIN_SERVER_VERSION, PLUGIN_FEATURES, PLUGIN_PATH, PLUGIN_VERSION, TOOLS_FEATURE, TRANSPORT_NAME_FEATURE } from "../integrations/sillytavern/shared.js";
 import { sseData } from "../src/wire.mjs";
 import { CONTINUATION_INSTRUCTION } from "../src/anti-truncation.mjs";
+import { presetTextTool } from "./fixtures/preset-text-tool.mjs";
 
 const body = { chat_completion_source: "vertexai", model: "gemini-3-flash-preview", stream: true,
   vertex_anti_truncation: "streaming", vertexai_auth_mode: "express", vertexai_region: "global", vertexai_service_tier: "flex",
@@ -282,9 +283,10 @@ test("ST tool history reaches ST's converter, and client tools are declared befo
 test("real tool calls reach ST as whole Gemini parts beside the restored text", async () => {
   const realPart = { functionCall: { name: "lookup", args: { query: "天气" } }, thoughtSignature: "sig-new" };
   for (const [mode, stream] of [["streaming", true], ["buffered", true], ["buffered", false]]) {
-    const prepared = prepareSillyTavernRequest(request({ tools: [lookupTool], tool_choice: "auto", vertex_anti_truncation: mode,
-      vertex_transport_tool_name: "tavern_reply", stream }), adapters);
-    assert.deepEqual(prepared.body.tools[0].functionDeclarations.map(tool => tool.name), ["lookup", "tavern_reply"]);
+    const prepared = prepareSillyTavernRequest(request({ tools: [presetTextTool, lookupTool], tool_choice: "required", vertex_anti_truncation: mode,
+      vertex_transport_tool_name: "game_content", stream }), adapters);
+    assert.deepEqual(prepared.body.tools[0].functionDeclarations.map(tool => tool.name), ["game_content", "lookup"]);
+    assert.equal(prepared.body.tools[0].functionDeclarations[0].description, presetTextTool.function.description);
     const parts = [{ text: "思考", thought: true }, { functionCall: { name: prepared.toolName, args: { content: "我去查。" } } }, realPart];
     const upstream = prepared.upstreamStream
       ? new Response(sseData({ candidates: [{ content: { role: "model", parts } }] }) + sseData({ candidates: [{ finishReason: "STOP" }] }))
@@ -548,24 +550,31 @@ test("the long-decode setting rides only on plugin requests, and the reported li
   assert.deepEqual(statuses.at(-1), { bypass: "structured-output" });
 });
 
-test("a configured transport name reaches a capable server and never silently falls back on an older one", async () => {
-  let supported = false;
-  const requests = [];
+test("a named preset tool reaches a capable server, and ineligible requests use ST's own route", async () => {
+  const features = new Set([TOOLS_FEATURE, "custom-transport-tool-name"]);
+  const requests = [], statuses = [];
   const wrapped = createFetchInterceptor(async (url, init) => {
     requests.push([url, JSON.parse(init.body)]);
     return Response.json({});
-  }, { origin: "http://localhost", getMode: () => "streaming", getTransportToolName: () => "scene_reply",
-    ensureBackend: feature => { assert.equal(feature, TRANSPORT_NAME_FEATURE); return supported; } });
+  }, { origin: "http://localhost", getMode: () => "streaming", getTransportToolName: () => "game_content",
+    ensureBackend: feature => features.has(feature), onStatus: s => statuses.push(s) });
   const send = data => wrapped(GENERATE_PATH, { method: "POST", body: JSON.stringify(data) });
-  await assert.rejects(send(body), /transport_tool_name_not_supported/);
+  const selected = { ...body, tools: [presetTextTool], tool_choice: { type: "function", function: { name: "game_content" } } };
+  await assert.rejects(send(selected), /transport_tool_name_not_supported/);
   assert.equal(requests.length, 0);
-  supported = true;
-  await send(body);
+  features.add(TRANSPORT_NAME_FEATURE);
+  await send(selected);
   assert.equal(requests[0][0], PLUGIN_PATH + "/generate");
-  assert.equal(requests[0][1].vertex_transport_tool_name, "scene_reply");
-  await send({ ...body, tool_choice: "required" });
-  assert.equal(requests[1][0], GENERATE_PATH);
-  assert.equal(requests[1][1].vertex_transport_tool_name, undefined);
+  assert.equal(requests[0][1].vertex_transport_tool_name, "game_content");
+  assert.deepEqual(requests[0][1].tools, selected.tools);
+  assert.deepEqual(prepareSillyTavernRequest({ body: requests[0][1] }, adapters).body.toolConfig.functionCallingConfig,
+    { mode: "ANY", allowedFunctionNames: ["game_content"], streamFunctionCallArguments: true });
+  for (const [data, reason] of [[body, "target-tool-missing"], [{ ...selected, tool_choice: "none" }, "target-tool-choice"],
+    [{ ...selected, tools: [lookupTool, { type: "function", function: { name: "game_content" } }] }, "target-tool-schema"]]) {
+    await send(data);
+    assert.deepEqual(requests.at(-1), [GENERATE_PATH, data]);
+    assert.equal(statuses.at(-1).bypass, reason);
+  }
 });
 
 test("Unicode transforms before off/tools/schema bypass and retains Request metadata", async () => {
@@ -871,6 +880,17 @@ test("image requests report the plugin's conversion outcome, including text sent
   assert.ok(!JSON.stringify(sent.at(-1)).includes("data:image"));
   assert.deepEqual(await post({}), ["encoded", "1"]);
   assert.match(JSON.stringify(sent.at(-1)), /data:image\/(png|webp);base64,/);
+
+  const origin = "http://127.0.0.1:" + server.address().port;
+  const withTarget = createFetchInterceptor((url, init) => fetch(new URL(url, origin), init), {
+    origin, getMode: () => "streaming", getImageInput: () => "current-turn",
+    getTransportToolName: () => "game_content", onStatus: state => statuses.push(state),
+  });
+  const response = await withTarget(GENERATE_PATH, { method: "POST", body: JSON.stringify(body) });
+  assert.equal(contents(await response.text()), "OK");
+  assert.equal(sent.at(-1).tools, undefined);
+  assert.equal(statuses.at(-1).bypass, "target-tool-missing");
+  assert.equal(statuses.at(-1).image.reason, "encoded");
 });
 
 test("Continue delivers only the upstream suffix in one request across stream, buffered and image modes", async t => {

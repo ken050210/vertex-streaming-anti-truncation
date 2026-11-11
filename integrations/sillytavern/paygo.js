@@ -57,6 +57,7 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
     }
   }
   onStatus(delivered.ok ? { mode, payGo: true, unicode, continuation, outputLimit:capped.outputLimit,
+    ...(mode !== "off" && !prepared.toolName ? { bypass: prepared.reason } : {}),
     ...(image ? { image: { ...image, transport } } : {}) } : { error: delivered.status });
   return delivered;
 }
@@ -92,8 +93,20 @@ function restorePayGoJson(data, toolName, tagStop) {
   });
   const content = {...candidate.content, parts};
   candidate.content = data.responseContent = content;
-  if (data.choices?.[0]?.message) {
-    data.choices[0].message.content = parts.filter(p => !p.thought && typeof p.text === "string").map(p => p.text).join("");
+  const choice = data.choices?.[0];
+  if (choice?.message) {
+    const message = choice.message;
+    message.content = parts.filter(p => !p.thought && typeof p.text === "string").map(p => p.text).join("");
+    // Some hosts mirror the native call in choices. Preset helpers can consume
+    // that copy a second time after the native part has become text.
+    if (restored && Array.isArray(message.tool_calls)) {
+      const otherCalls = message.tool_calls.filter(call => call.function?.name !== toolName);
+      if (otherCalls.length) message.tool_calls = otherCalls;
+      else delete message.tool_calls;
+    }
+    if (restored && choice.finish_reason === "tool_calls" && !message.tool_calls?.length && !parts.some(part => part.functionCall)) {
+      choice.finish_reason = "stop";
+    }
   }
   data.vertexAntiTruncation = {restored};
   return data;

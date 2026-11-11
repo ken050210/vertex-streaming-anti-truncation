@@ -406,7 +406,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       if (status !== 499 && !deadline.aborted) upstreamError = error.upstreamError ?? (error.upstreamBody ? googleErrorDetail(error.upstreamBody, credential) : null);
       integrity = { ...integrity, outcome: status === 499 ? "cancelled" :
         ["empty", "incomplete"].includes(integrity?.outcome) ? integrity.outcome : "error" };
-      const detail = code === "transport_tool_name_conflict" ? error.message : code;
+      const detail = code === "invalid_transport_tool_name" ? error.message : code;
       const payload = { error: { code, message: upstreamMessage(upstreamError, detail), type: "gateway_error", requestId,
         ...integrityLogFields(integrity), ...(error.status === 400 && error.param ? { param: error.param } : {}),
         ...(upstreamError ? { upstreamError } : {}) } };

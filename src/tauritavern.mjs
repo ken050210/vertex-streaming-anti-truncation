@@ -36,6 +36,7 @@ export function prepareTauriTavernRequest(body, mode, tagStop, transportToolName
   const continuation = body.type === "continue";
   const upstreamStream = mode === "streaming" && body.stream === true;
   const prepared = prepareAntiTruncation({ messages: body.messages, tools: body.tools, tool_choice: body.tool_choice }, true, false, { continuation, transportToolName });
+  if (!prepared.toolName) return { bypass: prepared.reason };
   const native = nativeRequestBody({ ...prepared.payload, messages: [] });
   if (upstreamStream) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   return {
