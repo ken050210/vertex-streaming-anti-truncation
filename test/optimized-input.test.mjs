@@ -8,6 +8,7 @@ const noFetch = () => assert.fail("unexpected tokenizer request");
 
 test("optimized current input counts both guides, changes floor copies and delivers one provider response", async () => {
   const floor = "你好𠀀", requests = [], comparisons = [], statuses = [];
+  let tokenizerLoading = false;
   const artifact = { type: "image_url", image_url: { url: "https://example.invalid/" + floor } };
   const tool = { role: "tool", tool_call_id: "call", content: floor };
   const schema = { properties: { [floor]: { type: "string" } } };
@@ -21,6 +22,13 @@ test("optimized current input counts both guides, changes floor copies and deliv
     if (url === tokenizer) {
       comparisons.push(body.text);
       assert.equal(init.headers["X-CSRF-Token"], "fixture");
+      // SillyTavern 1.19 can return zero to a second request while Gemma first loads.
+      if (tokenizerLoading) return Response.json({ count: 0 });
+      if (comparisons.length === 1) {
+        tokenizerLoading = true;
+        await Promise.resolve();
+        tokenizerLoading = false;
+      }
       return Response.json({ count: body.text.includes("共用字表") ? 20 : 10 });
     }
     assert.equal(url, GENERATE_PATH);

@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## SillyTavern 0.13.1 · First request after restart
+
+Optimized input now waits for the first Gemma token count before requesting the second. This lets SillyTavern 1.19 finish loading its tokenizer and use both counts on the first request after a restart.
+
 ## SillyTavern 0.13.0 · Optional Chinese input encoding
 
 The Vertex panel offers optimized encoding for the current input or the full context. It compares alternating Unicode escapes with a shared table of frequent characters, includes the reading guide in the estimate, and shows the selected format. Existing selections carry over. [Input encoding guide](docs/SILLYTAVERN.md#优化转码实验)
