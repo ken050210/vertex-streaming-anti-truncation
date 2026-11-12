@@ -17,12 +17,21 @@ test("live Vertex rows use the reported tier and survive an invalid refresh", as
   const feed = entries => async () => Response.json({ schemaVersion: 1, pricing: {
     updatedAt: "2026-11-14", currency: "USD", unit: "per_million_tokens", entries
   } });
-  await refreshPricing(feed([{ ...row, source: "makersuite", input: 999 }, row]));
+  // This model has no bundled row. Use a different threshold and tier price than the bundled defaults.
+  const pro = { ...row, model: "gemini-3-flash-preview", tier: "flex", longContextThreshold: 100_000,
+    longInput: 10, longCachedInput: 2, longOutput: 15 };
+  await refreshPricing(feed([{ ...row, source: "makersuite", input: 999 }, row, pro]));
   await assert.rejects(refreshPricing(feed([{ ...row, cachedInput: -1 }])));
+  await assert.rejects(refreshPricing(feed([{ ...pro, longOutput: null }])));
   const options = { at: new Date("2026-11-30"), trafficType: "ON_DEMAND_PRIORITY" };
   const usage = tokens(100_000, 10_000, 20_000);
   assert.equal(estimateCostUsd(row.model, usage, options), 0.78);
   assert.equal(estimateCostUsd(row.model, usage, { ...options, at: new Date("2026-12-01") }), 0.9432);
+  const flex = { ...options, trafficType: "ON_DEMAND_FLEX" };
+  assert.equal(estimateCostUsd(pro.model, usage, flex), 0.78);
+  assert.equal(estimateCostUsd("publishers/google/models/gemini-3-flash-preview@001", tokens(100_001, 10_000, 20_000), flex), 0.99001);
+  assert.equal(estimateCostUsd(pro.model, usage, options), null);
+  assert.equal(estimateCostUsd(pro.model, usage, { ...flex, at: new Date("2026-12-01") }), null);
 });
 
 test("estimates follow Google's list prices by model, date, tier, region and prompt length", () => {

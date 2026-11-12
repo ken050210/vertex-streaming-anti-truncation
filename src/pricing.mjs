@@ -26,7 +26,8 @@ const TIERS = { ON_DEMAND: 1, ON_DEMAND_FLEX: 0.5, ON_DEMAND_PRIORITY: 1.8 };
 const REQUESTED = { standard: "ON_DEMAND", flex: "ON_DEMAND_FLEX", priority: "ON_DEMAND_PRIORITY" };
 
 const feed = "https://raw.githubusercontent.com/mananekoha114/ST-Vertex-PayGo/main/data/model-support.json";
-let liveRows = [], priceDate = "2026-11-13";
+let liveRows = [], priceDate = "2026-11-13", liveFrom;
+const price = n => Number.isFinite(n) && n >= 0;
 
 export async function refreshPricing(fetchImpl = fetch) {
   const response = await fetchImpl(feed, { redirect: "error", signal: AbortSignal.timeout(12000) });
@@ -36,14 +37,19 @@ export async function refreshPricing(fetchImpl = fetch) {
       !/^\d{4}-\d\d-\d\d$/.test(pricing.updatedAt) || pricing.updatedAt < priceDate || !Array.isArray(pricing.entries)) {
     throw new Error("Unsupported or outdated PayGo price catalog");
   }
-  const rows = pricing.entries.filter(r => r?.source === "vertexai" && ["gemini-4-carbon", "gemini-4-hydrogen"].includes(r.model));
+  const rows = pricing.entries.filter(r => r?.source === "vertexai" && /^gemini-[a-z0-9._-]+$/.test(r.model));
   if (!rows.length || !rows.every(r => Object.hasOwn(REQUESTED, r.tier) &&
-      [r.input, r.cachedInput, r.output].every(n => Number.isFinite(n) && n >= 0) &&
-      (r.validUntil == null || /^\d{4}-\d\d-\d\d$/.test(r.validUntil)) && r.longContextThreshold == null)) {
-    throw new Error("Unsupported Gemini 4 price rows");
+      [r.input, r.cachedInput, r.output].every(price) &&
+      (r.validUntil == null || /^\d{4}-\d\d-\d\d$/.test(r.validUntil)) &&
+      (r.longContextThreshold == null || (Number.isSafeInteger(r.longContextThreshold) && r.longContextThreshold > 0 &&
+        [r.longInput, r.longCachedInput, r.longOutput].every(price))))) {
+    throw new Error("Unsupported Gemini price rows");
   }
   liveRows = rows;
   priceDate = pricing.updatedAt;
+  // A published snapshot can already be dated tomorrow in UTC.
+  const today = new Date().toISOString().slice(0, 10);
+  liveFrom = priceDate < today ? priceDate : today;
 }
 
 export function startPricingUpdates() {
@@ -65,15 +71,22 @@ export function usageTokens(usage) {
 
 // The reported traffic type wins over the requested tier: Priority can fall back to Standard.
 export function estimateCostUsd(upstreamModel, tokens, { trafficType, serviceTier = "standard", location = "global", at = new Date() } = {}) {
-  const model = upstreamModel.replace(/^google\//, "").replace(/@[a-z0-9-]+$/, "");
-  const rows = PRICES[model], multiplier = TIERS[trafficType ?? REQUESTED[serviceTier]];
-  if (!rows || !tokens || multiplier === undefined) return null;
+  const model = upstreamModel.replace(/^(?:google\/|publishers\/google\/models\/)/, "").replace(/@[a-z0-9-]+$/, "");
+  const tier = trafficType ?? REQUESTED[serviceTier], multiplier = TIERS[tier];
+  if (!tokens || multiplier === undefined) return null;
   const day = at.toISOString().slice(0, 10);
-  const row = rows.find(item => !item.until || day < item.until);
-  const live = day >= priceDate && liveRows.find(r => r.model === model &&
-    REQUESTED[r.tier] === (trafficType ?? REQUESTED[serviceTier]) && (!r.validUntil || day <= r.validUntil));
-  const [input, cached, output] = live ? [live.input, live.cachedInput, live.output] :
-    tokens.promptTokens > 200_000 && row.long ? row.long : row.rates;
+  const live = day >= liveFrom && liveRows.find(r => r.model === model &&
+    REQUESTED[r.tier] === tier && (!r.validUntil || day <= r.validUntil));
+  let rates;
+  if (live) {
+    rates = live.longContextThreshold != null && tokens.promptTokens > live.longContextThreshold
+      ? [live.longInput, live.longCachedInput, live.longOutput] : [live.input, live.cachedInput, live.output];
+  } else {
+    const row = Object.hasOwn(PRICES, model) && PRICES[model].find(item => !item.until || day < item.until);
+    if (!row) return null;
+    rates = tokens.promptTokens > 200_000 && row.long ? row.long : row.rates;
+  }
+  const [input, cached, output] = rates;
   // Gemini 3 and later cost 10% more on regional endpoints.
   const region = location !== "global" && !model.startsWith("gemini-2.") ? 1.1 : 1;
   const cost = ((tokens.promptTokens - tokens.cachedTokens) * input + tokens.cachedTokens * cached + tokens.outputTokens * output) / 1e6;
