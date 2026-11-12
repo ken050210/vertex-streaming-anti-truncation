@@ -5,7 +5,7 @@ import { transportToolBypassReason } from "../../src/transport-tool-name.mjs";
 import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.14.0";
+export const PLUGIN_VERSION = "0.15.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -115,7 +115,7 @@ export function bypassReason(body, mode, payGo = false, transportToolName = "") 
 
 // ST 1.19 exposes a settings event, but not a generation-URL override. Intercept
 // only its same-origin Vertex POST; preserve the original fetch for everything else.
-export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getTransportToolName = () => "", getTagStop = () => null, getWaitForStopUsage = () => false, getUserFloor = () => "", ensureBackend = async () => true, onStatus = () => {}, direct, payGoInstalled = false, getRequestHeaders = () => ({ "Content-Type": "application/json" }) }) {
+export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getTransportToolName = () => "", getTagStop = () => null, getWaitForStopUsage = () => false, getUserFloor = () => "", getRecentAiFloors = () => [], ensureBackend = async () => true, onStatus = () => {}, direct, payGoInstalled = false, getRequestHeaders = () => ({ "Content-Type": "application/json" }) }) {
   return async function vertexFetch(input, init) {
     let url;
     try { url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, origin); }
@@ -123,8 +123,9 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     const mode = getMode();
     const unicodeMode = getUnicodeInput();
-    const optimized = unicodeMode === "optimized" || unicodeMode === "optimized-all";
-    const unicodeEnabled = optimized || unicodeMode === true || unicodeMode === "all";
+    const recent = unicodeMode === "recent" || unicodeMode === "optimized-recent";
+    const optimized = ["optimized", "optimized-all", "optimized-recent"].includes(unicodeMode);
+    const unicodeEnabled = recent || optimized || unicodeMode === true || unicodeMode === "all";
     const imageMode = getImageInput();
     const imageEnabled = imageMode !== "off";
     if ((mode === "off" && !unicodeEnabled && !imageEnabled) || url.origin !== origin || ![GENERATE_PATH, PAYGO_GENERATE_PATH].includes(url.pathname) || method.toUpperCase() !== "POST") {
@@ -140,8 +141,8 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     let unicode;
     if (unicodeEnabled) {
       try {
-        const scope = unicodeMode === "all" || unicodeMode === "optimized-all" ? "all" : true;
-        const source = scope === "all" ? body : { ...body, router_unicode_input: { user_floor: getUserFloor() } };
+        const scope = recent ? "recent" : unicodeMode === "all" || unicodeMode === "optimized-all" ? "all" : true;
+        const source = scope === "all" ? body : { ...body, router_unicode_input: { user_floor: getUserFloor(), ...(recent ? { ai_floors: getRecentAiFloors() } : {}) } };
         const prepared = optimized
           ? await prepareOptimizedInput(source, scope, BODY_LIMIT, { originalFetch, headers: getRequestHeaders(),
             signal: init?.signal ?? (input instanceof Request ? input.signal : undefined) })

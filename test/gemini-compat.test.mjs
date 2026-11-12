@@ -40,6 +40,25 @@ test("Gemini 4 routes normalize thinking and parameters across auth, transport a
   }
 });
 
+test("Vertex sends the preset effort as a level on compatible and native routes", async t => {
+  for (const model of ["gemini-4-carbon", "gemini-4-hydrogen", "gemini-3.1-pro-preview"]) {
+    for (const [authMode, mode, stream] of routes) {
+      const f = await fixture(t, undefined, { authMode, models: [{ ...profile, upstreamModel: "google/" + model, mode }] });
+      const response = await f.post({ ...payload(), stream, reasoning_effort: "medium" });
+      assert.equal(response.status, 200);
+      await response.text();
+      assert.equal(f.calls.length, 1);
+      const call = f.calls[0];
+      if (call.url.endsWith("/chat/completions")) {
+        assert.deepEqual(call.body.extra_body.google.thinking_config, { thinking_level: "MEDIUM" });
+        assert.equal(call.body.reasoning_effort, undefined);
+      } else {
+        assert.deepEqual(call.body.generationConfig.thinkingConfig, { thinkingLevel: "MEDIUM" });
+      }
+    }
+  }
+});
+
 test("Gemini 4 invalid budgets and caches fail before any submission; buffered long output is capped", async t => {
   const f = await fixture(t, undefined, { models: [{ ...profile, upstreamModel: "google/gemini-4-argon", mode: "buffered" }] });
   for (const patch of [{ extra_body: { google: { thinking_config: { thinking_budget: 100 } } } },

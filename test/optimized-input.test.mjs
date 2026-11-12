@@ -55,6 +55,42 @@ test("optimized current input counts both guides, changes floor copies and deliv
   assert.equal(statuses.at(-1).unicode.selection, "gemma");
 });
 
+for (const mode of ["recent", "optimized-recent"]) {
+  test(mode + " encodes the latest two AI floors and current input in the outgoing request", async () => {
+    const messages = [
+      { role: "assistant", content: "重复楼层" },
+      { role: "user", content: "历史输入" },
+      { role: "assistant", content: "重复楼层" },
+      { role: "assistant", content: [{ type: "text", text: "角色：最新回答" }] },
+      { role: "assistant", content: "预设填充" },
+      { role: "tool", content: "最新回答" },
+      { role: "user", content: "当前输入" },
+    ];
+    let sent;
+    const intercept = createFetchInterceptor(async (url, init) => {
+      if (url === tokenizer) return Response.json({ count: 10 });
+      sent = JSON.parse(init.body);
+      return Response.json({});
+    }, { origin: "http://localhost", getMode: () => "off", getUnicodeInput: () => mode,
+      getRecentAiFloors: () => ["重复楼层", "最新回答"], getUserFloor: () => "当前输入" });
+    await intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify({ chat_completion_source: "vertexai", messages }) });
+    assert.equal(sent.router_unicode_input, undefined);
+    for (const i of [0, 1, 4, 5]) assert.deepEqual(sent.messages[i], messages[i]);
+    for (const i of [2, 3, 6]) assert.notDeepEqual(sent.messages[i], messages[i]);
+  });
+}
+
+test("recent scope selects the last two equal replies inside merged preset history without a user floor", async () => {
+  const input = { router_unicode_input: { ai_floors: ["风声", "风声"], user_floor: "" },
+    messages: [{ role: "system", content: "风声/风声/风声" }] };
+  const { payload, metadata } = await prepareOptimizedInput(input, "recent", 65536, {
+    originalFetch: async () => Response.json({ count: 10 }),
+  });
+  assert.equal(metadata.occurrences, 2);
+  assert.ok(payload.messages[0].content.includes("风声/<vat-encoded>"));
+  assert.equal(payload.messages[0].content.split("<vat-encoded>").length, 3);
+});
+
 test("all-context table preserves tags, macros, old code blocks, literal syntax and already encoded messages", async () => {
   const text = "<角色>乙乙甲𠀀</角色> {{变量::甲}} ⟦U:4E00⟧ C:\\tmp {x}";
   const source = { messages: [{ role: "developer", content: text }, { role: "user", content: "甲" },

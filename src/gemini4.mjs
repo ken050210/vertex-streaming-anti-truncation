@@ -10,28 +10,38 @@ export function validateGemini4Connection(config, model) {
   }
 }
 
-export function gemini4ThinkingLevel(effort) {
+// Vertex text models with documented level controls, plus live-tested Hydrogen.
+export function minimumThinkingLevel(model) {
+  const id = (model ?? "").replace(/^(?:google\/|publishers\/google\/models\/)/i, "").replace(/@[a-z0-9-]+$/i, "").toLowerCase();
+  if (/^gemini-(?:4-(?:argon|carbon|hydrogen)|3\.[78]-flash|3\.1-pro-preview)$/.test(id)) return "LOW";
+  if (/^gemini-(?:3-flash-preview|3\.[56]-flash|3\.[15]-flash-lite)$/.test(id)) return "MINIMAL";
+  return undefined;
+}
+
+export function geminiThinkingLevel(effort, minimum) {
   if (effort == null || effort === "") return undefined;
   const value = String(effort).toLowerCase();
   if (value === "auto") return undefined;
-  const level = { none: "LOW", min: "LOW", minimal: "LOW", low: "LOW", medium: "MEDIUM", high: "HIGH", max: "HIGH", xhigh: "HIGH" }[value];
-  if (!level) throw invalid("invalid_gemini4_thinking_level", "Gemini 4 Argon supports LOW, MEDIUM or HIGH thinking; thinking cannot be disabled.");
+  const level = { none: minimum, min: minimum, minimal: minimum, low: "LOW", medium: "MEDIUM", high: "HIGH", max: "HIGH", xhigh: "HIGH" }[value];
+  if (!level) throw invalid("invalid_gemini4_thinking_level", "Unsupported thinking level for this Gemini text model.");
   return level;
 }
 
-export function prepareGemini4Request(payload, model) {
-  if (!isGemini4Argon(model)) return payload;
+export function prepareGeminiThinkingRequest(payload, model) {
+  const minimum = minimumThinkingLevel(model);
+  if (!minimum) return payload;
+  const argon = isGemini4Argon(model);
   const google = payload.extra_body?.google;
   const thinking = google?.thinking_config;
-  if (google?.cached_content != null) throw invalid("unsupported_gemini4_cached_content", "Gemini 4 Argon does not support explicit cached_content; use a shared prompt prefix for implicit caching.");
-  if (thinking?.thinking_budget != null || thinking?.thinkingBudget != null) {
+  if (argon && google?.cached_content != null) throw invalid("unsupported_gemini4_cached_content", "Gemini 4 Argon does not support explicit cached_content; use a shared prompt prefix for implicit caching.");
+  if (argon && (thinking?.thinking_budget != null || thinking?.thinkingBudget != null)) {
     throw invalid("unsupported_gemini4_thinking_budget", "Gemini 4 Argon does not support a numeric thinking budget; use thinking_level LOW, MEDIUM or HIGH.");
   }
   if (thinking != null && (typeof thinking !== "object" || Array.isArray(thinking))) {
     throw invalid("invalid_gemini4_thinking_level", "thinking_config must be an object.");
   }
   // An explicit provider config wins, including an include-thoughts-only config.
-  const level = gemini4ThinkingLevel(thinking != null ? thinking.thinking_level ?? thinking.thinkingLevel : payload.reasoning_effort);
+  const level = geminiThinkingLevel(thinking != null ? thinking.thinking_level ?? thinking.thinkingLevel : payload.reasoning_effort, minimum);
   if (thinking == null && level == null) {
     if (payload.reasoning_effort == null) return payload;
     const { reasoning_effort, ...result } = payload;

@@ -61,7 +61,7 @@ function updateStatus(result) {
     const where = result.character && result.param ? ` ${result.character}，位置 ${result.param}。` : "";
     return showStatus((errors[result.error] || `请求失败（${code}）。请查看酒馆错误提示；未自动重试。`) + where + cause);
   }
-  const unicode = result.unicode ? { encoded: result.unicode.method === "all-context" ? `已对全部上下文中的 ${result.unicode.matchedMessages} 条消息转码。` : "已对当前用户输入的匹配文本转码。", "floor-not-found": "请求中没有找到当前用户输入的原文，按原文发送。", "no-encodable-text": "所选范围没有需要转码的字符。" }[result.unicode.reason] || "" : "";
+  const unicode = result.unicode ? { encoded: result.unicode.method === "all-context" ? `已对全部上下文中的 ${result.unicode.matchedMessages} 条消息转码。` : result.unicode.method === "recent-floors" ? `已在所选楼层范围内对 ${result.unicode.matchedMessages} 条请求消息转码。` : "已对当前用户输入的匹配文本转码。", "floor-not-found": "请求中没有找到所选楼层的原文，按原文发送。", "no-encodable-text": "所选范围没有需要转码的字符。" }[result.unicode.reason] || "" : "";
   const format = { alternate: "隔字 Unicode", table: "高频字表" }[result.unicode?.format];
   const basis = { gemma: "酒馆 Gemma 分词估算", utf8: "分词器不可用，按 UTF-8 长度估算", "body-limit": "另一种格式超过请求大小限制" }[result.unicode?.selection];
   const optimized = format ? format + "（" + basis + "）。" : "";
@@ -106,22 +106,27 @@ function mountInputEncoding(panel, saved) {
   const summary = panel.querySelector("#vertex_encoding_summary");
   if (!direct) method.add(new Option("文字转图", "image"));
   const unicode = saved.unicodeInput;
-  if (unicode === "optimized" || unicode === "optimized-all") method.value = "optimized";
-  else if (unicode === true || unicode === "all") method.value = "unicode";
+  if (["optimized", "optimized-all", "optimized-recent"].includes(unicode)) method.value = "optimized";
+  else if (unicode === true || unicode === "all" || unicode === "recent") method.value = "unicode";
   else if (!direct && ["current-turn", "all"].includes(saved.imageInput)) method.value = "image";
   scope.value = (method.value === "image" ? saved.imageInput === "all" : unicode === "all" || unicode === "optimized-all") ? "all" : "current";
 
+  if (["recent", "optimized-recent"].includes(unicode)) scope.value = "recent";
+
   function render() {
     const image = method.value === "image";
+    scope.options[2].hidden = image;
     scope.options[0].text = image ? "当前轮" : "当前输入";
     scope.options[1].text = image ? "全部会话" : "全部上下文";
     scope.parentElement.hidden = method.value === "off";
     summary.textContent = method.selectedOptions[0].text + (method.value === "off" ? "" : " · " + scope.selectedOptions[0].text);
   }
   function change() {
+    if (method.value === "image" && scope.value === "recent") scope.value = "current";
+    const recent = scope.value === "recent";
     const all = scope.value === "all";
-    const unicodeInput = method.value === "unicode" ? (all ? "all" : true)
-      : method.value === "optimized" ? (all ? "optimized-all" : "optimized") : false;
+    const unicodeInput = method.value === "unicode" ? (recent ? "recent" : all ? "all" : true)
+      : method.value === "optimized" ? (recent ? "optimized-recent" : all ? "optimized-all" : "optimized") : false;
     const imageInput = method.value === "image" ? (all ? "all" : "current-turn") : "off";
     saveSettings({ unicodeInput, imageInput });
     render();
@@ -204,6 +209,7 @@ function mount() {
         </select></label>
         <label>转码范围<select id="vertex_encoding_scope" class="text_pole">
           <option value="current">当前输入</option><option value="all">全部上下文</option>
+          <option value="recent">最近两个 AI 楼层与当前输入</option>
         </select></label>
       </div>
     </details>
@@ -269,6 +275,7 @@ function mount() {
       getWaitForStopUsage: () => settings().waitForStopUsage,
       getTagStop: () => settings().tucaoStop === false ? null
         : { tag: settings().stopTag ?? DEFAULT_STOP_TAG, count: settings().stopCount ?? DEFAULT_STOP_COUNT },
+      getRecentAiFloors: () => SillyTavern.getContext().chat.filter(floor => floor?.is_user === false && !floor.is_system).slice(-2).map(floor => floor.mes),
       getUserFloor: () => {
         const context = SillyTavern.getContext();
         return latestUserInput(context.chat, context.chatMetadata?.variables);

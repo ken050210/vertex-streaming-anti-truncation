@@ -2,7 +2,7 @@
 // Match message text only: never substitute serialized protocol fields.
 // The client supplies the actual chat floor; assembled messages are not a chat store.
 const reasons = new Set(["encoded", "floor-not-found", "no-encodable-text"]);
-const methods = new Set(["chat-floor-match", "all-context"]);
+const methods = new Set(["chat-floor-match", "recent-floors", "all-context"]);
 const counter = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
 
 export function unicodeInputLogFields(value) {
@@ -45,21 +45,57 @@ export function prepareUnicodeInput(input, enabled, limitBytes, codec) {
   if (!enabled) return { payload, metadata: null };
   const encode = codec?.encode ?? encodeUnicodeText;
   const all = enabled === "all";
+  const recent = enabled === "recent";
   if (!all && (!source || typeof source !== "object" || Array.isArray(source) ||
-      Object.keys(source).some(key => key !== "user_floor") || typeof source.user_floor !== "string" || !source.user_floor.length)) {
+      Object.keys(source).some(key => key !== "user_floor" && !(recent && key === "ai_floors")) || typeof source.user_floor !== "string" || (!recent && !source.user_floor.length))) {
     throw inputError(400, "unicode_floor_required", "Unicode input requires router_unicode_input.user_floor from the latest real user chat floor");
   }
   const floor = all ? "" : source.user_floor;
   // Longest form first, so at one position the original wins over its trimmed copy.
-  const variants = [...new Set([floor, floor.trim(), floor.replace(/\r\n?/g, "\n")].filter(Boolean))]
+  const floorVariants = floor => [...new Set([floor, floor.trim(), floor.replace(/\r\n?/g, "\n")].filter(Boolean))]
     .map(text => ({ text, encoded: encode(text) })).filter(variant => variant.encoded.count)
     .sort((left, right) => right.text.length - left.text.length);
-  const metadata = { reason: all ? "no-encodable-text" : "floor-not-found", method: all ? "all-context" : "chat-floor-match", encodedCharacters: 0, matchedMessages: 0, occurrences: 0 };
+  const userVariants = floorVariants(floor);
+  const aiMatches = new Map();
+  if (recent) {
+    // Presets may put several floors in one message. Walk the outgoing text backwards
+    // so equal replies in older history don't get encoded along with the selected two.
+    let lastMessage = payload.messages.length - 1, lastPart = Infinity, end = Infinity;
+    for (const aiFloor of source.ai_floors.slice(-2).reverse()) {
+      if (typeof aiFloor !== "string" || !aiFloor.trim()) continue;
+      const variants = floorVariants(aiFloor);
+      search: for (let i = lastMessage; i >= 0; i--) {
+        const message = payload.messages[i];
+        if (!["assistant", "user", "system", "developer"].includes(message?.role)) continue;
+        const parts = Array.isArray(message.content) ? message.content : [message.content];
+        for (let j = Math.min(parts.length - 1, i === lastMessage ? lastPart : Infinity); j >= 0; j--) {
+          const part = parts[j];
+          const value = typeof part === "string" ? part : part?.type === "text" ? part.text : null;
+          if (typeof value !== "string") continue;
+          const stop = i === lastMessage && j === lastPart ? end : value.length;
+          let match;
+          for (const variant of variants) {
+            if (variant.text.length > stop) continue;
+            const at = value.lastIndexOf(variant.text, stop - variant.text.length);
+            if (at >= 0 && (!match || at + variant.text.length > match.at + match.text.length)) match = { ...variant, at };
+          }
+          if (!match) continue;
+          const key = i + "/" + j;
+          aiMatches.set(key, [...(aiMatches.get(key) ?? []), match]);
+          lastMessage = i;
+          lastPart = j;
+          end = match.at;
+          break search;
+        }
+      }
+    }
+  }
+  const metadata = { reason: all ? "no-encodable-text" : "floor-not-found", method: all ? "all-context" : recent ? "recent-floors" : "chat-floor-match", encodedCharacters: 0, matchedMessages: 0, occurrences: 0 };
   // One left-to-right pass, so an inserted block is never matched again. Unlike the
   // reference, a match that lies inside a tag or an existing ⟦U:…⟧ block of the
   // surrounding text (a preset's <剧情> tag, say) is left unchanged. A tag here
   // cannot contain another "<" or a newline, so a stray "<3" protects nothing.
-  const replaceText = text => {
+  const replaceText = (text, variants) => {
     const value = String(text ?? "");
     if (all) {
       const encoded = encode(value);
@@ -78,6 +114,7 @@ export function prepareUnicodeInput(input, enabled, limitBytes, codec) {
       return low > 0 && at + length <= spans[low - 1][1];
     };
     const find = (variant, from) => {
+      if (variant.at !== undefined) return variant.at >= from && !isProtected(variant.at, variant.text.length) ? variant.at : -1;
       let at = value.indexOf(variant.text, from);
       while (at >= 0 && isProtected(at, variant.text.length)) at = value.indexOf(variant.text, at + 1);
       return at;
@@ -99,29 +136,31 @@ export function prepareUnicodeInput(input, enabled, limitBytes, codec) {
   };
   // Compare candidate costs on the changed fields, including the shared reading guide once.
   const fields = [];
-  const transformField = text => {
+  const transformField = (text, index, part = 0) => {
+    const ai = recent && aiMatches.get(index + "/" + part);
+    const variants = ai ? [...ai, ...userVariants].sort((a, b) => b.text.length - a.text.length) : userVariants;
     const before = metadata.occurrences;
-    const result = replaceText(text);
+    const result = replaceText(text, variants);
     if (!codec || before === metadata.occurrences) return result;
     const field = fields.length ? result : codec.guide + result;
     fields.push(field);
     return field;
   };
-  const messages = payload.messages.map(message => {
+  const messages = payload.messages.map((message, index) => {
     if (!message || typeof message !== "object") return message;
     // A tool result may itself be structured JSON consumed by another tool.
-    if ((all || codec) && !["system", "developer", "user", "assistant"].includes(message.role)) return message;
+    if ((all || recent || codec) && !["system", "developer", "user", "assistant"].includes(message.role)) return message;
     const before = metadata.occurrences;
-    const content = typeof message.content === "string" ? transformField(message.content)
-      : Array.isArray(message.content) ? message.content.map(part => typeof part === "string" ? transformField(part)
-        : part?.type === "text" && typeof part.text === "string" ? { ...part, text: transformField(part.text) } : part)
+    const content = typeof message.content === "string" ? transformField(message.content, index)
+      : Array.isArray(message.content) ? message.content.map((part, j) => typeof part === "string" ? transformField(part, index, j)
+        : part?.type === "text" && typeof part.text === "string" ? { ...part, text: transformField(part.text, index, j) } : part)
         : message.content;
     if (metadata.occurrences === before) return message;
     metadata.matchedMessages++;
     return { ...message, content };
   });
   if (metadata.occurrences) payload = { ...payload, messages };
-  else if (!all && !variants.length) metadata.reason = "no-encodable-text";
+  else if (!all && !userVariants.length && !source.ai_floors?.some(Boolean)) metadata.reason = "no-encodable-text";
   if (metadata.occurrences) metadata.reason = "encoded";
   if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > limitBytes) {
     throw inputError(413, "unicode_input_too_large", "Unicode-encoded request exceeds the configured body limit");

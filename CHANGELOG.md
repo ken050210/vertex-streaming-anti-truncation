@@ -2,7 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
-## Unreleased
+## SillyTavern 0.15.0 and Gateway 0.18.1
+
+- Forward the selected thinking level for Gemini 4 Carbon, Hydrogen and supported Gemini 3 text models. Gemini 3.1 Pro receives a medium preset as `MEDIUM`. Gemini 2.5 retains its token budgets.
+- Tavern's Unicode and optimized input modes can encode the two most recent assistant messages together with the current input.
 
 - The gateway and Tavern plugin now use the text tool name setting to select a tool already declared by the preset, such as `game_content(content)`. An empty field keeps the built-in transport.
 

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isGemini4Argon, prepareGemini4Request, capGemini4Output, gemini4OutputLimit, encodeGemini4ToolId, gemini4ToolMetadata } from "../src/gemini4.mjs";
+import { isGemini4Argon, prepareGeminiThinkingRequest, capGemini4Output, gemini4OutputLimit, encodeGemini4ToolId, gemini4ToolMetadata } from "../src/gemini4.mjs";
+import { prepareSillyTavernRequest } from "../src/sillytavern.mjs";
 import { convertGeminiPrefill } from "../src/gemini-compat.mjs";
 
 const model = "google/gemini-4-argon";
@@ -8,28 +9,46 @@ test("Gemini 4 thinking uses levels, preserves explicit config and caller data",
   for (const [effort, level] of [["low", "LOW"], ["medium", "MEDIUM"], ["high", "HIGH"], ["minimal", "LOW"], ["none", "LOW"], ["max", "HIGH"]]) {
     const input = { reasoning_effort: effort, max_tokens: 123, messages: [{ role: "user", content: "fixture" }] };
     const original = structuredClone(input);
-    const result = prepareGemini4Request(input, model);
+    const result = prepareGeminiThinkingRequest(input, model);
     assert.deepEqual(result.extra_body.google.thinking_config, { thinking_level: level });
     assert.equal(result.reasoning_effort, undefined);
     assert.equal(result.max_tokens, 123);
     assert.deepEqual(input, original);
   }
   const explicit = { reasoning_effort: "high", extra_body: { google: { thinking_config: { thinkingLevel: "low", include_thoughts: true } } } };
-  assert.deepEqual(prepareGemini4Request(explicit, model).extra_body.google.thinking_config, { thinking_level: "LOW", include_thoughts: true });
+  assert.deepEqual(prepareGeminiThinkingRequest(explicit, model).extra_body.google.thinking_config, { thinking_level: "LOW", include_thoughts: true });
   const defaultRequest = { messages: [] };
-  assert.strictEqual(prepareGemini4Request(defaultRequest, model), defaultRequest);
-  assert.deepEqual(prepareGemini4Request({ reasoning_effort: "auto" }, model), {});
-  assert.strictEqual(prepareGemini4Request(explicit, "gemini-3.8-flash"), explicit);
+  assert.strictEqual(prepareGeminiThinkingRequest(defaultRequest, model), defaultRequest);
+  assert.deepEqual(prepareGeminiThinkingRequest({ reasoning_effort: "auto" }, model), {});
+  assert.strictEqual(prepareGeminiThinkingRequest(explicit, "gemini-2.5-flash"), explicit);
   assert.ok(isGemini4Argon("google/gemini-4-argon@001"));
   assert.equal(isGemini4Argon("gemini-4-argon-invented"), false);
 });
 
+test("Tavern and gateway preserve preset levels and provider defaults on level-based models", () => {
+  const adapters = { convertGooglePrompt: () => ({ contents: [{ role: "user", parts: [{ text: "hello" }] }] }), getPromptNames: () => ({}), safetySettings: [] };
+  for (const [model, min] of [["gemini-4-carbon", "LOW"], ["gemini-4-hydrogen", "LOW"], ["gemini-3.1-pro-preview", "LOW"], ["gemini-3.8-flash", "LOW"], ["gemini-3.5-flash-lite", "MINIMAL"]]) {
+    for (const [effort, level] of [["auto", undefined], ["min", min], ["low", "LOW"], ["medium", "MEDIUM"], ["high", "HIGH"]]) {
+      const upstream = prepareGeminiThinkingRequest({ reasoning_effort: effort }, "google/" + model + "@001");
+      assert.deepEqual(upstream, level ? { extra_body: { google: { thinking_config: { thinking_level: level } } } } : {});
+      for (const mode of ["buffered", "streaming"]) {
+        const body = { chat_completion_source: "vertexai", model, messages: [{ role: "user", content: "hello" }],
+          reasoning_effort: effort, include_reasoning: true, vertex_anti_truncation: mode, stream: mode === "streaming" };
+        const actual = prepareSillyTavernRequest({ body }, adapters).body.generationConfig.thinkingConfig;
+        assert.deepEqual(actual, level ? { includeThoughts: true, thinkingLevel: level } : { includeThoughts: true });
+      }
+    }
+    const google = { cached_content: "fixture", thinking_config: { include_thoughts: true } };
+    assert.deepEqual(prepareGeminiThinkingRequest({ reasoning_effort: "high", extra_body: { google } }, model), { extra_body: { google } });
+  }
+});
+
 test("Gemini 4 rejects numeric budgets and explicit cache locally", () => {
   for (const field of ["thinking_budget", "thinkingBudget"]) {
-    assert.throws(() => prepareGemini4Request({ extra_body: { google: { thinking_config: { [field]: 1024 } } } }, model), { status: 400, code: "unsupported_gemini4_thinking_budget" });
+    assert.throws(() => prepareGeminiThinkingRequest({ extra_body: { google: { thinking_config: { [field]: 1024 } } } }, model), { status: 400, code: "unsupported_gemini4_thinking_budget" });
   }
-  assert.throws(() => prepareGemini4Request({ extra_body: { google: { cached_content: "fixture-cache" } } }, model), { status: 400, code: "unsupported_gemini4_cached_content" });
-  assert.throws(() => prepareGemini4Request({ reasoning_effort: "invalid" }, model), { status: 400, code: "invalid_gemini4_thinking_level" });
+  assert.throws(() => prepareGeminiThinkingRequest({ extra_body: { google: { cached_content: "fixture-cache" } } }, model), { status: 400, code: "unsupported_gemini4_cached_content" });
+  assert.throws(() => prepareGeminiThinkingRequest({ reasoning_effort: "invalid" }, model), { status: 400, code: "invalid_gemini4_thinking_level" });
 });
 
 test("Gemini 4 output ceilings over one request's limit are capped, or kept for long decode", () => {

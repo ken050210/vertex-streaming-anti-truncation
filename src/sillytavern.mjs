@@ -7,7 +7,7 @@ import { completionStream } from "./completion-stream.mjs";
 import { documentedUnsupported } from "./unsupported-params.mjs";
 import { isObject, protocolError, readUpstreamError, sseData, transformSse } from "./wire.mjs";
 import { bypassReason, BODY_LIMIT } from "../integrations/sillytavern/shared.js";
-import { isGemini4Argon, gemini4OutputLimit, gemini4ThinkingLevel, gemini4ToolMetadata } from "./gemini4.mjs";
+import { isGemini4Argon, gemini4OutputLimit, minimumThinkingLevel, geminiThinkingLevel, gemini4ToolMetadata } from "./gemini4.mjs";
 import { createTagStop, hasUsageTotals } from "./tag-stop.mjs";
 import { normalizeStopUsageWait, validateTagStopRule } from "./tag-stop-rule.mjs";
 
@@ -69,8 +69,11 @@ export function prepareSillyTavernRequest(request, adapters) {
   }
   if (body.stop != null && (!Array.isArray(body.stop) || body.stop.some(value => typeof value !== "string"))) throw requestError("invalid_stop");
   if (body.stop?.length) config.stopSequences = [...body.stop];
-  if (isGemini4Argon(body.model)) {
-    config.thinkingConfig = { thinkingLevel: gemini4ThinkingLevel(body.reasoning_effort) ?? "MEDIUM", includeThoughts: Boolean(body.include_reasoning) };
+  const minimum = minimumThinkingLevel(body.model);
+  if (minimum) {
+    const level = geminiThinkingLevel(body.reasoning_effort, minimum) ?? (isGemini4Argon(body.model) ? "MEDIUM" : undefined);
+    config.thinkingConfig = { includeThoughts: Boolean(body.include_reasoning) };
+    if (level) config.thinkingConfig.thinkingLevel = level;
   } else if (/^gemini-(2\.5|3[.\d]*)-(flash|pro)/.test(body.model)) {
     const budget = adapters.calculateGoogleBudgetTokens(body.max_tokens, String(body.reasoning_effort), body.model);
     config.thinkingConfig = { includeThoughts: Boolean(body.include_reasoning) && budget !== 0 };

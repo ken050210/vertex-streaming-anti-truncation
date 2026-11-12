@@ -15,7 +15,7 @@ import { geminiModelKey, modelProfiles } from "./model-profiles.mjs";
 import { vertexBaseUrl } from "./config.mjs";
 import { completionStream, aliasStream } from "./completion-stream.mjs";
 import { convertGeminiPrefill, fetchWithGeminiRecovery, compatibilityLogFields } from "./gemini-compat.mjs";
-import { capGemini4Output, isGemini4Carbon, outputLimitHeaders, prepareGemini4Request, validateGemini4Connection } from "./gemini4.mjs";
+import { capGemini4Output, isGemini4Argon, isGemini4Carbon, outputLimitHeaders, prepareGeminiThinkingRequest, validateGemini4Connection } from "./gemini4.mjs";
 import { fetchLongDecode, longDecodeUrl } from "./vertex-long-decode.mjs";
 import { documentedUnsupported, dropParams } from "./unsupported-params.mjs";
 import { checkCompatibleRejection, googleErrorDetail, readUpstreamError, sseData, trafficType, upstreamErrorLogFields, upstreamMessage } from "./wire.mjs";
@@ -204,7 +204,8 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           // A custom upstream gets its own model name verbatim. Gemini-specific handling follows the
           // model that name refers to, and is skipped when none is recognizable.
           const modelKey = custom ? geminiModelKey(route.upstreamModel) : route.upstreamModel;
-          payload = prepareGemini4Request(payload, modelKey);
+          // Generic OpenAI relays own their effort mapping. Retain the existing Argon relay contract.
+          if (!custom || isGemini4Argon(modelKey)) payload = prepareGeminiThinkingRequest(payload, modelKey);
           try {
             const prepared = prepareUnicodeInput(payload, config.unicodeInput, config.bodyLimitBytes);
             payload = prepared.payload; unicode = prepared.metadata;

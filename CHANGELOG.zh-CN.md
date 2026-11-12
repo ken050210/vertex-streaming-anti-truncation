@@ -2,7 +2,10 @@
 
 中文 | [English](CHANGELOG.md)
 
-## 未发布
+## 酒馆插件 0.15.0 和网关 0.18.1
+
+- Gemini 4 Carbon、Hydrogen 和支持思考档位的 Gemini 3 文本模型按所选强度发送。Gemini 3.1 Pro 的中档发送 `MEDIUM`。Gemini 2.5 继续使用 token 预算。
+- 酒馆 Unicode 和优化转码可同时处理最近两个 AI 楼层与当前输入。
 
 - 网关和酒馆插件现在用「预设正文工具名」指定预设已声明的工具，例如 `game_content(content)`。留空使用内置传输工具。
 
