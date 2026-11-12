@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { startPricingUpdates } from "../src/pricing.mjs";
 import { createConsole } from "../src/console-server.mjs";
 import { loadNetworkConfig } from "../src/network-config.mjs";
 
@@ -8,6 +9,7 @@ try {
   const network = loadNetworkConfig();
   const app = await createConsole({ network, logger: event => process.stdout.write(JSON.stringify(event) + "\n") });
   await app.listen(port);
+  startPricingUpdates();
   const url = network.guiOrigin ? network.guiOrigin + "/" : `http://127.0.0.1:${port}/`;
   console.log(`Vertex Gateway console: ${url}`);
   console.log(`Listening on ${network.listenHost}; console port ${port}`);

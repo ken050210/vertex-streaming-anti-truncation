@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { estimateCostUsd, usageTokens } from "../src/pricing.mjs";
+import { estimateCostUsd, refreshPricing, usageTokens } from "../src/pricing.mjs";
 
 const tokens = (promptTokens, outputTokens, cachedTokens = 0) => ({ promptTokens, cachedTokens, outputTokens });
 const october = new Date("2026-10-17T12:00:00Z");
@@ -12,6 +12,19 @@ test("usage tokens count thinking reported only in the total and cap cached toke
   for (const usage of [null, {}, { prompt_tokens: 1 }, { prompt_tokens: -1, completion_tokens: 1 }, { prompt_tokens: "1", completion_tokens: 1 }]) assert.equal(usageTokens(usage), null);
 });
 
+test("live Vertex rows use the reported tier and survive an invalid refresh", async () => {
+  const row = { source: "vertexai", model: "gemini-4-carbon", tier: "priority", input: 8, cachedInput: 1, output: 12, validUntil: "2026-11-30" };
+  const feed = entries => async () => Response.json({ schemaVersion: 1, pricing: {
+    updatedAt: "2026-11-14", currency: "USD", unit: "per_million_tokens", entries
+  } });
+  await refreshPricing(feed([{ ...row, source: "makersuite", input: 999 }, row]));
+  await assert.rejects(refreshPricing(feed([{ ...row, cachedInput: -1 }])));
+  const options = { at: new Date("2026-11-30"), trafficType: "ON_DEMAND_PRIORITY" };
+  const usage = tokens(100_000, 10_000, 20_000);
+  assert.equal(estimateCostUsd(row.model, usage, options), 0.78);
+  assert.equal(estimateCostUsd(row.model, usage, { ...options, at: new Date("2026-12-01") }), 0.9432);
+});
+
 test("estimates follow Google's list prices by model, date, tier, region and prompt length", () => {
   // Gemini 3.7 Flash: $0.75 input, $0.075 cached, $3.75 output per 1M through 2026, then double.
   assert.equal(estimateCostUsd("google/gemini-3.7-flash", tokens(1_000_000, 1_000_000), { at: october }), 4.5);
@@ -20,6 +33,13 @@ test("estimates follow Google's list prices by model, date, tier, region and pro
   // Gemini 4 Argon's promotion ends on November 30, 2026.
   assert.equal(estimateCostUsd("google/gemini-4-argon", tokens(1_000_000, 1_000_000), { at: new Date("2026-11-30T23:59:59Z") }), 12);
   assert.equal(estimateCostUsd("google/gemini-4-argon", tokens(1_000_000, 1_000_000), { at: new Date("2026-12-01T00:00:00Z") }), 24);
+  const mixed = tokens(100_000, 10_000, 20_000);
+  const before = { at: new Date("2026-11-30T23:59:59Z") };
+  const after = { at: new Date("2026-12-01T00:00:00Z") };
+  assert.equal(estimateCostUsd("google/gemini-4-carbon", mixed, before), 0.262);
+  assert.equal(estimateCostUsd("google/gemini-4-carbon", mixed, after), 0.524);
+  assert.equal(estimateCostUsd("google/gemini-4-hydrogen", mixed, before), 0.1965);
+  assert.equal(estimateCostUsd("google/gemini-4-hydrogen", mixed, after), 0.1965);
   // The reported traffic type wins over the requested tier.
   assert.equal(estimateCostUsd("google/gemini-3.7-flash", tokens(1_000_000, 0), { serviceTier: "priority", trafficType: "ON_DEMAND", at: october }), 0.75);
   assert.equal(estimateCostUsd("google/gemini-3.7-flash", tokens(1_000_000, 0), { serviceTier: "priority", at: october }), 1.35);
