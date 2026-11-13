@@ -1,4 +1,15 @@
 export const DEFAULT_TRANSPORT_TOOL_NAME = "router_emit";
+export const SOLIUMBRA_TOOL = "soliumbra_reply";
+
+export function soliumbraSchema(toolName, tools) {
+  if (toolName !== SOLIUMBRA_TOOL) return;
+  const schema = tools?.find(tool => tool.function?.name === toolName)?.function.parameters;
+  if (schema?.type === "object" && schema.properties?.think_nya?.type === "string" &&
+      Array.isArray(schema.required) && schema.required.includes("think_nya") &&
+      schema.required.some(key => key !== "think_nya" && key !== "nya_oath") &&
+      schema.required.every(key => Object.hasOwn(schema.properties, key)) &&
+      Object.values(schema.properties).every(field => field?.type === "string")) return schema;
+}
 
 // Use names accepted by both native Vertex and OpenAI-compatible transports.
 export function validateTransportToolName(name) {
@@ -24,6 +35,7 @@ export function transportToolBypassReason({ tools, tool_choice: choice }, target
   }
   const matches = Array.isArray(tools) ? tools.filter(tool => tool?.function?.name === targetName) : [];
   if (!matches.length) return "target-tool-missing";
+  if (matches.length === 1 && matches[0].type === "function" && soliumbraSchema(targetName, matches)) return null;
   const schema = matches[0].function.parameters;
   if (matches.length !== 1 || matches[0].type !== "function" || schema?.type !== "object" ||
       schema.properties?.content?.type !== "string" || Object.keys(schema.properties).length !== 1 ||

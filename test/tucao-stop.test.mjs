@@ -121,7 +121,8 @@ test("tag stop defaults on, preserves legacy opt-outs and persists custom rules 
   assert.equal((await loadConfig({ ...env, TUCAO_STOP: "true" })).tucaoStop, true);
   assert.equal((await loadConfig({ ...env, TUCAO_STOP: "false" })).tucaoStop, false);
   assert.equal((await loadConfig({ ...env, TUCAO_STOP: "true", TAG_STOP: "false" })).tucaoStop, false);
-  const custom = await loadConfig({ ...env, TAG_STOP: "true", STOP_TAG: "A", STOP_COUNT: "1" });
+  const custom = await loadConfig({ ...env, TAG_STOP: "true", STOP_TAG: "A", STOP_COUNT: "1", STOP_EXEMPT_TAG: "plan~" });
+  assert.equal(custom.stopExemptTag, "plan~");
   assert.equal(custom.stopTag, "A");
   assert.equal(custom.stopCount, 1);
   await assert.rejects(loadConfig({ ...env, TUCAO_STOP: "yes" }), /TUCAO_STOP/);
@@ -132,7 +133,8 @@ test("tag stop defaults on, preserves legacy opt-outs and persists custom rules 
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = createSettingsStore({ directory, env });
   const initial = await store.load();
-  const saved = await store.save({ ...initial.settings, tucaoStop: true, stopTag: "A", stopCount: 1 }, initial.revision);
+  const saved = await store.save({ ...initial.settings, tucaoStop: true, stopTag: "A", stopCount: 1, stopExemptTag: "plan~" }, initial.revision);
+  assert.equal((await store.load()).settings.stopExemptTag, "plan~");
   assert.equal((await store.load()).settings.tucaoStop, true);
   assert.equal((await store.load()).settings.stopTag, "A");
   assert.equal((await store.load()).settings.stopCount, 1);
@@ -163,7 +165,7 @@ test("the extension requires the cutoff feature only when opted in and sends the
 });
 
 test("gateway applies custom tag/count to native and compatible streaming and buffered replies", async t => {
-  const prefix = "</A><a>wrong case</a><A>正文</A>";
+  const prefix = "<konatan_planning~><A></A></konatan_planning~></A><a>wrong case</a><A>正文</A>";
   for (const native of [true, false]) for (const stream of [true, false]) {
     const f = await fixture(t, native, () => stream ? new Response(native
       ? nativeCall({ name, willContinue: true }) + [...prefix + noise].map(nativePart).join("")
@@ -171,7 +173,7 @@ test("gateway applies custom tag/count to native and compatible streaming and bu
       : Response.json(native
         ? { candidates: [{ content: { parts: [{ functionCall: { name, args: { content: prefix + noise } } }] }, finishReason: "STOP" }] }
         : { choices: [{ message: { role: "assistant", content: prefix + noise }, finish_reason: "stop" }] }),
-    { stopTag: "A", stopCount: 1, models: [{ id: "fixture", upstreamModel: "gemini-4-argon", mode: stream ? "streaming" : "buffered" }] });
+    { stopTag: "A", stopCount: 1, stopExemptTag: "konatan_planning~", models: [{ id: "fixture", upstreamModel: "gemini-4-argon", mode: stream ? "streaming" : "buffered" }] });
     const response = await f.post({ stream });
     assert.equal(response.status, 200);
     assert.equal(stream ? visible(await response.text()) : (await response.json()).choices[0].message.content, prefix);

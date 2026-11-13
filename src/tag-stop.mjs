@@ -10,9 +10,13 @@ export function hasUsageTotals(usage) {
 
 // Count complete outermost tag pairs in this reply's visible text. Exact opening
 // and closing tags can span any number of events; unmatched closings do not count.
-// Inspect native string values before their unfinished tool JSON is reconstructed.
-export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_STOP_COUNT) {
+// Structured replies can also feed their rendered text into clip, leaving this
+// reader responsible for cancellation and the optional metering tail.
+export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_STOP_COUNT, exemptTag = "") {
   const opening = `<${tag}>`, closing = `</${tag}>`;
+  const exemptOpen = exemptTag && `<${exemptTag}>`, exemptClose = exemptTag && `</${exemptTag}>`;
+  const tokens = exemptTag ? [opening, closing, exemptOpen, exemptClose] : [opening, closing];
+  let exemptDepth = 0;
   let tail = "", channel, currentTool, matched = false, depth = 0, pairs = 0;
   let latestUsage, terminalUsage, pendingTailUsage, upstreamFinished = false;
   // Observe the provider's finish reason before clipping replaces it with STOP.
@@ -44,22 +48,27 @@ export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_
     channel ??= kind;
     if (channel !== kind) return text;
     const joined = tail + text;
-    let cursor = 0;
-    for (;;) {
-      const start = joined.indexOf(opening, cursor), end = joined.indexOf(closing, cursor);
-      if (start < 0 && end < 0) break;
-      if (start >= 0 && (end < 0 || start < end)) {
-        depth++;
-        cursor = start + opening.length;
+    const previousLength = tail.length;
+    tail = "";
+    for (let i = joined.indexOf("<"); i >= 0; i = joined.indexOf("<", i + 1)) {
+      const token = tokens.find(value => joined.startsWith(value, i));
+      if (!token) {
+        if (tokens.some(value => joined.length - i < value.length && value.startsWith(joined.slice(i)))) {
+          tail = joined.slice(i);
+          break;
+        }
         continue;
       }
-      cursor = end + closing.length;
-      if (depth > 0 && --depth === 0 && ++pairs === count) {
-        matched = true;
-        return text.slice(0, cursor - tail.length);
+      if (token === exemptOpen) exemptDepth++;
+      else if (token === exemptClose) exemptDepth = Math.max(0, exemptDepth - 1);
+      else if (exemptDepth === 0) {
+        if (token === opening) depth++;
+        else if (depth > 0 && --depth === 0 && ++pairs === count) {
+          matched = true;
+          return text.slice(0, i + token.length - previousLength);
+        }
       }
     }
-    tail = joined.slice(cursor).slice(-(closing.length - 1));
     return text;
   };
   const process = (frame, buffered = false) => {
@@ -103,12 +112,13 @@ export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_
   return {
     clip,
     process,
+    observe,
     marker: () => matched ? closing : undefined,
     receipt: () => {
       const final = hasUsageTotals(terminalUsage);
       return { final, usageMetadata: final ? terminalUsage : latestUsage };
     },
-    stream(response, waitForUsage = false, normalizeError) {
+    stream(response, waitForUsage = false, normalizeError, clipFields) {
       const reader = response.body.getReader(), encoder = new TextEncoder();
       let output, timer, deadline, emitted, closed = false, tailEnded = false;
       const emit = text => { output.enqueue(encoder.encode(text)); emitted = true; };
@@ -133,6 +143,7 @@ export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_
         }
         const hostError = normalizeError?.(frame);
         if (hostError) frame = hostError;
+        else if (clipFields) { observe(frame, false); clipFields(frame); }
         else process(frame);
         emit(sseData(frame));
       });

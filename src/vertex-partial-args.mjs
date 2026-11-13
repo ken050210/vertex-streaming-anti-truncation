@@ -4,7 +4,7 @@ const fail = () => { throw protocolError("anti_truncation_native_invalid_partial
 
 // Google sends scalar leaves addressed by JSONPath. Objects/arrays are inferred
 // from the path; a string may span fragments and end with a valueless marker.
-function pathKeys(path) {
+export function pathKeys(path) {
   if (typeof path !== "string" || path[0] !== "$") fail();
   const keys = [];
   let rest = path.slice(1);

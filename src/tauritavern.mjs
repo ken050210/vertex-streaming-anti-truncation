@@ -1,6 +1,7 @@
 import { prepareAntiTruncation, wrapAntiTruncationStream } from "./anti-truncation.mjs";
 import { nativeRequestBody } from "./vertex-native.mjs";
 import { wrapNativeTextStream } from "./vertex-text-stream.mjs";
+import { nativeSoliumbra } from "./soliumbra.mjs";
 import { guardCompletionStream } from "./completion-integrity.mjs";
 import { createTagStop } from "./tag-stop.mjs";
 import { capGemini4Output, outputLimitHeaders } from "./gemini4.mjs";
@@ -35,14 +36,14 @@ export function prepareTauriTavernRequest(body, mode, tagStop, transportToolName
   body = payload;
   const continuation = body.type === "continue";
   const upstreamStream = mode === "streaming" && body.stream === true;
-  const prepared = prepareAntiTruncation({ messages: body.messages, tools: body.tools, tool_choice: body.tool_choice }, true, false, { continuation, transportToolName });
+  const prepared = prepareAntiTruncation({ messages: body.messages, tools: body.tools, tool_choice: body.tool_choice, toolConfig: body.toolConfig }, true, false, { continuation, transportToolName });
   if (!prepared.toolName) return { bypass: prepared.reason };
   const native = nativeRequestBody({ ...prepared.payload, messages: [] });
   if (upstreamStream) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   return {
     body: { ...body, messages: prepared.payload.messages, stream: true,
       custom_include_body: JSON.stringify({ ...included, tools: native.tools, toolConfig: native.toolConfig }) },
-    toolName: prepared.toolName, tools: prepared.payload.tools, model: body.model, stream: body.stream === true, upstreamStream, continuation, outputLimit, tagStop,
+    toolName: prepared.toolName, schema: prepared.schema, tools: prepared.payload.tools, model: body.model, stream: body.stream === true, upstreamStream, continuation, outputLimit, tagStop,
   };
 }
 
@@ -134,14 +135,15 @@ export async function restoreBrowserStream(response, prepared, signal, tauri = f
     return new Response(JSON.stringify(failure({ code }, detail)), { status: detail?.promptBlocked ? 400 : 502, headers: { "content-type": "application/json" } });
   }
   const rule = prepared.tagStop;
-  const stop = rule && createTagStop(prepared.toolName, rule.tag, rule.count);
+  const stop = rule && createTagStop(prepared.toolName, rule.tag, rule.count, rule.exemptTag);
   let usageMetadata, textSignature;
   const getReceipt = () => stop?.marker() ? stop.receipt() : undefined;
-  const native = stop ? stop.stream(response, prepared.waitForStopUsage, tauri ? tauriErrorFrame : undefined)
+  const fields = prepared.schema && nativeSoliumbra(prepared.schema, stop);
+  const native = stop ? stop.stream(response, prepared.waitForStopUsage, tauri ? tauriErrorFrame : undefined, fields)
     : tauri ? normalizeTauriStream(response) : response;
-  const translated = wrapNativeTextStream(native, prepared.toolName, prepared.model,
-    usage => { usageMetadata = usage; }, true, prepared.tools, tauri ? undefined : signature => { textSignature = signature; });
-  const restored = guardCompletionStream(wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools), () => {}, null, BODY_LIMIT);
+  const translated = wrapNativeTextStream(native, fields ? null : prepared.toolName, prepared.model,
+    usage => { usageMetadata = usage; }, true, prepared.tools, tauri ? undefined : signature => { textSignature = signature; }, stop ? undefined : fields);
+  const restored = guardCompletionStream(wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools, undefined, Boolean(fields)), () => {}, null, BODY_LIMIT);
   const headers = { ...(prepared.continuation ? { "x-vertex-continuation": "suffix" } : {}), ...outputLimitHeaders(prepared.outputLimit) };
   if (prepared.upstreamStream) {
     return new Response(reportStreamFailure(toSillyTavernStream(restored, () => usageMetadata, prepared.model, stop?.marker, () => textSignature, getReceipt).body, signal),

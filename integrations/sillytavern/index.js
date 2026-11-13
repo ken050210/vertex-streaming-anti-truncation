@@ -10,7 +10,7 @@ const context = SillyTavern.getContext();
 const events = context.eventTypes ?? context.event_types;
 const labels = { off: "关闭（普通 Vertex）", buffered: "非流式抗截断", streaming: "流式抗截断" };
 const reasons = { "existing-tools": "旧版 functions 工具", "tool-choice": "请求指定必须调用工具", "tool-schema": "工具定义无法转为 Vertex 原生格式",
-  "target-tool-missing": "本次请求未声明指定的正文工具", "target-tool-schema": "正文工具需唯一同名，且只有一个必填字符串参数 content",
+  "target-tool-missing": "本次请求未声明指定的正文工具", "target-tool-schema": "请检查工具声明是否唯一，以及 content 或 soliumbra_reply 栏目是否符合预设格式",
   "target-tool-choice": "本次请求禁用了工具或指定了其他工具",
   "server-tools": "服务端插件较旧，不支持工具调用；更新服务端插件后重启酒馆",
   "structured-output": "结构化输出", "multiple-candidates": "多个候选回复",
@@ -142,12 +142,14 @@ function mountTransportOptions(panel, select, saved, payGoInstalled) {
   const stop = panel.querySelector("#vertex_tag_stop");
   const fields = panel.querySelector("#vertex_tag_fields");
   const tag = panel.querySelector("#vertex_stop_tag");
+  const exempt = panel.querySelector("#vertex_stop_exempt_tag");
   const count = panel.querySelector("#vertex_stop_count");
   const wait = panel.querySelector("#vertex_wait_for_stop_usage");
   const tool = panel.querySelector("#vertex_transport_tool_name");
   const hostStream = document.getElementById("stream_toggle");
   stop.checked = saved.tucaoStop ?? true;
   tag.value = saved.stopTag ?? DEFAULT_STOP_TAG;
+  exempt.value = saved.stopExemptTag ?? "";
   count.value = saved.stopCount ?? DEFAULT_STOP_COUNT;
   wait.value = String(normalizeStopUsageWait(saved.waitForStopUsage));
   tool.value = saved.transportToolName ?? "";
@@ -166,17 +168,20 @@ function mountTransportOptions(panel, select, saved, payGoInstalled) {
   wait.addEventListener("change", () => saveSettings({ waitForStopUsage: wait.value === "natural" ? "natural" : wait.value === "true" }));
   function changeRule() {
     try {
-      const rule = validateTagStopRule({ tag: tag.value.trim(), count: count.valueAsNumber });
+      const rule = validateTagStopRule({ tag: tag.value.trim(), count: count.valueAsNumber, exemptTag: exempt.value.trim() });
       tag.value = rule.tag;
-      saveSettings({ stopTag: rule.tag, stopCount: rule.count });
+      exempt.value = rule.exemptTag;
+      saveSettings({ stopExemptTag: rule.exemptTag, stopTag: rule.tag, stopCount: rule.count });
     } catch (error) {
       tag.value = settings().stopTag ?? DEFAULT_STOP_TAG;
+      exempt.value = settings().stopExemptTag ?? "";
       count.value = settings().stopCount ?? DEFAULT_STOP_COUNT;
       showStatus(error.message + " 已恢复上次设置。");
     }
     render();
   }
   tag.addEventListener("change", changeRule);
+  exempt.addEventListener("change", changeRule);
   count.addEventListener("change", changeRule);
   tool.addEventListener("change", () => {
     try {
@@ -219,6 +224,7 @@ function mount() {
         <label class="checkbox_label"><input type="checkbox" id="vertex_tag_stop"> 自定义标签截停</label>
         <div class="vertex-fields" id="vertex_tag_fields">
           <label>截停标签名（不含尖括号）<input class="text_pole" id="vertex_stop_tag" maxlength="64"></label>
+          <label>豁免标签块（块内不计数）<input class="text_pole" id="vertex_stop_exempt_tag" maxlength="64" placeholder="例如 konatan_planning~，留空关闭"></label>
           <label>完整出现次数<input class="text_pole" id="vertex_stop_count" type="number" min="1" step="1"></label>
           <small>命中的结束标签会保留，之后的内容会丢弃，包括 MVU 变量更新。</small>
           <label>截停后接收用量<select class="text_pole" id="vertex_wait_for_stop_usage">
@@ -228,7 +234,7 @@ function mount() {
           </select><small>命中标签后正文立即停显。等待期间 Google 生成的 token 会计入用量，点酒馆的停止按钮可提前断开。分段续写请求仍立即断流。</small></label>
         </div>
         <label>预设正文工具名<input class="text_pole" id="vertex_transport_tool_name" placeholder="例如 game_content" maxlength="64" spellcheck="false" aria-describedby="vertex_tool_name_help"></label>
-        <small id="vertex_tool_name_help">填写预设已声明的工具名，将它的 content 字符串显示为正文。留空使用内置工具。</small>
+        <small id="vertex_tool_name_help">小猫 Meowssiah 2.1.0 填 soliumbra_reply，可逐段显示思考、正文及动态栏目。其他正文工具使用 content 字符串。留空使用内置工具。</small>
       </div>
     </details>
     <div class="vertex-connection">
@@ -274,7 +280,8 @@ function mount() {
       getLongDecode: () => !direct && settings().longDecode === true,
       getWaitForStopUsage: () => settings().waitForStopUsage,
       getTagStop: () => settings().tucaoStop === false ? null
-        : { tag: settings().stopTag ?? DEFAULT_STOP_TAG, count: settings().stopCount ?? DEFAULT_STOP_COUNT },
+        : { tag: settings().stopTag ?? DEFAULT_STOP_TAG, count: settings().stopCount ?? DEFAULT_STOP_COUNT,
+          ...(settings().stopExemptTag ? { exemptTag: settings().stopExemptTag } : {}) },
       getRecentAiFloors: () => SillyTavern.getContext().chat.filter(floor => floor?.is_user === false && !floor.is_system).slice(-2).map(floor => floor.mes),
       getUserFloor: () => {
         const context = SillyTavern.getContext();

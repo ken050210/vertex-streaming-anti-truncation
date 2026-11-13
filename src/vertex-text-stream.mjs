@@ -9,7 +9,7 @@ const fail = suffix => { throw protocolError("anti_truncation_native_" + suffix)
 // emitted whole, including their final thought signature, for ST's tool reader.
 // Google serializes even parallel calls one after another using willContinue.
 // The empty-choices usage chunk follows OpenAI's stream_options.include_usage.
-export function wrapNativeTextStream(response, toolName, model, onNativeUsage = () => {}, includeUsage = true, tools = [], onTextSignature) {
+export function wrapNativeTextStream(response, toolName, model, onNativeUsage = () => {}, includeUsage = true, tools = [], onTextSignature, transformFields) {
   if (!response.ok || !response.body) return response;
   const id = "chatcmpl-" + crypto.randomUUID(), created = Math.floor(Date.now() / 1000);
   const allowed = new Set(tools.map(tool => tool.function?.name));
@@ -90,6 +90,7 @@ export function wrapNativeTextStream(response, toolName, model, onNativeUsage = 
     try { parsed = JSON.parse(data); } catch { fail("invalid_sse"); }
     if ((Array.isArray(parsed) ? parsed[0] : parsed)?.error) throw Object.assign(protocolError("upstream_stream_error"), { upstreamBody: parsed });
     checkPromptFeedback(parsed);
+    transformFields?.(parsed);
     if (parsed.usageMetadata) {
       onNativeUsage(parsed.usageMetadata);
       usage = translateUsage(parsed.usageMetadata);

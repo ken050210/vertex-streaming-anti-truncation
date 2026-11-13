@@ -1,11 +1,11 @@
 import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 import { prepareOptimizedInput } from "./optimized-input.js";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
-import { transportToolBypassReason } from "../../src/transport-tool-name.mjs";
+import { soliumbraSchema, transportToolBypassReason } from "../../src/transport-tool-name.mjs";
 import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.15.0";
+export const PLUGIN_VERSION = "0.16.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -14,10 +14,12 @@ export const MIN_SERVER_VERSION = "0.3.1";
 // server without "client-tools" rejects client tools and tool history; those keep ST's own route.
 export const TOOLS_FEATURE = "client-tools";
 export const TUCAO_FEATURE = "stop-after-second-tucao";
+const EXEMPT_TAG_FEATURE = "tag-stop-exempt-block";
 export const TAG_STOP_FEATURE = "stop-after-tag-pairs";
 export const NATURAL_STOP_USAGE_FEATURE = "tag-stop-natural-usage";
 export const TRANSPORT_NAME_FEATURE = "preset-transport-tool";
-export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, NATURAL_STOP_USAGE_FEATURE, "image-input-convert", "tag-stop-usage", TRANSPORT_NAME_FEATURE];
+const SOLIUMBRA_FEATURE = "soliumbra-stream";
+export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, EXEMPT_TAG_FEATURE, NATURAL_STOP_USAGE_FEATURE, "image-input-convert", "tag-stop-usage", TRANSPORT_NAME_FEATURE, SOLIUMBRA_FEATURE];
 export const MODES = ["off", "buffered", "streaming"];
 export const GENERATE_PATH = "/api/backends/chat-completions/generate";
 const PAYGO_GENERATE_PATH = "/api/plugins/vertex-paygo/native-gemini/generate";
@@ -182,7 +184,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (!reason && tagStop) {
       try { validateTagStopRule(tagStop); }
       catch (error) { onStatus({ error: error.code }); throw error; }
-      if (!direct && !payGo && !await ensureBackend(TAG_STOP_FEATURE)) {
+      if (!direct && !payGo && !await ensureBackend(tagStop.exemptTag ? EXEMPT_TAG_FEATURE : TAG_STOP_FEATURE)) {
         onStatus({ error: "tag_stop_not_supported" }); throw new Error("tag_stop_not_supported");
       }
       if (!direct && !payGo && mode === "streaming" && body.stream === true && waitForStopUsage === "natural" && !await ensureBackend(NATURAL_STOP_USAGE_FEATURE)) {
@@ -212,7 +214,8 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     // anti-truncation. Image input never falls back to plaintext.
     if (payload && !imageEnabled && new TextEncoder().encode(payload).length > BODY_LIMIT) reason = "too-large";
     if (reason && !unicodeEnabled) { onStatus({ bypass: reason }); return originalFetch(input, init); }
-    if (!reason && !direct && transportToolName && !await ensureBackend(TRANSPORT_NAME_FEATURE)) {
+    const transportFeature = soliumbraSchema(transportToolName, body.tools) ? SOLIUMBRA_FEATURE : TRANSPORT_NAME_FEATURE;
+    if (!reason && !direct && transportToolName && !await ensureBackend(transportFeature)) {
       onStatus({ error: "transport_tool_name_not_supported" }); throw new Error("transport_tool_name_not_supported");
     }
     // Old plugins ignore image settings and Continue semantics. Check only

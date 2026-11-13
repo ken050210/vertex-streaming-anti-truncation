@@ -1,6 +1,7 @@
 import { prepareAntiTruncation } from "../../src/anti-truncation.mjs";
 import { capGemini4Output } from "../../src/gemini4.mjs";
 import { createTagStop } from "../../src/tag-stop.mjs";
+import { nativeSoliumbra } from "../../src/soliumbra.mjs";
 import { receiptFields } from "../../src/sillytavern.mjs";
 import { restoreBrowserStream } from "../../src/tauritavern.mjs";
 import { BODY_LIMIT, PLUGIN_PATH } from "./shared.js";
@@ -43,7 +44,7 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
   let delivered = reply;
   if (reply.body) {
     if (body.stream && prepared.toolName) {
-      delivered = await restoreBrowserStream(reply, { toolName: prepared.toolName, tools: prepared.payload.tools,
+      delivered = await restoreBrowserStream(reply, { toolName: prepared.toolName, schema: prepared.schema, tools: prepared.payload.tools,
         model: body.model, continuation, stream: true, upstreamStream: live, tagStop, waitForStopUsage, outputLimit: capped.outputLimit }, signal);
     } else if (!body.stream) {
       const data = await reply.json();
@@ -53,7 +54,7 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
         return Response.json({ ...data, error: { ...(typeof data.error === "object" ? data.error : {}),
           code: data.error?.code ?? "paygo_upstream_error", message } }, { status: detail?.promptBlocked ? 400 : 502 });
       }
-      delivered = Response.json(prepared.toolName ? restorePayGoJson(data, prepared.toolName, tagStop) : data);
+      delivered = Response.json(prepared.toolName ? restorePayGoJson(data, prepared.toolName, tagStop, prepared.schema) : data);
     }
   }
   onStatus(delivered.ok ? { mode, payGo: true, unicode, continuation, outputLimit:capped.outputLimit,
@@ -64,14 +65,22 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
 
 // ST omits Google's finish reason from some non-streaming responses. Preserve
 // the host envelope, usage, and signatures on real tools. Never infer a finish.
-function restorePayGoJson(data, toolName, tagStop) {
+function restorePayGoJson(data, toolName, tagStop, schema) {
   if (data.error) return data;
   if (data.candidates?.length > 1) throw new Error("unexpected_candidates");
   const candidate = data.candidates?.[0] ?? {content:data.responseContent};
   if (!Array.isArray(candidate.content?.parts)) throw new Error("invalid_upstream_json");
-  const stop = tagStop && createTagStop(toolName, tagStop.tag, tagStop.count);
+  const stop = tagStop && createTagStop(toolName, tagStop.tag, tagStop.count, tagStop.exemptTag);
+  let restored = false;
+  const frame = { candidates: [candidate], usageMetadata: data.usageMetadata };
+  if (schema) {
+    restored = candidate.content.parts.some(part => part.functionCall?.name === toolName);
+    if (!restored && !["length", "content_filter"].includes(data.choices?.[0]?.finish_reason)) throw new Error("anti_truncation_missing_reply_tool");
+    stop?.observe(frame, true);
+    nativeSoliumbra(schema, stop)(frame);
+  }
   if (stop) {
-    stop.process({ candidates: [candidate], usageMetadata: data.usageMetadata }, true);
+    if (!schema) stop.process(frame, true);
     if (stop.marker()) {
       data.vertexStopAfter = stop.marker();
       const receipt = stop.receipt();
@@ -84,7 +93,6 @@ function restorePayGoJson(data, toolName, tagStop) {
       Object.assign(data, fields);
     }
   }
-  let restored = false;
   const parts = candidate.content.parts.map(part => {
     if (part.functionCall?.name !== toolName) return part;
     if (restored || typeof part.functionCall.args?.content !== "string") throw new Error("anti_truncation_invalid_arguments");
@@ -108,6 +116,6 @@ function restorePayGoJson(data, toolName, tagStop) {
       choice.finish_reason = "stop";
     }
   }
-  data.vertexAntiTruncation = {restored};
+  data.vertexAntiTruncation = {restored: restored && (!schema || !["length", "content_filter"].includes(choice?.finish_reason))};
   return data;
 }

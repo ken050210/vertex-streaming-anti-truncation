@@ -333,11 +333,13 @@ test("SillyTavern credentials stay per-user and selected secret; destinations ca
   assert.deepEqual(reads, [[input.user.directories, "test-key", "selected"]]);
   assert.equal(config.baseUrl, "https://aiplatform.googleapis.com/v1");
   assert.equal(config.tierHeaders["x-vertex-ai-llm-shared-request-type"], "flex");
-  for (const model of ["gemini-4-argon", "gemini-4-argon@001"]) {
+  for (const model of ["gemini-4-argon", "gemini-4-argon@001", "gemini-4-carbon"]) {
     assert.throws(() => connectionForRequest(request({ model }), adapters), { status: 400, code: "express_project_required" });
     const scoped = connectionForRequest(request({ model, vertexai_express_project_id: "example-project" }), adapters);
     assert.equal(scoped.baseUrl, "https://aiplatform.googleapis.com/v1/projects/example-project/locations/global");
   }
+  const carbon = connectionForRequest(request({ model: "gemini-4-carbon", vertexai_region: "us-central1", vertexai_express_project_id: "example-project" }), adapters);
+  assert.equal(carbon.baseUrl, "https://aiplatform.googleapis.com/v1/projects/example-project/locations/global");
   assert.throws(() => connectionForRequest(request({ vertexai_region: "global/evil" }), adapters));
   assert.throws(() => connectionForRequest(request({ reverse_proxy: "http://example.invalid" }), adapters));
   assert.throws(() => prepareSillyTavernRequest(request({ model: "../../private" }), adapters));

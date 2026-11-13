@@ -2,6 +2,10 @@
 
 [中文](VALIDATION.md) | English
 
+## Gateway 0.19.0 / SillyTavern 0.16.0 (2026-11-13)
+
+An offline replay ran Meowssiah 2.1.0’s request script and compared its formatter with unary and character-split results for theater, chat, custom sections and an omitted optional section. Tavern’s Vertex reader received text before the second fragment was sent. Loopback gateway tests exercise the native and compatible endpoints. Regression fixtures cover split closing tags, exempt blocks, missing sections, interrupted streams and token-limit endings. No real model generation was used. [Section tests](../test/soliumbra.test.mjs) · [Gateway tests](../test/gateway.test.mjs)
+
 ## Gateway 0.18.0 · Gemini 4 Carbon (2026-11-10)
 
 A loopback HTTP test calls the three public Carbon profiles on an account configured for `us-central1`. It checks the restored text and the `locations/global` URL for compatible and native streaming requests, then calls the legacy model and checks its regional URL. The test uses a simulated upstream. Access to Carbon on a real Vertex project was not tested. [Gateway routing test](../test/gateway.test.mjs)

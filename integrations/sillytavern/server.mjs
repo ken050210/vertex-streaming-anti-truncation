@@ -3,7 +3,7 @@ import { buildConnectionConfig } from "../../src/config.mjs";
 import { prepareImageInput } from "../../src/image-input.mjs";
 import { buildNativeUrl } from "../../src/vertex-native.mjs";
 import { parseServiceAccount } from "../../src/vertex-auth.mjs";
-import { outputLimitHeaders, validateGemini4Connection } from "../../src/gemini4.mjs";
+import { isGemini4Carbon, outputLimitHeaders, validateGemini4Connection } from "../../src/gemini4.mjs";
 import { fetchLongDecode, longDecodeUrl } from "../../src/vertex-long-decode.mjs";
 import { upstreamDispatcher } from "../../src/gateway.mjs";
 import { prepareSillyTavernRequest, restoreSillyTavernResponse, requestError } from "../../src/sillytavern.mjs";
@@ -42,7 +42,7 @@ export function connectionForRequest(request, { readSecret, SECRET_KEYS }) {
   const body = request.body;
   const auth = body.vertexai_auth_mode ?? "express";
   if (!["express", "full"].includes(auth) || body.reverse_proxy) throw requestError("unsupported_authentication_mode");
-  const settings = { authMode: auth === "full" ? "service-account" : "express", location: body.vertexai_region || "us-central1",
+  const settings = { authMode: auth === "full" ? "service-account" : "express", location: isGemini4Carbon(body.model) ? "global" : body.vertexai_region || "us-central1",
     serviceTier: body.vertexai_service_tier || "standard", projectId: body.vertexai_express_project_id || "" };
   if (auth === "full") {
     settings.serviceAccountJson = readSecret(request.user.directories, SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT, body.secret_id);
@@ -115,7 +115,7 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       const status = deadline.aborted ? 504 : error.status ?? upstreamError?.code ?? (stage === "configuration" ? 400 : stage === "image" ? 503 : 502);
       const code = deadline.aborted ? "vertex_timeout" : error.protocolFailure || error.status ? error.code
         : stage === "image" ? "image_render_failed" : `vertex_${stage}_failed`;
-      const detail = code === "express_project_required" ? "快速模式使用 Gemini 4 Argon 需要填写 API Key 所属的项目 ID，以指定 global 地区。" :
+      const detail = code === "express_project_required" ? "快速模式使用此 Gemini 4 模型需要填写 API Key 所属的项目 ID，以指定 global 地区。" :
         stage === "configuration" ? "检查 Vertex 凭据和地区；Express、Flex、Priority 需要 global。" :
         stage === "authentication" ? "Vertex 鉴权失败，请检查已保存的凭据。" : stage === "image" ? "图片输入转换失败，未改用明文发送。" :
         imageMode !== "off" && request.body?.vertex_anti_truncation === "off" ? "Vertex 图片输入请求失败。" : "Vertex 抗截断请求失败。";

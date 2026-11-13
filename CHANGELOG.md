@@ -2,6 +2,12 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## SillyTavern 0.16.0 / Gateway 0.19.0
+
+The plugin and gateway now ship the previously deployed optional exempt-block setting, including cross-chunk matching.
+
+For Meowssiah 2.1.0, select `soliumbra_reply` as the preset text tool. The transport preserves the declared fields, history and tool choice, and streams formatted text as upstream arguments arrive. Out-of-order sections wait for their display position. Tag cutoff counts displayed tags outside exempt blocks and keeps the matched closing tag. Missing required sections, interrupted streams and token-limit endings are not confirmed as complete replies.
+
 ## SillyTavern 0.15.0 and Gateway 0.18.1
 
 - Forward the selected thinking level for Gemini 4 Carbon, Hydrogen and supported Gemini 3 text models. Gemini 3.1 Pro receives a medium preset as `MEDIUM`. Gemini 2.5 retains its token budgets.

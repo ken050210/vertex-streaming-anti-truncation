@@ -225,7 +225,7 @@ function draft() {
     accountTimeoutMs: Number($("account-timeout").value) * 1000, accountFailureThreshold: Number($("account-failures").value), accountCooldownMs: Number($("account-cooldown").value) * 1000,
     unicodeInput: $("unicode-input").value === "all" ? "all" : $("unicode-input").value === "current",
     imageInput: $("image-input").value, hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
-    geminiLongDecode: $("long-decode").checked, tucaoStop: $("tucao-stop").checked, stopTag: $("stop-tag").value.trim(), stopCount: Number($("stop-count").value), geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
+    geminiLongDecode: $("long-decode").checked, tucaoStop: $("tucao-stop").checked, stopTag: $("stop-tag").value.trim(), stopExemptTag: $("stop-exempt-tag").value.trim(), stopCount: Number($("stop-count").value), geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
     geminiPromptRetryMatches: retryMatches() };
 }
 function accountDraft() {
@@ -360,6 +360,7 @@ function fillConfig(c = state.config.settings) {
   $("transport-tool-name").value = c.transportToolName ?? "";
   $("tucao-stop").checked = c.tucaoStop ?? true;
   $("stop-tag").value = c.stopTag ?? "tucao";
+  $("stop-exempt-tag").value = c.stopExemptTag ?? "";
   $("stop-count").value = c.stopCount ?? 2;
   $("prompt-retry-enabled").checked = c.geminiPromptRetryEnabled === true;
   $("prompt-retry-text").value = c.geminiPromptRetryText || "";

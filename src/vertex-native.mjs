@@ -77,12 +77,16 @@ export function supportsNativeRequest(payload) {
   if (format != null && (!isObject(format) || !["text", "json_object", "json_schema"].includes(format.type))) return false;
   if (format?.type === "json_schema" && (!isObject(format.json_schema) || (format.json_schema.strict != null && typeof format.json_schema.strict !== "boolean"))) return false;
   for (const message of payload.messages) {
-    if (!keys(message, ["role", "content", "tool_calls", "tool_call_id", "name"]) || message.role === "function") return false;
+    if (!keys(message, ["role", "content", "tool_calls", "tool_call_id", "name", "thoughtSignature"]) || message.role === "function") return false;
+    if (message.thoughtSignature != null && (message.role !== "assistant" || typeof message.thoughtSignature !== "string")) return false;
     if (message.name != null && message.role !== "tool") return false;
     if (message.tool_calls != null) {
       if (message.role !== "assistant" || !Array.isArray(message.tool_calls)) return false;
       for (const call of message.tool_calls) {
-        if (!keys(call, ["id", "type", "function"]) || call.type !== "function" || !keys(call.function, ["name", "arguments"]) || !call.function.name) return false;
+        if (!keys(call, ["id", "type", "function", "signature", "extra_content"]) || call.type !== "function" || !keys(call.function, ["name", "arguments"]) || !call.function.name) return false;
+        if (call.signature != null && typeof call.signature !== "string") return false;
+        if (call.extra_content != null && !(keys(call.extra_content, ["google"]) && keys(call.extra_content.google, ["thoughtSignature"]) &&
+            typeof call.extra_content.google.thoughtSignature === "string")) return false;
         try { if (!isObject(JSON.parse(call.function.arguments))) return false; } catch { return false; }
       }
     }
@@ -154,8 +158,11 @@ function assistantParts(message, model) {
     if (typeof call.id === "string" && call.id.startsWith(SIGNATURE_ID_PREFIX)) {
       part.thoughtSignature = call.id.slice(SIGNATURE_ID_PREFIX.length);
     }
+    const signature = call.extra_content?.google?.thoughtSignature ?? call.signature;
+    if (signature) part.thoughtSignature ??= signature;
     parts.push(part);
   }
+  if (message.thoughtSignature && parts.length) parts[0].thoughtSignature ??= message.thoughtSignature;
   return parts;
 }
 

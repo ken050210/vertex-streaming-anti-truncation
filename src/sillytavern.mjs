@@ -1,4 +1,5 @@
 import { CONTINUATION_INSTRUCTION, prepareAntiTruncation, restoreAntiTruncationCompletion, wrapAntiTruncationStream } from "./anti-truncation.mjs";
+import { nativeSoliumbra } from "./soliumbra.mjs";
 import { SIGNATURE_ID_PREFIX, nativeRequestBody, translateUsage } from "./vertex-native.mjs";
 import { translateNativeCompletion } from "./vertex-protocol.mjs";
 import { wrapNativeTextStream } from "./vertex-text-stream.mjs";
@@ -43,7 +44,7 @@ export function prepareSillyTavernRequest(request, adapters) {
   // stays readable and the existing message remains unchanged in its context.
   const continuation = body.type === "continue";
   const clientTools = Boolean(body.tools?.length);
-  const prepared = prepareAntiTruncation({ messages, tools: body.tools, tool_choice: body.tool_choice }, mode !== "off", false,
+  const prepared = prepareAntiTruncation({ messages, tools: body.tools, tool_choice: body.tool_choice, toolConfig: body.toolConfig }, mode !== "off", false,
     { continuation, transportToolName: body.vertex_transport_tool_name });
   if (continuation && !prepared.toolName) {
     prepared.payload = { ...prepared.payload, messages: [...messages, { role: "user", content: CONTINUATION_INSTRUCTION }] };
@@ -86,9 +87,9 @@ export function prepareSillyTavernRequest(request, adapters) {
   if (upstreamStream && native.toolConfig) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   if (body.vertex_tucao_stop != null && typeof body.vertex_tucao_stop !== "boolean") throw requestError("invalid_tucao_stop");
   const tagStop = body.vertex_tag_stop == null ? null : validateTagStopRule(body.vertex_tag_stop);
-  return { body: native, toolName: prepared.toolName, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit,
+  return { body: native, toolName: prepared.toolName, schema: prepared.schema, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit,
     waitForStopUsage: !outputLimit?.longDecode && normalizeStopUsageWait(body.vertex_wait_for_stop_usage),
-    tucaoStop: tagStop !== null || body.vertex_tucao_stop === true, stopTag: tagStop?.tag, stopCount: tagStop?.count };
+    tucaoStop: tagStop !== null || body.vertex_tucao_stop === true, stopTag: tagStop?.tag, stopCount: tagStop?.count, stopExemptTag: tagStop?.exemptTag };
 }
 
 const finishReasons = { stop: "STOP", length: "MAX_TOKENS", content_filter: "SAFETY", tool_calls: "STOP" };
@@ -207,29 +208,32 @@ export async function restoreSillyTavernResponse(upstream, prepared, credential,
       status: upstream.status, upstreamError: await readUpstreamError(upstream, credential)
     });
   }
-  const stop = prepared.toolName && prepared.tucaoStop ? createTagStop(prepared.toolName, prepared.stopTag, prepared.stopCount) : null;
+  const stop = prepared.toolName && prepared.tucaoStop ? createTagStop(prepared.toolName, prepared.stopTag, prepared.stopCount, prepared.stopExemptTag) : null;
   let usageMetadata;
   const getReceipt = () => {
     if (stop?.marker()) return stop.receipt();
     if (!hasUsageTotals(usageMetadata) && (usageMetadata || estimateUsage)) return { final: false, usageMetadata };
   };
   const estimateText = estimateUsage && (text => estimateUsage(prepared.body, text));
+  const fields = prepared.schema && nativeSoliumbra(prepared.schema, stop);
   if (prepared.upstreamStream && !upstream.headers.get("content-type")?.includes("application/json")) {
     if (!upstream.body) throw protocolError("empty_upstream_stream");
-    if (stop) upstream = stop.stream(upstream, prepared.waitForStopUsage);
-    const translated = wrapNativeTextStream(upstream, prepared.toolName, prepared.model,
-      usage => { usageMetadata = usage; }, true, prepared.tools);
-    const restored = wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools);
+    if (stop) upstream = stop.stream(upstream, prepared.waitForStopUsage, undefined, fields);
+    const translated = wrapNativeTextStream(upstream, fields ? null : prepared.toolName, prepared.model,
+      usage => { usageMetadata = usage; }, true, prepared.tools, undefined, stop ? undefined : fields);
+    const restored = wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools, undefined, Boolean(fields));
     return toSillyTavernStream(guardCompletionStream(restored, () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stop?.marker(), undefined, getReceipt, estimateText);
   }
   const raw = await readJson(upstream);
   usageMetadata = raw.usageMetadata;
-  stop?.process(raw, true);
+  if (fields) { stop?.observe(raw, true); fields(raw); }
+  else stop?.process(raw, true);
   if (raw.candidates?.length > 1) throw protocolError("unexpected_candidates");
   const translated = translateNativeCompletion(raw, prepared.model);
   const inspected = inspectCompletion(translated);
   if (!inspected.valid) throw protocolError(inspected.reason);
-  const completion = prepared.toolName ? restoreAntiTruncationCompletion(translated, prepared.toolName) : translated;
+  const completion = fields ? { ...translated, router_anti_truncation: { restored: raw.candidates[0].finishReason === "STOP" } }
+    : prepared.toolName ? restoreAntiTruncationCompletion(translated, prepared.toolName) : translated;
   const restored = inspectCompletion(completion);
   if (!restored.valid) throw protocolError(restored.reason);
   return completedSillyTavernResponse(completion, prepared, usageMetadata, stop?.marker(), undefined, getReceipt, estimateText);

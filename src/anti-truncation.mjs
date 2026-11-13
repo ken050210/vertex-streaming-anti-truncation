@@ -1,5 +1,6 @@
 import { supportsNativeRequest } from "./vertex-native.mjs";
-import { DEFAULT_TRANSPORT_TOOL_NAME, transportToolBypassReason } from "./transport-tool-name.mjs";
+import { DEFAULT_TRANSPORT_TOOL_NAME, SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason } from "./transport-tool-name.mjs";
+import { SoliumbraArguments } from "./soliumbra.mjs";
 // Restoration failures describe one reply, not the connection, and keep their code.
 import { isObject, protocolError as failure, sseData, trafficType, transformSse } from "./wire.mjs";
 
@@ -38,6 +39,25 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
     const requested = streamArguments && payload.stream === true;
     // Native argument streaming carries both the text transport and client calls.
     // Keep the compatible fallback when native translation would discard fields.
+    const schema = soliumbraSchema(transportToolName, clientTools);
+    if (schema) {
+        const policy = payload.toolConfig?.functionCallingConfig;
+        const explicitlyNamed = policy?.mode === "ANY" && policy.allowedFunctionNames?.length === 1 &&
+            policy.allowedFunctionNames[0] === SOLIUMBRA_TOOL && Object.keys(payload.toolConfig).length === 1 && Object.keys(policy).length === 2;
+        // ST's OpenAI-compatible route can drop toolConfig while keeping "required".
+        // In the preset's two-tool request, context belongs to the preceding history.
+        const onlyReplyAndContext = payload.toolConfig == null && clientTools.every(tool =>
+            tool?.function?.name === SOLIUMBRA_TOOL || tool?.function?.name === "context");
+        if (payload.tool_choice === "required" && (explicitlyNamed || onlyReplyAndContext)) {
+            const { toolConfig, ...original } = payload;
+            payload = { ...original, tool_choice: { type: "function", function: { name: SOLIUMBRA_TOOL } } };
+        }
+        if (payload.tool_choice == null) payload = { ...payload, tool_choice: "auto" };
+        if (continuation) payload = { ...payload, messages: [...payload.messages, { role: "user", content: CONTINUATION_INSTRUCTION }] };
+        const nativeStreaming = requested && native && supportsNativeRequest(payload);
+        return { payload, toolName: SOLIUMBRA_TOOL, schema, nativeStreaming,
+            reason: nativeStreaming ? "tool-transport-native-streaming" : "tool-transport" };
+    }
     const nativeStreaming = requested && native && supportsNativeRequest(payload);
     let toolName = transportToolName || DEFAULT_TRANSPORT_TOOL_NAME;
     if (!transportToolName && clientTools.some(tool => typeof tool?.function?.name === "string" && tool.function.name.startsWith(toolName))) {
@@ -222,30 +242,32 @@ class ContentDecoder {
 
 const cutShort = reason => reason === "length" || reason === "content_filter";
 
-export function restoreAntiTruncationCompletion(completion, toolName, stop) {
+export function restoreAntiTruncationCompletion(completion, toolName, stop, schema) {
     if (!toolName) return completion;
     let restored = false;
     const choices = completion.choices.map(choice => {
         const message = choice.message;
         const owned = Array.isArray(message?.tool_calls) ? message.tool_calls.filter(call => call.function?.name === toolName) : [];
         if (!owned.length) {
+            if (schema && !cutShort(choice.finish_reason) && !message?.refusal) throw failure("anti_truncation_missing_reply_tool");
             if (!stop || typeof message?.content !== "string") return choice;
             const content = stop.clip(message.content, "plain");
             return { ...choice, message: { ...message, content }, finish_reason: stop.marker() ? "stop" : choice.finish_reason };
         }
         if (owned.length !== 1) throw failure("anti_truncation_multiple_calls");
-        const decoder = new ContentDecoder();
+        const decoder = schema ? new SoliumbraArguments(schema, stop) : new ContentDecoder();
         const args = owned[0].function.arguments;
         if (typeof args !== "string") throw failure("anti_truncation_invalid_arguments");
-        const text = decoder.feed(args, stop);
+        let text = decoder.feed(args, stop);
+        if (schema) text += decoder.reply.finish(cutShort(choice.finish_reason));
         if (decoder.invalid || (!decoder.valid && !stop?.marker() && !cutShort(choice.finish_reason))) {
             throw failure("anti_truncation_incomplete_arguments");
         }
         const real = message.tool_calls.filter(call => call.function?.name !== toolName);
-        const result = { ...message, content: decoder.found ? text : (message.content ?? "") };
+        const result = { ...message, content: schema || decoder.found ? text : (message.content ?? "") };
         if (real.length) result.tool_calls = real;
         else delete result.tool_calls;
-        restored ||= decoder.found;
+        restored ||= schema ? !cutShort(choice.finish_reason) && (decoder.valid || Boolean(stop?.marker())) : decoder.found;
         return { ...choice, message: result, finish_reason:
             stop?.marker() ? (real.length ? "tool_calls" : "stop") : choice.finish_reason === "tool_calls" && decoder.valid && !real.length ? "stop" : choice.finish_reason };
     });
@@ -261,6 +283,7 @@ class StreamRestorer {
     constructor(toolName, tools, stop) {
         this.toolName = toolName;
         this.tools = new Set(tools.map(tool => tool?.function?.name));
+        this.schema = soliumbraSchema(toolName, tools);
         this.longerToolName = [...this.tools].some(name => typeof name === "string" && name !== toolName && name.startsWith(toolName));
         this.choices = new Map();
         this.restored = false;
@@ -278,7 +301,8 @@ class StreamRestorer {
         const index = call.index ?? position;
         if (!state.calls.has(index)) {
             if (state.calls.size >= 16) throw failure("anti_truncation_too_many_calls");
-            state.calls.set(index, { kind: "unknown", name: "", pending: [], pendingBytes: 0, decoder: new ContentDecoder() });
+            state.calls.set(index, { kind: "unknown", name: "", pending: [], pendingBytes: 0,
+                decoder: this.schema ? new SoliumbraArguments(this.schema, this.stop) : new ContentDecoder() });
         }
         const slot = state.calls.get(index);
         // Real calls are renumbered so the client's tool_calls list has no gap where the
@@ -336,7 +360,10 @@ class StreamRestorer {
         // first argument that would have disambiguated it from a longer name.
         const synthetic = calls.filter(call => call.kind !== "real");
         if (synthetic.length > 1) throw failure("anti_truncation_multiple_calls");
-        if (synthetic.some(call => !call.decoder.valid) && !cutShort(reason)) throw failure("anti_truncation_incomplete_arguments");
+        if (this.schema && !reason) throw failure("anti_truncation_stream_interrupted");
+        if (this.schema && !synthetic.length && !cutShort(reason)) throw failure("anti_truncation_missing_reply_tool");
+        if (synthetic.some(call => !call.decoder.valid) && !cutShort(reason) && !this.stop?.marker()) throw failure("anti_truncation_incomplete_arguments");
+        if (this.schema && cutShort(reason)) this.restored = false;
         state.terminal = true;
         return reason === "tool_calls" && synthetic.length && !state.real ? "stop" : reason;
     }
@@ -344,10 +371,11 @@ class StreamRestorer {
         if (!isObject(chunk) || !Array.isArray(chunk.choices)) return chunk;
         for (const [position, choice] of chunk.choices.entries()) {
             const state = this.state(choice.index ?? position);
-            const delta = choice.delta;
+            const delta = this.schema && choice.finish_reason && choice.delta == null ? (choice.delta = {}) : choice.delta;
             if (isObject(delta)) {
                 if (state.terminal && (delta.content || delta.tool_calls?.length)) throw failure("anti_truncation_data_after_finish");
                 let text = "";
+                if (this.schema && delta.content) delete delta.content;
                 if (typeof delta.content === "string" && delta.content) {
                     state.channel ??= "plain";
                     if (state.channel !== "plain") delete delta.content;
@@ -364,6 +392,11 @@ class StreamRestorer {
                     }
                     if (kept.length) delta.tool_calls = kept;
                     else delete delta.tool_calls;
+                }
+                if (this.schema && choice.finish_reason && auditFinishReasons.has(choice.finish_reason)) {
+                    for (const slot of state.calls.values()) {
+                        if (slot.kind === "synthetic") text += slot.decoder.reply.finish(cutShort(choice.finish_reason));
+                    }
                 }
                 if (text) delta.content = text;
             }
@@ -382,7 +415,7 @@ class StreamRestorer {
     }
 }
 
-export function wrapAntiTruncationStream(response, toolName, onMetadata = () => {}, tools = [], stop) {
+export function wrapAntiTruncationStream(response, toolName, onMetadata = () => {}, tools = [], stop, nativeFields = false) {
     if (!toolName || !response.ok || !response.body) return response;
     const processor = new StreamRestorer(toolName, tools, stop);
     let done = false;
@@ -403,9 +436,10 @@ export function wrapAntiTruncationStream(response, toolName, onMetadata = () => 
         if (tier) onMetadata({ trafficType: tier });
         if (parsed.error || event === "error") processor.failed = true;
         const skipped = processor.failed;
-        const result = skipped ? parsed : processor.process(parsed);
+        const result = skipped || nativeFields ? parsed : processor.process(parsed);
         const choice = !skipped && Array.isArray(result?.choices) ? result.choices.find(choice => (choice.index ?? 0) === 0) : null;
         if (choice?.finish_reason != null) {
+            if (nativeFields) processor.restored = choice.native_finish_reason === "STOP";
             onMetadata({ finishReason: choice.finish_reason });
             // Like a buffered reply, the result travels on the finish chunk, not in an extra empty-choices chunk.
             if (!processor.failed) result.router_anti_truncation = { restored: processor.restored };

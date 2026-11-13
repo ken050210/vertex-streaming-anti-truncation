@@ -41,6 +41,37 @@ async function fixture(t, upstream, override = {}) {
   return { events, requests, base, get, post };
 }
 
+test("gateway renders the preset's split native or compatible arguments and stops before the following field", async t => {
+  const name = "soliumbra_reply";
+  const fields = {type:"object", properties:{think_nya:{type:"string"},story_body:{type:"string"},summary:{type:"string"}},
+    required:["think_nya","story_body","summary"]};
+  const tools = [{type:"function",function:{name,parameters:fields}}, {type:"function",function:{name:"context"}}];
+  const values = {think_nya:"plan",story_body:"story<End>ok</End>discard",summary:"omit"};
+  const expected = "<think_nya>\nplan\n</think_nya><!--</think>-->\nstory<End>ok</End>";
+  for (const nativeOnly of [false,true]) {
+    const f = await fixture(t, request => {
+      if (nativeOnly) {
+        assert.deepEqual(request.json.toolConfig.functionCallingConfig.allowedFunctionNames,[name]);
+        const native = {candidates:[{content:{role:"model",parts:[{functionCall:{name,args:values}}]},finishReason:"STOP"}]};
+        return request.url.includes("streamGenerateContent") ? new Response(sse(native)) : Response.json(native);
+      }
+      assert.equal(request.json.tool_choice.function.name,name);
+      const owned = {type:"function",id:"fixture",function:{name,arguments:JSON.stringify(values)}};
+      if (!request.json.stream) return Response.json({choices:[{message:{role:"assistant",tool_calls:[owned]},finish_reason:"tool_calls"}]});
+      const wire = ['{"think_nya":"plan","story_body":"story<End>ok</E','nd>discard","summary":"omit"}'].map((argumentsText,i) =>
+        "data: "+JSON.stringify({choices:[{index:0,delta:{tool_calls:[{index:0,function:{...(i?{}:{name}),arguments:argumentsText}}]}}]})+"\n\n").join("");
+      return new Response(wire);
+    }, {nativeOnly, authMode:nativeOnly?"access-token":"custom", transportToolName:name,tucaoStop:true,stopTag:"End",stopCount:1});
+    for(const stream of [false,true]){
+      const res=await f.post({...payload,tools,stream,tool_choice:"required",toolConfig:{functionCallingConfig:{mode:"ANY",allowedFunctionNames:[name]}}});
+      const answer=stream?await res.text():await res.json();
+      assert.equal(res.status,200,JSON.stringify(answer));
+      assert.equal(stream?visible(answer):answer.choices[0].message.content,expected);
+      assert.equal(f.events.at(-1).antiTruncation.restored,true);
+    }
+  }
+});
+
 test("weak keys still authenticate and explicit keyless mode accepts omitted or arbitrary client keys", async t => {
   const weak = await fixture(t, () => assert.fail("No inference"), { gatewayKeyMode: "weak", gatewayKey: "123456" });
   assert.equal((await weak.get("/v1/models", "123456")).status, 200);

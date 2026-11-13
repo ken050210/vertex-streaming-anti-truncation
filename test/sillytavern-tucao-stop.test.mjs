@@ -108,7 +108,7 @@ test("plain streaming fallback clips the second tag; anti-truncation-off respons
 });
 
 test("the HTTP plugin validates custom rules and stops after one complete A pair without waiting for upstream finish", { timeout: 5000 }, async t => {
-  const body = "<A>正文</A>";
+  const body = "<konatan_planning~><A></A></konatan_planning~><A>正文</A>";
   let cancelled = false, calls = 0;
   const handler = createGenerateHandler({
     getPromptNames: () => ({}),
@@ -134,7 +134,7 @@ test("the HTTP plugin validates custom rules and stops after one complete A pair
   const invalid = await post({ tag: "A", count: 0 });
   assert.equal(invalid.status, 400);
   assert.equal(calls, 0);
-  const response = await post({ tag: "A", count: 1 });
+  const response = await post({ tag: "A", count: 1, exemptTag: "konatan_planning~" });
   assert.equal(response.status, 200);
   const output = await response.text();
   assert.equal(text(output), body);
@@ -142,7 +142,7 @@ test("the HTTP plugin validates custom rules and stops after one complete A pair
   assert.equal(output.split("data: [DONE]").length - 1, 1);
   assert.equal(cancelled, true);
   const repeated = await post({ tag: "A", count: 1 });
-  assert.equal(text(await repeated.text()), body);
+  assert.equal(text(await repeated.text()), "<konatan_planning~><A></A>");
   assert.equal(calls, 2);
   assert.equal(compareVersions("0.7.0", "0.6.3"), 1);
 });
