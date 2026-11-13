@@ -2,6 +2,10 @@
 
 中文 | [English](CHANGELOG.md)
 
+## SillyTavern 0.16.1 / Gateway 0.19.1
+
+Vertex 原生参数流先返回正文时，插件和网关会立即输出正文，随后到达的思考显示在正文之后。 适用于 Meowssiah 2.1.0 的 `soliumbra_reply` 与流式抗截断模式。
+
 ## SillyTavern 0.16.0 / Gateway 0.19.0
 
 本次同时发布云酒馆已使用的标签豁免补丁。插件、网关控制台和 CLI 均可设置豁免块。

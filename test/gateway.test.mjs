@@ -41,6 +41,39 @@ async function fixture(t, upstream, override = {}) {
   return { events, requests, base, get, post };
 }
 
+test("native gateway sends Meowssiah story text over HTTP before the planning field arrives", { timeout: 5000 }, async t => {
+  const name = "soliumbra_reply";
+  const parameters = { type: "object", properties: { think_nya: { type: "string" }, game_content: { type: "string" } }, required: ["think_nya", "game_content"] };
+  let source;
+  const upstream = new ReadableStream({ start(controller) { source = controller; } });
+  const f = await fixture(t, () => new Response(upstream), { nativeOnly: true, transportToolName: name });
+  const send = (key, value, last) => source.enqueue(sse({ candidates: [{ content: { role: "model", parts: [{ functionCall: {
+    name, willContinue: !last, partialArgs: [{ jsonPath: "$." + key, stringValue: value, willContinue: false }],
+  } }] }, ...(last ? { finishReason: "STOP" } : {}) }] }));
+  send("game_content", "first paragraph", false);
+  const res = await f.post({ ...payload, stream: true, tools: [{ type: "function", function: { name, parameters } }], tool_choice: "required" });
+  assert.equal(res.status, 200);
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let wire = "";
+  while (!wire.includes("first paragraph")) {
+    const { value, done } = await reader.read();
+    assert.equal(done, false);
+    wire += value;
+  }
+  send("think_nya", "late plan", true);
+  source.close();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    wire += value;
+  }
+  const events = records(wire);
+  assert.equal(events.map(e => e.choices?.[0]?.delta?.content ?? "").join(""),
+    "<game>\nfirst paragraph\n</game>\n<think_nya>\nlate plan\n</think_nya><!--</think>-->");
+  assert.equal(events.find(e => e.choices?.[0]?.finish_reason)?.choices[0].finish_reason, "stop");
+  assert.equal((wire.match(/\[DONE\]/g) ?? []).length, 1);
+});
+
 test("gateway renders the preset's split native or compatible arguments and stops before the following field", async t => {
   const name = "soliumbra_reply";
   const fields = {type:"object", properties:{think_nya:{type:"string"},story_body:{type:"string"},summary:{type:"string"}},

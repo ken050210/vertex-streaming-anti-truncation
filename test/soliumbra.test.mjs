@@ -5,6 +5,7 @@ import { restoreSillyTavernResponse } from "../src/sillytavern.mjs";
 import { createTagStop } from "../src/tag-stop.mjs";
 import { nativeRequestBody } from "../src/vertex-native.mjs";
 import { sseData } from "../src/wire.mjs";
+import { nativeSoliumbra } from "../src/soliumbra.mjs";
 import { createFetchInterceptor } from "../integrations/sillytavern/shared.js";
 import { prepareTauriTavernRequest, restoreTauriTavernResponse } from "../src/tauritavern.mjs";
 
@@ -24,6 +25,21 @@ const chunk = (delta, finish_reason = null) => ({choices:[{index:0, delta, finis
 const arg = (argumentsText, first) => chunk({tool_calls:[{index:0, function:{...(first ? {name} : {}), arguments:argumentsText}}]});
 const parse = wire => wire.split("\n").filter(l => l.startsWith("data:") && !l.includes("[DONE]")).map(l => JSON.parse(l.slice(5)));
 const visible = records => records.flatMap(e => e.candidates?.[0]?.content?.parts ?? []).map(p => p.text ?? "").join("");
+
+test("Vertex streams a body-first Meowssiah reply before its late planning field arrives", () => {
+  const fields = { properties: { think_nya: {type:"string"}, game_content: {type:"string"} }, required: ["think_nya", "game_content"] };
+  const restore = nativeSoliumbra(fields);
+  const fragment = (key, value, more, ended = false) => {
+    const frame = native([{functionCall: {name, willContinue: !ended,
+      partialArgs: [{jsonPath: "$." + key, stringValue: value, willContinue: more}]}}], ended ? "STOP" : undefined);
+    restore(frame);
+    return visible([frame]);
+  };
+  assert.equal(fragment("game_content", "<ga", true), "");
+  assert.equal(fragment("game_content", "me>first", true), "<game>first");
+  assert.equal(fragment("game_content", " second</game>", false), " second</game>");
+  assert.equal(fragment("think_nya", "late <plan>", false, true), "\n<think_nya>\nlate &lt;plan&gt;\n</think_nya><!--</think>-->");
+});
 
 test("reuses dynamic declaration, context history and exact required/auto selection", () => {
   const input = {model, stream:true, messages:[{role:"assistant", thoughtSignature:"sig", tool_calls:[{id:"sync",type:"function",signature:"sig",

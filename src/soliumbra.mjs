@@ -43,7 +43,7 @@ export class SoliumbraReply {
     this.hasText = false;
     this.pending = "";
   }
-  append(key, fragment, closed = false) {
+  append(key, fragment, closed = false, nativePartial = false) {
     if (this.stop?.marker()) return;
     if (!Object.hasOwn(this.schema.properties, key) || typeof fragment !== "string") invalid();
     this.size += fragment.length;
@@ -56,6 +56,14 @@ export class SoliumbraReply {
     }
     field.raw += fragment;
     field.closed = closed;
+    // Vertex can stream the entire story before its first planning fragment,
+    // even with propertyOrdering. Start with the story in that case. A late
+    // plan still gets its own tagged section after the story.
+    if (nativePartial && this.position === 0 && this.order[0] === "think_nya" &&
+        this.order[1] === key && (key === "game_content" || key === "game" || key === "story_body") &&
+        !this.fields.get("think_nya")?.raw.trim() && field.raw.trim()) {
+      [this.order[0], this.order[1]] = [key, "think_nya"];
+    }
     this.flush(false);
   }
   flush(final) {
@@ -144,7 +152,7 @@ export function nativeSoliumbra(schema, stop) {
           const key = path[0];
           if (typeof arg.stringValue !== "string" && (Object.hasOwn(arg, "stringValue") ||
               !reply.fields.has(key) || arg.willContinue === true)) invalid();
-          reply.append(key, arg.stringValue ?? "", arg.willContinue !== true);
+          reply.append(key, arg.stringValue ?? "", arg.willContinue !== true, true);
         }
         const ended = call.willContinue !== true;
         const interrupted = candidate.finishReason && candidate.finishReason !== "STOP";

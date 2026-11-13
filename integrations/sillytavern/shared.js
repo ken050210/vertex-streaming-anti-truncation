@@ -5,7 +5,7 @@ import { soliumbraSchema, transportToolBypassReason } from "../../src/transport-
 import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.16.0";
+export const PLUGIN_VERSION = "0.16.1";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.

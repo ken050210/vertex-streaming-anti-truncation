@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## SillyTavern 0.16.1 / Gateway 0.19.1
+
+With native Vertex argument streaming, a story field that starts before the first planning text is displayed immediately. Late planning text follows the story. This applies to Meowssiah 2.1.0 in streaming anti-truncation mode with the preset text tool set to `soliumbra_reply`.
+
 ## SillyTavern 0.16.0 / Gateway 0.19.0
 
 The plugin and gateway now ship the previously deployed optional exempt-block setting, including cross-chunk matching.
