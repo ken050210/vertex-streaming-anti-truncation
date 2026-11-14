@@ -265,8 +265,8 @@ function buildNativeBody(payload, meowCompat = false) {
   return body;
 }
 
-export function buildNativeTextBody(payload) {
-  const body = buildNativeBody(payload);
+export function buildNativeTextBody(payload, { meowCompat = false } = {}) {
+  const body = buildNativeBody(payload, meowCompat);
   body.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   return body;
 }

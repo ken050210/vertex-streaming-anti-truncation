@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.20.0
+
+Meowssiah 2.1.5 users can enable compatibility in the standalone gateway console or set `MEOW_COMPAT=true`. Select the streaming anti-truncation model and enable streaming in Tavern. In one live Gemini 4 Carbon run, Tavern showed planning at 16.8 seconds and story text at 20.0 seconds. Both grew on screen before generation ended.
+
 ## SillyTavern 0.17.0
 
 Enable Meowssiah compatibility in the Vertex panel for Meowssiah 2.1.5. Planning appears before the story. Registered columns follow the preset display order, and an omitted optional extra does not hold up the story. Numbered deep-planning steps keep their original text. Older floors retain their original story field when the current declaration changes.

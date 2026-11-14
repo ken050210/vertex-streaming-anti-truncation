@@ -7,6 +7,8 @@ import { presetTextTool } from "./fixtures/preset-text-tool.mjs";
 import { createGatewayServer, upstreamDispatcher } from "../src/gateway.mjs";
 import { buildConfig, DEFAULT_SETTINGS, loadConfig, MODEL_ID, UPSTREAM_MODEL } from "../src/config.mjs";
 
+import numbered from "./fixtures/meow-numbered-deep.json" with { type: "json" };
+
 const key = "synthetic-local-key-for-tests";
 const token = "synthetic-oauth-token";
 const payload = { model: MODEL_ID, messages: [{ role: "user", content: "Write a line about a river." }], max_tokens: 512 };
@@ -72,6 +74,62 @@ test("native gateway sends Meowssiah story text over HTTP before the planning fi
     "<game>\nfirst paragraph\n</game>\n<think_nya>\nlate plan\n</think_nya><!--</think>-->");
   assert.equal(events.find(e => e.choices?.[0]?.finish_reason)?.choices[0].finish_reason, "stop");
   assert.equal((wire.match(/\[DONE\]/g) ?? []).length, 1);
+});
+
+test("Meow compatibility restores aliased planning before the next HTTP fragment", { timeout: 8000 }, async t => {
+  const name = "soliumbra_reply";
+  const { prompt, ...sync } = numbered;
+  const parameters = { type: "object", properties: { think_nya: { type: "string" }, game_content: { type: "string" } }, required: ["think_nya", "game_content"] };
+  const body = { ...payload, tools: [{ type: "function", function: { name, parameters } }], tool_choice: "required",
+    toolConfig: { functionCallingConfig: { mode: "ANY", allowedFunctionNames: [name] } },
+    messages: [...payload.messages, { role: "assistant", content: prompt },
+      { role: "assistant", tool_calls: [{ id: "call_sync_final", type: "function", function: { name: "context", arguments: "{}" } }] },
+      { role: "tool", name: "context", tool_call_id: "call_sync_final", content: JSON.stringify(sync) }] };
+  for (const native of [true, false]) {
+    let source;
+    const f = await fixture(t, request => {
+      const schema = native ? request.json.tools[0].functionDeclarations[0].parameters : request.json.tools[0].function.parameters;
+      assert.deepEqual(schema.propertyOrdering, ["a_think_nya", "b_game_content"]);
+      const args = { a_think_nya: "planning", b_game_content: "story" };
+      if (!request.url.includes("streamGenerateContent") && !request.json.stream) {
+        return Response.json(native ? { candidates: [{ content: { parts: [{ functionCall: { name, args } }] }, finishReason: "STOP" }] }
+          : { choices: [{ message: { role: "assistant", tool_calls: [{ type: "function", function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: "tool_calls" }] });
+      }
+      if (native) assert.equal(request.json.toolConfig.functionCallingConfig.streamFunctionCallArguments, true);
+      return new Response(new ReadableStream({ start(controller) {
+        source = controller;
+        controller.enqueue(native ? call({ name, willContinue: true, partialArgs: [{ jsonPath: "$.a_think_nya", stringValue: "planning", willContinue: false }] })
+          : sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { name, arguments: '{"a_think_nya":"planning",' } }] } }] }));
+      } }));
+    }, { nativeOnly: native, authMode: native ? "access-token" : "custom", meowCompat: true });
+    const unary = await (await f.post(body)).json();
+    const expected = "<think_nya>\nplanning\n</think_nya><!--</think>-->\n<game>\nstory\n</game>";
+    assert.equal(unary.choices?.[0].message.content, expected, JSON.stringify(unary));
+    const response = await f.post({ ...body, stream: true });
+    assert.equal(response.status, 200);
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let wire = "";
+    while (!wire.includes("planning")) {
+      const { value, done } = await reader.read();
+      assert.equal(done, false);
+      wire += value;
+    }
+    if (native) {
+      source.enqueue(call({ name, partialArgs: [{ jsonPath: "$.b_game_content", stringValue: "story", willContinue: false }] }));
+      source.enqueue(finish("STOP"));
+    } else {
+      source.enqueue(sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '"b_game_content":"story"}' } }] }, finish_reason: "tool_calls" }] }));
+      source.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+    }
+    source.close();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      wire += value;
+    }
+    assert.equal(visible(wire), expected, wire);
+    assert.equal(f.events.at(-1).antiTruncation.restored, true);
+  }
 });
 
 test("gateway renders the preset's split native or compatible arguments and stops before the following field", async t => {

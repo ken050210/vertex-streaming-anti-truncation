@@ -26,7 +26,7 @@ export function antiTruncationLogFields(metadata) {
 
 // An empty setting adds our text tool. An explicit name selects the preset's
 // declaration for this request; the other tools remain owned by the client.
-export function prepareAntiTruncation(payload, enabled, streamArguments = false, { continuation = false, native = true, transportToolName = "", meowCompat = false } = {}) {
+export function prepareAntiTruncation(payload, enabled, streamArguments = false, { continuation = false, native = true, transportToolName = "", meowCompat = false, gatewayRequest = false } = {}) {
     const skip = reason => ({ payload, toolName: null, reason });
     if (!enabled) return skip("disabled");
     if (payload.functions?.length) return skip("existing-tools");
@@ -53,9 +53,9 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
         // In the preset's two-tool request, context belongs to the preceding history.
         const onlyReplyAndContext = payload.toolConfig == null && clientTools.every(tool =>
             tool?.function?.name === SOLIUMBRA_TOOL || tool?.function?.name === "context");
-        if (!meowCompat && payload.tool_choice === "required" && (explicitlyNamed || onlyReplyAndContext)) {
+        if (payload.tool_choice === "required" && ((!meowCompat && (explicitlyNamed || onlyReplyAndContext)) || (gatewayRequest && explicitlyNamed))) {
             const { toolConfig, ...original } = payload;
-            payload = { ...original, tool_choice: { type: "function", function: { name: SOLIUMBRA_TOOL } } };
+            payload = meowCompat ? original : { ...original, tool_choice: { type: "function", function: { name: SOLIUMBRA_TOOL } } };
         }
         if (payload.tool_choice == null) payload = { ...payload, tool_choice: "auto" };
         if (continuation) payload = { ...payload, messages: [...payload.messages, { role: "user", content: CONTINUATION_INSTRUCTION }] };
@@ -248,20 +248,20 @@ class ContentDecoder {
 
 const cutShort = reason => reason === "length" || reason === "content_filter";
 
-export function restoreAntiTruncationCompletion(completion, toolName, stop, schema) {
+export function restoreAntiTruncationCompletion(completion, toolName, stop, schema, transport = {}) {
     if (!toolName) return completion;
     let restored = false;
     const choices = completion.choices.map(choice => {
         const message = choice.message;
         const owned = Array.isArray(message?.tool_calls) ? message.tool_calls.filter(call => call.function?.name === toolName) : [];
         if (!owned.length) {
-            if (schema && !cutShort(choice.finish_reason) && !message?.refusal) throw failure("anti_truncation_missing_reply_tool");
+            if (schema && !(transport.meowCompat && message?.tool_calls?.length) && !cutShort(choice.finish_reason) && !message?.refusal) throw failure("anti_truncation_missing_reply_tool");
             if (!stop || typeof message?.content !== "string") return choice;
             const content = stop.clip(message.content, "plain");
             return { ...choice, message: { ...message, content }, finish_reason: stop.marker() ? "stop" : choice.finish_reason };
         }
         if (owned.length !== 1) throw failure("anti_truncation_multiple_calls");
-        const decoder = schema ? new SoliumbraArguments(schema, stop) : new ContentDecoder();
+        const decoder = schema ? new SoliumbraArguments(schema, stop, transport.meowAliases) : new ContentDecoder();
         const args = owned[0].function.arguments;
         if (typeof args !== "string") throw failure("anti_truncation_invalid_arguments");
         let text = decoder.feed(args, stop);
@@ -286,10 +286,11 @@ export function restoreAntiTruncationCompletion(completion, toolName, stop, sche
 // Ordinary text is streamed immediately. The first nonempty text channel wins;
 // later ordinary/synthetic text is suppressed instead of duplicated.
 class StreamRestorer {
-    constructor(toolName, tools, stop) {
+    constructor(toolName, tools, stop, transport) {
+        this.transport = transport;
         this.toolName = toolName;
         this.tools = new Set(tools.map(tool => tool?.function?.name));
-        this.schema = soliumbraSchema(toolName, tools);
+        this.schema = transport.schema ?? soliumbraSchema(toolName, tools);
         this.longerToolName = [...this.tools].some(name => typeof name === "string" && name !== toolName && name.startsWith(toolName));
         this.choices = new Map();
         this.restored = false;
@@ -308,7 +309,7 @@ class StreamRestorer {
         if (!state.calls.has(index)) {
             if (state.calls.size >= 16) throw failure("anti_truncation_too_many_calls");
             state.calls.set(index, { kind: "unknown", name: "", pending: [], pendingBytes: 0,
-                decoder: this.schema ? new SoliumbraArguments(this.schema, this.stop) : new ContentDecoder() });
+                decoder: this.schema ? new SoliumbraArguments(this.schema, this.stop, this.transport.meowAliases) : new ContentDecoder() });
         }
         const slot = state.calls.get(index);
         // Real calls are renumbered so the client's tool_calls list has no gap where the
@@ -367,7 +368,7 @@ class StreamRestorer {
         const synthetic = calls.filter(call => call.kind !== "real");
         if (synthetic.length > 1) throw failure("anti_truncation_multiple_calls");
         if (this.schema && !reason) throw failure("anti_truncation_stream_interrupted");
-        if (this.schema && !synthetic.length && !cutShort(reason)) throw failure("anti_truncation_missing_reply_tool");
+        if (this.schema && !synthetic.length && !(this.transport.meowCompat && state.real) && !cutShort(reason)) throw failure("anti_truncation_missing_reply_tool");
         if (synthetic.some(call => !call.decoder.valid) && !cutShort(reason) && !this.stop?.marker()) throw failure("anti_truncation_incomplete_arguments");
         if (this.schema && cutShort(reason)) this.restored = false;
         state.terminal = true;
@@ -421,9 +422,9 @@ class StreamRestorer {
     }
 }
 
-export function wrapAntiTruncationStream(response, toolName, onMetadata = () => {}, tools = [], stop, nativeFields = false) {
+export function wrapAntiTruncationStream(response, toolName, onMetadata = () => {}, tools = [], stop, nativeFields = false, transport = {}) {
     if (!toolName || !response.ok || !response.body) return response;
-    const processor = new StreamRestorer(toolName, tools, stop);
+    const processor = new StreamRestorer(toolName, tools, stop, transport);
     let done = false;
     return transformSse(response, ({ raw, lines, data, event }, emit) => {
         if (!data) { emit(raw + "\n\n"); return; }

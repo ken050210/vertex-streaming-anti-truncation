@@ -220,6 +220,7 @@ function draft() {
     apiKey: credential("api-key", "express"), accessToken: credential("access-token", "access-token"),
     customBaseUrl: $("custom-base-url").value.trim(), customApiKey: credential("custom-api-key", "custom"),
     port: Number($("port").value), timeoutMs: Number($("timeout").value) * 1000, antiTruncation: true, models: state.models.map(m => ({ ...m })),
+    meowCompat: $("meow-compat").checked,
     transportToolName: $("transport-tool-name").value.trim(),
     accountRotationEnabled: $("account-rotation").checked, accounts: accountDraft(),
     accountTimeoutMs: Number($("account-timeout").value) * 1000, accountFailureThreshold: Number($("account-failures").value), accountCooldownMs: Number($("account-cooldown").value) * 1000,
@@ -357,6 +358,7 @@ function fillConfig(c = state.config.settings) {
   $("hide-unavailable").checked = c.hideUnavailableModels !== false;
   $("prefill-to-user").checked = c.geminiPrefillToUser !== false;
   $("long-decode").checked = c.geminiLongDecode === true;
+  $("meow-compat").checked = c.meowCompat === true;
   $("transport-tool-name").value = c.transportToolName ?? "";
   $("tucao-stop").checked = c.tucaoStop ?? true;
   $("stop-tag").value = c.stopTag ?? "tucao";

@@ -184,8 +184,9 @@ export function nativeSoliumbra(schema, stop, { meowCompat, meowAliases } = {}) 
 // OpenAI relays send fragments of a flat object of string arguments. Retain
 // the unfinished escape and feed decoded runs to the same field renderer.
 export class SoliumbraArguments {
-  constructor(schema, stop) {
-    this.reply = new SoliumbraReply(schema, stop);
+  constructor(schema, stop, aliases) {
+    this.aliases = aliases;
+    this.reply = new SoliumbraReply(schema, stop, aliases);
     this.mode = "object";
     this.tail = "";
     this.size = 0;
@@ -211,6 +212,7 @@ export class SoliumbraArguments {
           input = input.slice(size);
         } else if (input[0] === '"') {
           if (this.mode === "key") {
+            if (this.aliases) this.key = this.aliases.get(this.key);
             if (this.seen.has(this.key)) invalid();
             this.seen.add(this.key);
             this.mode = "colon";

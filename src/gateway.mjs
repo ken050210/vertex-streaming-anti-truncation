@@ -69,7 +69,9 @@ function readRequest(request, limit, signal) {
     signal.addEventListener("abort", abort, { once: true });
   });
 }
-async function readCompletion(response, limit, native, model, toolName, stop, schema) {
+async function readCompletion(response, limit, native, model, transport, stop) {
+  const { toolName, schema } = transport;
+  let fields;
   const chunks = [];
   let total = 0;
   for await (const bytes of response.body ?? []) {
@@ -83,8 +85,11 @@ async function readCompletion(response, limit, native, model, toolName, stop, sc
   if ((Array.isArray(parsed) ? parsed[0] : parsed)?.error) throw Object.assign(new Problem(502, "upstream_error_object"), { upstreamBody: parsed });
   if (!native) checkCompatibleRejection(parsed);
   if (native) {
-    if (schema) { stop?.observe(parsed, true); nativeSoliumbra(schema, stop)(parsed); }
-    else stop?.process(parsed);
+    if (schema) {
+      stop?.observe(parsed, true);
+      fields = nativeSoliumbra(schema, stop, transport);
+      fields(parsed);
+    } else stop?.process(parsed);
     parsed = translateNativeCompletion(parsed, model);
   }
   if (!parsed || parsed.error || !Array.isArray(parsed.choices) || !parsed.choices.length) {
@@ -96,8 +101,8 @@ async function readCompletion(response, limit, native, model, toolName, stop, sc
     const inspected = inspectCompletion(parsed);
     if (!inspected.valid) throw Object.assign(new Problem(502, inspected.reason), { integrity: inspected.integrity });
   }
-  if (native && schema) parsed.router_anti_truncation = { restored: parsed.choices[0].native_finish_reason === "STOP" };
-  else parsed = restoreAntiTruncationCompletion(parsed, toolName, native ? undefined : stop, schema);
+  if (native && schema) parsed.router_anti_truncation = { restored: fields.hasReply() && parsed.choices[0].native_finish_reason === "STOP" };
+  else parsed = restoreAntiTruncationCompletion(parsed, toolName, native ? undefined : stop, schema, transport);
   if (stop?.marker()) { delete parsed.usage; parsed.router_stop_after = stop.marker(); }
   if (stop) {
     const inspected = inspectCompletion(parsed);
@@ -247,7 +252,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           payload = dropParams(payload, unsupported);
           if (droppedParams.length) response.setHeader("x-gemini-dropped-params", droppedParams.join(","));
           const transport = prepareAntiTruncation(payload, route.mode !== "normal" && config.antiTruncation !== false, route.mode === "streaming",
-            { native: !custom, transportToolName: config.transportToolName });
+            { native: !custom, transportToolName: config.transportToolName, meowCompat: config.meowCompat, gatewayRequest: true });
           const stop = config.tucaoStop && transport.toolName ? createTagStop(transport.toolName, config.stopTag, config.stopCount, config.stopExemptTag) : null;
           const buffered = route.mode === "buffered" && Boolean(transport.toolName);
           const upstreamStream = stream && !buffered;
@@ -273,8 +278,8 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           if (longDecode) url = longDecodeUrl(url);
           const expectation = native ? structuredOutputExpectation(payload) : null;
           const requestBody = value => {
-            const body = transport.nativeStreaming ? buildNativeTextBody(value)
-              : native ? nativeRequestBody(value) : { ...value, model: route.upstreamModel, stream: upstreamStream };
+            const body = transport.nativeStreaming ? buildNativeTextBody(value, transport)
+              : native ? nativeRequestBody(value, transport) : { ...value, model: route.upstreamModel, stream: upstreamStream };
             if (!upstreamStream) delete body.stream_options;
             // Vertex's compatible stream reports usage only on request; the log's cost estimate needs it.
             else if (!native && !custom) body.stream_options = { ...body.stream_options, include_usage: true };
@@ -322,7 +327,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           status = upstream.status;
           // A complete upstream reply, restored and attributed to the selected alias.
           const readReply = async reply => {
-            const completion = await readCompletion(reply, config.bodyLimitBytes, native, route.id, transport.toolName, stop, transport.schema);
+            const completion = await readCompletion(reply, config.bodyLimitBytes, native, route.id, transport, stop);
             completion.model = route.id;
             audit.trafficType = trafficType(completion.usage);
             audit.usage = completion.usage;
@@ -336,11 +341,11 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
             if (buffered) {
               upstream = completionStream(await readReply(upstream), includeUsage);
             } else {
-              const fields = native && transport.schema && nativeSoliumbra(transport.schema, stop);
+              const fields = native && transport.schema && nativeSoliumbra(transport.schema, stop, transport);
               if (native && stop) upstream = stop.stream(upstream, false, undefined, fields);
               if (transport.nativeStreaming || fields) upstream = wrapNativeTextStream(upstream, fields ? null : transport.toolName, route.upstreamModel, usage => { audit.trafficType = usage?.trafficType; audit.usage = translateUsage(usage); }, includeUsage, transport.payload.tools, undefined, stop ? undefined : fields);
               else if (native) upstream = wrapNativeStream(upstream, route.id, usage => { audit.trafficType = usage?.traffic_type; audit.usage = usage; }, includeUsage);
-              upstream = wrapAntiTruncationStream(upstream, transport.toolName, metadata => Object.assign(audit, metadata), transport.payload.tools, native ? undefined : stop, Boolean(fields));
+              upstream = wrapAntiTruncationStream(upstream, transport.toolName, metadata => Object.assign(audit, metadata), transport.payload.tools, native ? undefined : stop, fields?.hasReply, transport);
               upstream = aliasStream(upstream, route.id, metadata => Object.assign(audit, metadata), includeUsage, () => stop?.marker());
             }
             upstream = guardCompletionStream(upstream, metadata => { integrity = metadata; }, expectation, config.bodyLimitBytes);

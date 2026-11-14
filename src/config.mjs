@@ -10,7 +10,7 @@ export { MODEL_ID, UPSTREAM_MODEL };
 export const DEFAULT_SETTINGS = Object.freeze({
   projectId: "", location: "global", authMode: "service-account", serviceTier: "standard",
   // Keep the persisted switch name so existing explicit opt-outs survive upgrades.
-  port: 4781, timeoutMs: 600000, antiTruncation: true, transportToolName: "", tucaoStop: true, stopTag: DEFAULT_STOP_TAG, stopCount: DEFAULT_STOP_COUNT, stopExemptTag: "", models: null,
+  port: 4781, timeoutMs: 600000, antiTruncation: true, transportToolName: "", meowCompat: false, tucaoStop: true, stopTag: DEFAULT_STOP_TAG, stopCount: DEFAULT_STOP_COUNT, stopExemptTag: "", models: null,
   hideUnavailableModels: true, geminiPrefillToUser: true, geminiLongDecode: false, unicodeInput: false, imageInput: "off",
   geminiPromptRetryEnabled: false, geminiPromptRetryText: "", geminiPromptRetryMatches: null, customBaseUrl: "",
   gatewayKeyMode: "strict", gatewayKey: "", serviceAccountJson: "", apiKey: "", accessToken: "", customApiKey: "",
@@ -88,6 +88,7 @@ export async function settingsFromEnv(env = process.env) {
     timeoutMs: integer(env.UPSTREAM_TIMEOUT_MS, 600000, 1000, 1800000, "UPSTREAM_TIMEOUT_MS"),
     antiTruncation: env.ANTI_TRUNCATION !== "false",
     transportToolName: env.TRANSPORT_TOOL_NAME?.trim() ?? "",
+    meowCompat: toggle("MEOW_COMPAT", false),
     tucaoStop: toggle("TAG_STOP", toggle("TUCAO_STOP", true)),
     stopExemptTag: env.STOP_EXEMPT_TAG ?? "",
     stopTag: env.STOP_TAG ?? DEFAULT_STOP_TAG,
@@ -179,7 +180,7 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
   if (typeof s.antiTruncation !== "boolean") throw new Error("Invalid anti-truncation setting");
   validateTagStopRule({ tag: s.stopTag, count: s.stopCount, exemptTag: s.stopExemptTag });
   if (![false, true, "all"].includes(s.unicodeInput)) throw new Error("Invalid Unicode input toggle or scope");
-  for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiLongDecode", "geminiPromptRetryEnabled", "accountRotationEnabled", "tucaoStop"]) {
+  for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiLongDecode", "geminiPromptRetryEnabled", "accountRotationEnabled", "tucaoStop", "meowCompat"]) {
     if (typeof s[name] !== "boolean") throw new Error("Invalid compatibility toggle");
   }
   if (typeof s.geminiPromptRetryText !== "string" || Buffer.byteLength(s.geminiPromptRetryText) > MAX_RETRY_TEXT_BYTES) {
@@ -204,7 +205,7 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
     geminiPromptRetry: { enabled: s.geminiPromptRetryEnabled, text: s.geminiPromptRetryText, ...(matches ? { errorMatches: matches } : {}) },
     // Legacy fields remain available to CLI integrations; profiles own behavior.
     model: models[0]?.id || MODEL_ID, upstreamModel: models[0]?.upstreamModel || UPSTREAM_MODEL,
-    antiTruncation: s.models == null ? s.antiTruncation : true, transportToolName: validateTransportToolName(s.transportToolName),
+    antiTruncation: s.models == null ? s.antiTruncation : true, transportToolName: validateTransportToolName(s.transportToolName), meowCompat: s.meowCompat,
     tucaoStop: s.tucaoStop, stopTag: s.stopTag, stopCount: s.stopCount, stopExemptTag: s.stopExemptTag,
     port: integer(s.port, 4781, 1, 65535, "PORT"),
     timeoutMs: integer(s.timeoutMs, 600000, 1000, 1800000, "UPSTREAM_TIMEOUT_MS"),
