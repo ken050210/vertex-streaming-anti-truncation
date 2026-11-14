@@ -41,6 +41,21 @@ test("Vertex streams a body-first Meowssiah reply before its late planning field
   assert.equal(fragment("think_nya", "late <plan>", false, true), "\n<think_nya>\nlate &lt;plan&gt;\n</think_nya><!--</think>-->");
 });
 
+test("Vertex streams a body-first Meowssiah reply in preset order when planning arrives late", () => {
+  const fields = { properties: { think_nya: {type:"string"}, game_content: {type:"string"} }, required: ["think_nya", "game_content"] };
+  const restore = nativeSoliumbra(fields, null, {meowCompat:true});
+  const fragment = (key, value, more, ended = false) => {
+    const frame = native([{functionCall: {name, willContinue: !ended,
+      partialArgs: [{jsonPath: "$." + key, stringValue: value, willContinue: more}]}}], ended ? "STOP" : undefined);
+    restore(frame);
+    return visible([frame]);
+  };
+  assert.equal(fragment("game_content", "<ga", true), "");
+  assert.equal(fragment("game_content", "me>first", true), "");
+  assert.equal(fragment("game_content", " second</game>", false), "");
+  assert.equal(fragment("think_nya", "late <plan>", false, true), "<think_nya>\nlate &lt;plan&gt;\n</think_nya><!--</think>-->\n<game>first second</game>");
+});
+
 test("reuses dynamic declaration, context history and exact required/auto selection", () => {
   const input = {model, stream:true, messages:[{role:"assistant", thoughtSignature:"sig", tool_calls:[{id:"sync",type:"function",signature:"sig",
     extra_content:{google:{thoughtSignature:"sig"}},function:{name:"context",arguments:"{}"}}]}, {role:"tool",tool_call_id:"sync",name:"context",content:"{}"}],
@@ -52,6 +67,9 @@ test("reuses dynamic declaration, context history and exact required/auto select
   assert.equal(req.payload.tools,tools);
   const body = nativeRequestBody(req.payload);
   assert.deepEqual(body.toolConfig.functionCallingConfig.allowedFunctionNames,[name]);
+  const ordered = {...schema, propertyOrdering:Object.keys(schema.properties)};
+  const declaration = nativeRequestBody({...req.payload,tools:[{type:"function",function:{name,parameters:ordered}}]}).tools[0].functionDeclarations[0];
+  assert.deepEqual(declaration.parametersJsonSchema, ordered);
   assert.equal(body.contents[0].parts[0].thoughtSignature,"sig");
   assert.equal(body.contents[1].parts[0].functionResponse.id,"sync");
   assert.equal(prepareAntiTruncation({...input,toolConfig:undefined,tool_choice:"auto"},true,true,{transportToolName:name}).payload.tool_choice,"auto");

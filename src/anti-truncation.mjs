@@ -1,3 +1,4 @@
+import { prepareMeowFields } from "./meow-compat.mjs";
 import { supportsNativeRequest } from "./vertex-native.mjs";
 import { DEFAULT_TRANSPORT_TOOL_NAME, SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason } from "./transport-tool-name.mjs";
 import { SoliumbraArguments } from "./soliumbra.mjs";
@@ -25,7 +26,7 @@ export function antiTruncationLogFields(metadata) {
 
 // An empty setting adds our text tool. An explicit name selects the preset's
 // declaration for this request; the other tools remain owned by the client.
-export function prepareAntiTruncation(payload, enabled, streamArguments = false, { continuation = false, native = true, transportToolName = "" } = {}) {
+export function prepareAntiTruncation(payload, enabled, streamArguments = false, { continuation = false, native = true, transportToolName = "", meowCompat = false } = {}) {
     const skip = reason => ({ payload, toolName: null, reason });
     if (!enabled) return skip("disabled");
     if (payload.functions?.length) return skip("existing-tools");
@@ -33,14 +34,18 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
     if (payload.response_format && payload.response_format.type !== "text") return skip("structured-output");
     if ((payload.n != null && payload.n !== 1) || (payload.best_of != null && payload.best_of !== 1)) return skip("multiple-candidates");
     if (payload.messages.some(message => message.role === "function" || message.function_call)) return skip("tool-history");
-    const bypass = transportToolBypassReason(payload, transportToolName);
+    if (meowCompat) transportToolName = SOLIUMBRA_TOOL;
+    const bypass = transportToolBypassReason(payload, transportToolName, meowCompat);
     if (bypass) return skip(bypass);
     const clientTools = Array.isArray(payload.tools) ? payload.tools : [];
     const requested = streamArguments && payload.stream === true;
     // Native argument streaming carries both the text transport and client calls.
     // Keep the compatible fallback when native translation would discard fields.
-    const schema = soliumbraSchema(transportToolName, clientTools);
+    const schema = soliumbraSchema(transportToolName, clientTools, meowCompat);
+    if (meowCompat && !schema) return skip("target-tool-schema");
     if (schema) {
+        const aliased = meowCompat && prepareMeowFields(payload, schema);
+        if (aliased) payload = aliased.payload;
         const policy = payload.toolConfig?.functionCallingConfig;
         const explicitlyNamed = policy?.mode === "ANY" && policy.allowedFunctionNames?.length === 1 &&
             policy.allowedFunctionNames[0] === SOLIUMBRA_TOOL && Object.keys(payload.toolConfig).length === 1 && Object.keys(policy).length === 2;
@@ -48,7 +53,7 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
         // In the preset's two-tool request, context belongs to the preceding history.
         const onlyReplyAndContext = payload.toolConfig == null && clientTools.every(tool =>
             tool?.function?.name === SOLIUMBRA_TOOL || tool?.function?.name === "context");
-        if (payload.tool_choice === "required" && (explicitlyNamed || onlyReplyAndContext)) {
+        if (!meowCompat && payload.tool_choice === "required" && (explicitlyNamed || onlyReplyAndContext)) {
             const { toolConfig, ...original } = payload;
             payload = { ...original, tool_choice: { type: "function", function: { name: SOLIUMBRA_TOOL } } };
         }
@@ -56,6 +61,7 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
         if (continuation) payload = { ...payload, messages: [...payload.messages, { role: "user", content: CONTINUATION_INSTRUCTION }] };
         const nativeStreaming = requested && native && supportsNativeRequest(payload);
         return { payload, toolName: SOLIUMBRA_TOOL, schema, nativeStreaming,
+            ...(meowCompat ? { meowCompat: true, meowAliases: aliased?.originalNames ?? false } : {}),
             reason: nativeStreaming ? "tool-transport-native-streaming" : "tool-transport" };
     }
     const nativeStreaming = requested && native && supportsNativeRequest(payload);
@@ -439,7 +445,8 @@ export function wrapAntiTruncationStream(response, toolName, onMetadata = () => 
         const result = skipped || nativeFields ? parsed : processor.process(parsed);
         const choice = !skipped && Array.isArray(result?.choices) ? result.choices.find(choice => (choice.index ?? 0) === 0) : null;
         if (choice?.finish_reason != null) {
-            if (nativeFields) processor.restored = choice.native_finish_reason === "STOP";
+            if (nativeFields) processor.restored = choice.native_finish_reason === "STOP" &&
+                (typeof nativeFields !== "function" || nativeFields());
             onMetadata({ finishReason: choice.finish_reason });
             // Like a buffered reply, the result travels on the finish chunk, not in an extra empty-choices chunk.
             if (!processor.failed) result.router_anti_truncation = { restored: processor.restored };

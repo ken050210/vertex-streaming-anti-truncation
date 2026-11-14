@@ -10,7 +10,7 @@ import { googleErrorDetail, upstreamMessage } from "../../src/wire.mjs";
 // PayGo owns the request URL, single-use ticket, stream flag, service tier and
 // usage observer. Shape only the submitted messages/tools and consume its reply.
 export async function sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, waitForStopUsage, longDecode,
-  unicode, transportToolName, ensureBackend, getRequestHeaders, onStatus }) {
+  unicode, transportToolName, meowCompat, ensureBackend, getRequestHeaders, onStatus }) {
   const signal = init?.signal ?? input?.signal;
   let image;
   if (imageMode !== "off") {
@@ -33,7 +33,7 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
   const continuation = body.type === "continue";
   const capped = capGemini4Output(body, body.model, {stream: body.stream === true});
   if (longDecode && capped.outputLimit) throw new Error("paygo_long_decode_unsupported");
-  const prepared = prepareAntiTruncation(capped.payload, mode !== "off", false, { continuation, transportToolName });
+  const prepared = prepareAntiTruncation(capped.payload, mode !== "off", false, { continuation, transportToolName, meowCompat });
   const payload = JSON.stringify(prepared.payload);
   if (new TextEncoder().encode(payload).byteLength > BODY_LIMIT) throw new Error("request_too_large");
   signal?.throwIfAborted();
@@ -44,7 +44,7 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
   let delivered = reply;
   if (reply.body) {
     if (body.stream && prepared.toolName) {
-      delivered = await restoreBrowserStream(reply, { toolName: prepared.toolName, schema: prepared.schema, tools: prepared.payload.tools,
+      delivered = await restoreBrowserStream(reply, { ...prepared, tools: prepared.payload.tools,
         model: body.model, continuation, stream: true, upstreamStream: live, tagStop, waitForStopUsage, outputLimit: capped.outputLimit }, signal);
     } else if (!body.stream) {
       const data = await reply.json();
@@ -54,7 +54,7 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
         return Response.json({ ...data, error: { ...(typeof data.error === "object" ? data.error : {}),
           code: data.error?.code ?? "paygo_upstream_error", message } }, { status: detail?.promptBlocked ? 400 : 502 });
       }
-      delivered = Response.json(prepared.toolName ? restorePayGoJson(data, prepared.toolName, tagStop, prepared.schema) : data);
+      delivered = Response.json(prepared.toolName ? restorePayGoJson(data, prepared, tagStop) : data);
     }
   }
   onStatus(delivered.ok ? { mode, payGo: true, unicode, continuation, outputLimit:capped.outputLimit,
@@ -65,7 +65,8 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
 
 // ST omits Google's finish reason from some non-streaming responses. Preserve
 // the host envelope, usage, and signatures on real tools. Never infer a finish.
-function restorePayGoJson(data, toolName, tagStop, schema) {
+function restorePayGoJson(data, prepared, tagStop) {
+  const { toolName, schema, meowCompat } = prepared;
   if (data.error) return data;
   if (data.candidates?.length > 1) throw new Error("unexpected_candidates");
   const candidate = data.candidates?.[0] ?? {content:data.responseContent};
@@ -75,9 +76,10 @@ function restorePayGoJson(data, toolName, tagStop, schema) {
   const frame = { candidates: [candidate], usageMetadata: data.usageMetadata };
   if (schema) {
     restored = candidate.content.parts.some(part => part.functionCall?.name === toolName);
-    if (!restored && !["length", "content_filter"].includes(data.choices?.[0]?.finish_reason)) throw new Error("anti_truncation_missing_reply_tool");
+    const otherCall = meowCompat && candidate.content.parts.some(part => part.functionCall?.name);
+    if (!restored && !otherCall && !["length", "content_filter"].includes(data.choices?.[0]?.finish_reason)) throw new Error("anti_truncation_missing_reply_tool");
     stop?.observe(frame, true);
-    nativeSoliumbra(schema, stop)(frame);
+    nativeSoliumbra(schema, stop, prepared)(frame);
   }
   if (stop) {
     if (!schema) stop.process(frame, true);

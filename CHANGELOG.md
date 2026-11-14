@@ -2,6 +2,12 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## SillyTavern 0.17.0
+
+Enable Meowssiah compatibility in the Vertex panel for Meowssiah 2.1.5. Planning appears before the story. Registered columns follow the preset display order, and an omitted optional extra does not hold up the story. Numbered deep-planning steps keep their original text. Older floors retain their original story field when the current declaration changes.
+
+The option defaults to off. Turning it off restores the saved transport tool name and the previous native streaming behavior. Update both the extension and server plugin, restart SillyTavern, and refresh the browser.
+
 ## SillyTavern 0.16.1 / Gateway 0.19.1
 
 With native Vertex argument streaming, a story field that starts before the first planning text is displayed immediately. Late planning text follows the story. This applies to Meowssiah 2.1.0 in streaming anti-truncation mode with the preset text tool set to `soliumbra_reply`.

@@ -177,7 +177,7 @@ function toolConfig(payload) {
   return { functionCallingConfig: { mode: "AUTO" } };
 }
 
-function buildNativeBody(payload) {
+function buildNativeBody(payload, meowCompat = false) {
   const systemParts = [];
   const contents = [];
   const callNames = new Map();
@@ -252,7 +252,10 @@ function buildNativeBody(payload) {
     tool?.type === "function" && tool.function?.name ? [{
       name: tool.function.name,
       description: tool.function.description || "",
-      parametersJsonSchema: vertexJsonSchema(tool.function.parameters ?? { type: "object", properties: {} }, `/tools/${index}/function/parameters`),
+      [meowCompat && tool.function.name === "soliumbra_reply" && tool.function.parameters?.propertyOrdering &&
+        Object.keys(tool.function.parameters).every(key => ["type", "description", "properties", "required", "propertyOrdering"].includes(key)) &&
+        Object.values(tool.function.parameters.properties ?? {}).every(field => field?.type === "string" && Object.keys(field).every(key => ["type", "description", "enum"].includes(key)))
+        ? "parameters" : "parametersJsonSchema"]: vertexJsonSchema(tool.function.parameters ?? { type: "object", properties: {} }, `/tools/${index}/function/parameters`),
     }] : []);
   if (declarations.length > 0) {
     body.tools = [{ functionDeclarations: declarations }];
@@ -268,8 +271,8 @@ export function buildNativeTextBody(payload) {
   return body;
 }
 
-export function nativeRequestBody(payload) {
-  const body = buildNativeBody(payload);
+export function nativeRequestBody(payload, { meowCompat = false } = {}) {
+  const body = buildNativeBody(payload, meowCompat);
   if (payload.n != null) body.generationConfig.candidateCount = payload.n;
   return body;
 }

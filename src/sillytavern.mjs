@@ -1,4 +1,5 @@
 import { CONTINUATION_INSTRUCTION, prepareAntiTruncation, restoreAntiTruncationCompletion, wrapAntiTruncationStream } from "./anti-truncation.mjs";
+import { SOLIUMBRA_TOOL } from "./transport-tool-name.mjs";
 import { nativeSoliumbra } from "./soliumbra.mjs";
 import { SIGNATURE_ID_PREFIX, nativeRequestBody, translateUsage } from "./vertex-native.mjs";
 import { translateNativeCompletion } from "./vertex-protocol.mjs";
@@ -27,8 +28,10 @@ export function prepareSillyTavernRequest(request, adapters) {
   const imageEnabled = ["current-turn", "all"].includes(body.vertex_image_input);
   if (body.vertex_image_input != null && !["off", "current-turn", "all"].includes(body.vertex_image_input)) throw requestError("invalid_image_input_mode");
   if (!["buffered", "streaming"].includes(mode) && !(mode === "off" && imageEnabled)) throw requestError("invalid_transport_mode");
+  const meowCompat = mode !== "off" && body.vertex_meow_compat === true;
+  const transportToolName = meowCompat ? SOLIUMBRA_TOOL : body.vertex_transport_tool_name;
   const bypass = bypassReason(body, mode === "off" && imageEnabled ? "buffered" : mode, false,
-    mode === "off" ? "" : body.vertex_transport_tool_name);
+    mode === "off" ? "" : transportToolName, meowCompat);
   if (bypass && !bypass.startsWith("target-tool-")) throw requestError("unsupported_request_" + bypass.replaceAll("-", "_"));
   let messages = structuredClone(body.messages);
   // ST's Google converter only recognizes system/user/assistant roles. Keep
@@ -45,7 +48,7 @@ export function prepareSillyTavernRequest(request, adapters) {
   const continuation = body.type === "continue";
   const clientTools = Boolean(body.tools?.length);
   const prepared = prepareAntiTruncation({ messages, tools: body.tools, tool_choice: body.tool_choice, toolConfig: body.toolConfig }, mode !== "off", false,
-    { continuation, transportToolName: body.vertex_transport_tool_name });
+    { continuation, transportToolName, meowCompat });
   if (continuation && !prepared.toolName) {
     prepared.payload = { ...prepared.payload, messages: [...messages, { role: "user", content: CONTINUATION_INSTRUCTION }] };
   }
@@ -56,7 +59,7 @@ export function prepareSillyTavernRequest(request, adapters) {
   const last = prompt.contents.at(-1);
   const results = last?.parts.findLastIndex(part => part.functionResponse) ?? -1;
   if (results >= 0 && results < last.parts.length - 1) prompt.contents.push({ role: last.role, parts: last.parts.splice(results + 1) });
-  const native = nativeRequestBody({ ...prepared.payload, messages: [] });
+  const native = nativeRequestBody({ ...prepared.payload, messages: [] }, { meowCompat });
   native.contents = prompt.contents;
   if (useSystemPrompt && prompt.system_instruction?.parts?.length) native.systemInstruction = prompt.system_instruction;
   native.safetySettings = structuredClone(adapters.safetySettings);
@@ -87,7 +90,7 @@ export function prepareSillyTavernRequest(request, adapters) {
   if (upstreamStream && native.toolConfig) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   if (body.vertex_tucao_stop != null && typeof body.vertex_tucao_stop !== "boolean") throw requestError("invalid_tucao_stop");
   const tagStop = body.vertex_tag_stop == null ? null : validateTagStopRule(body.vertex_tag_stop);
-  return { body: native, toolName: prepared.toolName, schema: prepared.schema, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit,
+  return { body: native, toolName: prepared.toolName, schema: prepared.schema, meowCompat, meowAliases: prepared.meowAliases, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit,
     waitForStopUsage: !outputLimit?.longDecode && normalizeStopUsageWait(body.vertex_wait_for_stop_usage),
     tucaoStop: tagStop !== null || body.vertex_tucao_stop === true, stopTag: tagStop?.tag, stopCount: tagStop?.count, stopExemptTag: tagStop?.exemptTag };
 }
@@ -215,13 +218,13 @@ export async function restoreSillyTavernResponse(upstream, prepared, credential,
     if (!hasUsageTotals(usageMetadata) && (usageMetadata || estimateUsage)) return { final: false, usageMetadata };
   };
   const estimateText = estimateUsage && (text => estimateUsage(prepared.body, text));
-  const fields = prepared.schema && nativeSoliumbra(prepared.schema, stop);
+  const fields = prepared.schema && nativeSoliumbra(prepared.schema, stop, prepared);
   if (prepared.upstreamStream && !upstream.headers.get("content-type")?.includes("application/json")) {
     if (!upstream.body) throw protocolError("empty_upstream_stream");
     if (stop) upstream = stop.stream(upstream, prepared.waitForStopUsage, undefined, fields);
     const translated = wrapNativeTextStream(upstream, fields ? null : prepared.toolName, prepared.model,
       usage => { usageMetadata = usage; }, true, prepared.tools, undefined, stop ? undefined : fields);
-    const restored = wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools, undefined, Boolean(fields));
+    const restored = wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools, undefined, fields?.hasReply);
     return toSillyTavernStream(guardCompletionStream(restored, () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stop?.marker(), undefined, getReceipt, estimateText);
   }
   const raw = await readJson(upstream);
@@ -232,7 +235,7 @@ export async function restoreSillyTavernResponse(upstream, prepared, credential,
   const translated = translateNativeCompletion(raw, prepared.model);
   const inspected = inspectCompletion(translated);
   if (!inspected.valid) throw protocolError(inspected.reason);
-  const completion = fields ? { ...translated, router_anti_truncation: { restored: raw.candidates[0].finishReason === "STOP" } }
+  const completion = fields ? { ...translated, router_anti_truncation: { restored: fields.hasReply() && raw.candidates[0].finishReason === "STOP" } }
     : prepared.toolName ? restoreAntiTruncationCompletion(translated, prepared.toolName) : translated;
   const restored = inspectCompletion(completion);
   if (!restored.valid) throw protocolError(restored.reason);

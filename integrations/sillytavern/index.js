@@ -23,6 +23,7 @@ const errors = { unicode_floor_required: "找不到真实用户楼层，也没�
   paygo_long_decode_unsupported: "当前 PayGo 后端不支持 Gemini 4 分段续写。请降低最大回复长度，或关闭 long decode 后使用单次上限。",
   natural_stop_usage_not_supported: "当前服务端插件不支持等待 Google 自然结束。请更新服务端并重启酒馆，或选择其他截停等待方式。",
   tag_stop_not_supported: "服务端插件不支持自定义标签截停。请更新服务端插件并重启酒馆，或关闭此开关。",
+  meow_compat_not_supported: "服务端不支持小猫兼容模式。请更新服务端插件并重启酒馆。",
   transport_tool_name_not_supported: "服务端插件不支持复用预设正文工具。请更新服务端并重启酒馆。",
   invalid_tag_stop: "截停标签名须为 1–64 位字母、数字、下划线、点、冒号或连字符，以字母或下划线开头；次数须为正整数。",
   image_input_requires_supported_request: "图片输入不支持此请求，已停止发送，未改用明文。请去掉不支持的内容或换用支持的模型，或关闭图片输入。",
@@ -146,6 +147,8 @@ function mountTransportOptions(panel, select, saved, payGoInstalled) {
   const count = panel.querySelector("#vertex_stop_count");
   const wait = panel.querySelector("#vertex_wait_for_stop_usage");
   const tool = panel.querySelector("#vertex_transport_tool_name");
+  const meow = panel.querySelector("#vertex_meow_compat");
+  meow.checked = saved.meowCompat === true;
   const hostStream = document.getElementById("stream_toggle");
   stop.checked = saved.tucaoStop ?? true;
   tag.value = saved.stopTag ?? DEFAULT_STOP_TAG;
@@ -155,6 +158,7 @@ function mountTransportOptions(panel, select, saved, payGoInstalled) {
   tool.value = saved.transportToolName ?? "";
 
   function render() {
+    tool.disabled = meow.checked;
     options.hidden = select.value === "off";
     fields.hidden = !stop.checked;
     // TT always reads SSE. PayGo can also buffer a streamed host reply.
@@ -164,6 +168,7 @@ function mountTransportOptions(panel, select, saved, payGoInstalled) {
     summary.textContent = stop.checked ? `第 ${count.value} 对 <${tag.value}> 后停止` : "标签截停已关闭";
   }
   select.addEventListener("change", () => { saveSettings({ mode: select.value }); render(); });
+  meow.addEventListener("change", () => { saveSettings({ meowCompat: meow.checked }); render(); });
   stop.addEventListener("change", () => { saveSettings({ tucaoStop: stop.checked }); render(); });
   wait.addEventListener("change", () => saveSettings({ waitForStopUsage: wait.value === "natural" ? "natural" : wait.value === "true" }));
   function changeRule() {
@@ -233,8 +238,10 @@ function mount() {
             <option value="natural">等 Google 自然结束</option>
           </select><small>命中标签后正文立即停显。等待期间 Google 生成的 token 会计入用量，点酒馆的停止按钮可提前断开。分段续写请求仍立即断流。</small></label>
         </div>
+        <label class="checkbox_label"><input type="checkbox" id="vertex_meow_compat"> 小猫兼容模式（Meowssiah）</label>
+        <small>自动使用小猫的回复工具。2.1.5 的标准双字段请求优先传规划；自定义栏目保留原名。</small>
         <label>预设正文工具名<input class="text_pole" id="vertex_transport_tool_name" placeholder="例如 game_content" maxlength="64" spellcheck="false" aria-describedby="vertex_tool_name_help"></label>
-        <small id="vertex_tool_name_help">小猫 Meowssiah 2.1.0 填 soliumbra_reply，可逐段显示思考、正文及动态栏目。其他正文工具使用 content 字符串。留空使用内置工具。</small>
+        <small id="vertex_tool_name_help">通用模式下填写预设的正文工具名，留空使用内置工具。关闭小猫兼容模式后恢复使用此设置。</small>
       </div>
     </details>
     <div class="vertex-connection">
@@ -244,7 +251,7 @@ function mount() {
   for (const value of MODES) select.add(new Option(labels[value], value));
   select.value = mode();
   const saved = settings();
-  const payGoInstalled = !direct && window.fetch.name === "payGoFetch";
+  payGoInstalled ||= !direct && window.fetch.name === "payGoFetch";
   const connection = panel.querySelector(".vertex-connection");
   status = connection.querySelector("[role=status]");
   mountInputEncoding(panel, saved);
@@ -267,15 +274,37 @@ function mount() {
     connection.append(check);
   }
   parent.append(panel);
-  // Install once and chain any previously installed fetch wrapper.
-  const key = Symbol.for("vertex-anti-truncation.fetch");
-  if (!window[key]) {
-    window[key] = true;
-    window.fetch = createFetchInterceptor(window.fetch.bind(window), { origin: location.origin, getMode: mode,
+  enableMeowTransport(payGoInstalled);
+  installTransport(false)(payGoInstalled);
+  // A deferred preset regex leaves the legacy HTML comment in the live Markdown.
+  // Omit that marker from the preview only; the stored floor keeps its exact text.
+  const formatter = context.messageFormatter;
+  formatter?.addHook((text, floor) => {
+    if (!text.includes("</think_nya><!--</think>-->") || floor.isUser || floor.isSystem || floor.isReasoning) return text;
+    const processor = SillyTavern.getContext().streamingProcessor;
+    if (settings().meowCompat !== true || mode() !== "streaming" || !processor || processor.isFinished || processor.messageId !== floor.messageId) return text;
+    return text.replace("</think_nya><!--</think>-->", "</think_nya>");
+  }, { stage: formatter?.stage.AFTER_REGEX });
+
+  if (!direct) void checkBackend(true);
+}
+
+function installTransport(compat) {
+  const key = Symbol.for(compat ? "vertex-anti-truncation.meow-fetch" : "vertex-anti-truncation.fetch");
+  if (window[key]) return window[key];
+  const previous = window.fetch.bind(window);
+  let transport;
+  window.fetch = (input, init) => {
+    const meowActive = context.extensionSettings?.[PLUGIN_ID]?.meowCompat === true && mode() !== "off";
+    return transport && meowActive === compat ? transport(input, init) : previous(input, init);
+  };
+  return window[key] = payGoInstalled => {
+    transport = createFetchInterceptor(previous, { origin: location.origin, getMode: mode,
       payGoInstalled,
       getRequestHeaders: () => SillyTavern.getContext().getRequestHeaders(),
       getImageInput: () => direct ? "off" : settings().imageInput || "off",
       getUnicodeInput: () => settings().unicodeInput,
+      getMeowCompat: () => compat,
       getTransportToolName: () => settings().transportToolName ?? "",
       getLongDecode: () => !direct && settings().longDecode === true,
       getWaitForStopUsage: () => settings().waitForStopUsage,
@@ -290,8 +319,12 @@ function mount() {
       // Image input, Continue and client tools require a matching server plugin.
       ensureBackend: async feature => (backendReady || await checkBackend(true)) && (!feature || backendFeatures.includes(feature)),
       onStatus: updateStatus, direct });
-  }
-  if (!direct) void checkBackend(true);
+  };
 }
+
+// Preset scripts wrap fetch while ST starts. Observe their final tool declaration
+// inside those wrappers; keep the general transport at its existing APP_READY position.
+let payGoInstalled = !direct && window.fetch.name === "payGoFetch";
+const enableMeowTransport = installTransport(true);
 
 context.eventSource.on(events.APP_READY ?? events.APP_INITIALIZED, mount);

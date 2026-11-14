@@ -1,11 +1,11 @@
 import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 import { prepareOptimizedInput } from "./optimized-input.js";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
-import { soliumbraSchema, transportToolBypassReason } from "../../src/transport-tool-name.mjs";
+import { SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason } from "../../src/transport-tool-name.mjs";
 import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.16.1";
+export const PLUGIN_VERSION = "0.17.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -18,8 +18,9 @@ const EXEMPT_TAG_FEATURE = "tag-stop-exempt-block";
 export const TAG_STOP_FEATURE = "stop-after-tag-pairs";
 export const NATURAL_STOP_USAGE_FEATURE = "tag-stop-natural-usage";
 export const TRANSPORT_NAME_FEATURE = "preset-transport-tool";
+const MEOW_FEATURE = "meow-compat";
 const SOLIUMBRA_FEATURE = "soliumbra-stream";
-export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, EXEMPT_TAG_FEATURE, NATURAL_STOP_USAGE_FEATURE, "image-input-convert", "tag-stop-usage", TRANSPORT_NAME_FEATURE, SOLIUMBRA_FEATURE];
+export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, EXEMPT_TAG_FEATURE, NATURAL_STOP_USAGE_FEATURE, "image-input-convert", "tag-stop-usage", TRANSPORT_NAME_FEATURE, SOLIUMBRA_FEATURE, MEOW_FEATURE];
 export const MODES = ["off", "buffered", "streaming"];
 export const GENERATE_PATH = "/api/backends/chat-completions/generate";
 const PAYGO_GENERATE_PATH = "/api/plugins/vertex-paygo/native-gemini/generate";
@@ -99,7 +100,7 @@ function nativeTool(tool) {
 }
 
 // Shared by both sides: unsupported requests keep SillyTavern's original route.
-export function bypassReason(body, mode, payGo = false, transportToolName = "") {
+export function bypassReason(body, mode, payGo = false, transportToolName = "", meowCompat = false) {
   if (mode === "off" || !MODES.includes(mode)) return "disabled";
   if (body?.chat_completion_source !== "vertexai") return "other-provider";
   if (body.reverse_proxy && !payGo) return "reverse-proxy";
@@ -112,12 +113,12 @@ export function bypassReason(body, mode, payGo = false, transportToolName = "") 
   if (body.enable_web_search) return "web-search";
   if (body.request_images) return "image-generation";
   if (Array.isArray(body.messages) && body.messages.some(message => message?.role === "function" || message?.function_call)) return "tool-history";
-  return transportToolBypassReason(body, transportToolName);
+  return transportToolBypassReason(body, transportToolName, meowCompat);
 }
 
 // ST 1.19 exposes a settings event, but not a generation-URL override. Intercept
 // only its same-origin Vertex POST; preserve the original fetch for everything else.
-export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getTransportToolName = () => "", getTagStop = () => null, getWaitForStopUsage = () => false, getUserFloor = () => "", getRecentAiFloors = () => [], ensureBackend = async () => true, onStatus = () => {}, direct, payGoInstalled = false, getRequestHeaders = () => ({ "Content-Type": "application/json" }) }) {
+export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getTransportToolName = () => "", getMeowCompat = () => false, getTagStop = () => null, getWaitForStopUsage = () => false, getUserFloor = () => "", getRecentAiFloors = () => [], ensureBackend = async () => true, onStatus = () => {}, direct, payGoInstalled = false, getRequestHeaders = () => ({ "Content-Type": "application/json" }) }) {
   return async function vertexFetch(input, init) {
     let url;
     try { url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, origin); }
@@ -159,8 +160,10 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const payGo = !direct && (payGoInstalled || marked || url.pathname === PAYGO_GENERATE_PATH
       || (ticket && typeof globalThis.vertexPayGoGemini4GenerateInterceptor === "function"));
     const ownPayGoProxy = payGo && (ticket || (marked?.sink === body.reverse_proxy && body.reverse_proxy === "vertex-paygo-blocked://request"));
-    const transportToolName = mode !== "off" ? getTransportToolName() : "";
-    let reason = bypassReason(body, imageEnabled && mode === "off" ? "buffered" : mode, ownPayGoProxy, transportToolName);
+    const meowCompat = mode !== "off" && getMeowCompat() === true;
+    const transportToolName = meowCompat ? SOLIUMBRA_TOOL : mode !== "off" ? getTransportToolName() : "";
+    let reason = bypassReason(body, imageEnabled && mode === "off" ? "buffered" : mode, ownPayGoProxy, transportToolName, meowCompat);
+    if (!reason && meowCompat && !soliumbraSchema(transportToolName, body.tools, true)) reason = "target-tool-schema";
     // Image conversion still needs its normal backend when only the text tool is skipped.
     const imageOnlyBypass = imageEnabled && reason?.startsWith("target-tool-") ? reason : null;
     if (imageOnlyBypass) reason = null;
@@ -169,6 +172,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const waitForStopUsage = normalizeStopUsageWait(tagStop && getWaitForStopUsage());
     delete body.vertex_long_decode;
     delete body.vertex_transport_tool_name;
+    delete body.vertex_meow_compat;
     delete body.vertex_wait_for_stop_usage;
     delete body.vertex_tucao_stop;
     delete body.vertex_tag_stop;
@@ -176,7 +180,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     // own request here and restores the reply below.
     let prepared;
     if (direct && !reason) {
-      try { prepared = direct.prepare(body, mode, tagStop, transportToolName); }
+      try { prepared = direct.prepare(body, mode, tagStop, transportToolName, meowCompat); }
       catch (error) { onStatus({ error: error.code || "invalid_request", message: error.message }); throw error; }
       prepared.waitForStopUsage = waitForStopUsage;
       reason = prepared.bypass ?? null;
@@ -198,7 +202,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (payGo && !reason) {
       const { sendPayGoRequest } = await import("./paygo.js");
       try {
-        const reply = await sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, waitForStopUsage, unicode, transportToolName, longDecode: getLongDecode() === true,
+        const reply = await sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, waitForStopUsage, unicode, transportToolName, meowCompat, longDecode: getLongDecode() === true,
           ensureBackend, getRequestHeaders, onStatus });
         return await reportResponse(reply, onStatus);
       } catch (error) {
@@ -208,15 +212,16 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
       }
     }
     let payload = reason ? null : JSON.stringify(prepared?.body ??
-      { ...body, vertex_anti_truncation: mode, ...(transportToolName ? { vertex_transport_tool_name: transportToolName } : {}),
+      { ...body, vertex_anti_truncation: mode, ...(meowCompat ? { vertex_meow_compat: true } : {}), ...(transportToolName ? { vertex_transport_tool_name: transportToolName } : {}),
         ...(tagStop ? { vertex_tag_stop: tagStop } : {}), ...(waitForStopUsage ? { vertex_wait_for_stop_usage: waitForStopUsage } : {}), ...(getLongDecode() === true ? { vertex_long_decode: true } : {}) });
     // The plugin rejects bodies over its limit; keep ST's own route for plain
     // anti-truncation. Image input never falls back to plaintext.
     if (payload && !imageEnabled && new TextEncoder().encode(payload).length > BODY_LIMIT) reason = "too-large";
     if (reason && !unicodeEnabled) { onStatus({ bypass: reason }); return originalFetch(input, init); }
-    const transportFeature = soliumbraSchema(transportToolName, body.tools) ? SOLIUMBRA_FEATURE : TRANSPORT_NAME_FEATURE;
+    const transportFeature = meowCompat ? MEOW_FEATURE : soliumbraSchema(transportToolName, body.tools) ? SOLIUMBRA_FEATURE : TRANSPORT_NAME_FEATURE;
     if (!reason && !direct && transportToolName && !await ensureBackend(transportFeature)) {
-      onStatus({ error: "transport_tool_name_not_supported" }); throw new Error("transport_tool_name_not_supported");
+      const error = meowCompat ? "meow_compat_not_supported" : "transport_tool_name_not_supported";
+      onStatus({ error }); throw new Error(error);
     }
     // Old plugins ignore image settings and Continue semantics. Check only
     // eligible plugin requests; disabled/bypass routes retain ST's behavior.

@@ -27,7 +27,7 @@ function includedBody(value) {
   } catch { return null; }
 }
 
-export function prepareTauriTavernRequest(body, mode, tagStop, transportToolName) {
+export function prepareTauriTavernRequest(body, mode, tagStop, transportToolName, meowCompat = false) {
   const included = includedBody(body.custom_include_body);
   if (!included) return { bypass: "additional-parameters" };
   // The upstream request is always streamGenerateContent here, and TauriTavern's backend
@@ -36,14 +36,14 @@ export function prepareTauriTavernRequest(body, mode, tagStop, transportToolName
   body = payload;
   const continuation = body.type === "continue";
   const upstreamStream = mode === "streaming" && body.stream === true;
-  const prepared = prepareAntiTruncation({ messages: body.messages, tools: body.tools, tool_choice: body.tool_choice, toolConfig: body.toolConfig }, true, false, { continuation, transportToolName });
+  const prepared = prepareAntiTruncation({ messages: body.messages, tools: body.tools, tool_choice: body.tool_choice, toolConfig: body.toolConfig }, true, false, { continuation, transportToolName, meowCompat });
   if (!prepared.toolName) return { bypass: prepared.reason };
-  const native = nativeRequestBody({ ...prepared.payload, messages: [] });
+  const native = nativeRequestBody({ ...prepared.payload, messages: [] }, { meowCompat });
   if (upstreamStream) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   return {
     body: { ...body, messages: prepared.payload.messages, stream: true,
       custom_include_body: JSON.stringify({ ...included, tools: native.tools, toolConfig: native.toolConfig }) },
-    toolName: prepared.toolName, schema: prepared.schema, tools: prepared.payload.tools, model: body.model, stream: body.stream === true, upstreamStream, continuation, outputLimit, tagStop,
+    toolName: prepared.toolName, schema: prepared.schema, meowCompat, meowAliases: prepared.meowAliases, tools: prepared.payload.tools, model: body.model, stream: body.stream === true, upstreamStream, continuation, outputLimit, tagStop,
   };
 }
 
@@ -138,12 +138,12 @@ export async function restoreBrowserStream(response, prepared, signal, tauri = f
   const stop = rule && createTagStop(prepared.toolName, rule.tag, rule.count, rule.exemptTag);
   let usageMetadata, textSignature;
   const getReceipt = () => stop?.marker() ? stop.receipt() : undefined;
-  const fields = prepared.schema && nativeSoliumbra(prepared.schema, stop);
+  const fields = prepared.schema && nativeSoliumbra(prepared.schema, stop, prepared);
   const native = stop ? stop.stream(response, prepared.waitForStopUsage, tauri ? tauriErrorFrame : undefined, fields)
     : tauri ? normalizeTauriStream(response) : response;
   const translated = wrapNativeTextStream(native, fields ? null : prepared.toolName, prepared.model,
     usage => { usageMetadata = usage; }, true, prepared.tools, tauri ? undefined : signature => { textSignature = signature; }, stop ? undefined : fields);
-  const restored = guardCompletionStream(wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools, undefined, Boolean(fields)), () => {}, null, BODY_LIMIT);
+  const restored = guardCompletionStream(wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools, undefined, fields?.hasReply), () => {}, null, BODY_LIMIT);
   const headers = { ...(prepared.continuation ? { "x-vertex-continuation": "suffix" } : {}), ...outputLimitHeaders(prepared.outputLimit) };
   if (prepared.upstreamStream) {
     return new Response(reportStreamFailure(toSillyTavernStream(restored, () => usageMetadata, prepared.model, stop?.marker, () => textSignature, getReceipt).body, signal),

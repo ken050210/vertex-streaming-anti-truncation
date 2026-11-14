@@ -1,12 +1,20 @@
 export const DEFAULT_TRANSPORT_TOOL_NAME = "router_emit";
 export const SOLIUMBRA_TOOL = "soliumbra_reply";
 
-export function soliumbraSchema(toolName, tools) {
+export const soliumbraPriority = ["think_nya", "game_content", "game", "story_body", "extra", "options", "summary", "comment"];
+
+export function soliumbraFieldOrder(properties) {
+  return [...soliumbraPriority.filter(key => Object.hasOwn(properties, key)),
+    ...Object.keys(properties).filter(key => !soliumbraPriority.includes(key) && key !== "nya_oath")];
+}
+
+export function soliumbraSchema(toolName, tools, meowCompat = false) {
   if (toolName !== SOLIUMBRA_TOOL) return;
   const schema = tools?.find(tool => tool.function?.name === toolName)?.function.parameters;
   if (schema?.type === "object" && schema.properties?.think_nya?.type === "string" &&
       Array.isArray(schema.required) && schema.required.includes("think_nya") &&
-      schema.required.some(key => key !== "think_nya" && key !== "nya_oath") &&
+      (schema.required.some(key => key !== "think_nya" && key !== "nya_oath") ||
+        (meowCompat && Object.hasOwn(schema.properties, "extra"))) &&
       schema.required.every(key => Object.hasOwn(schema.properties, key)) &&
       Object.values(schema.properties).every(field => field?.type === "string")) return schema;
 }
@@ -23,7 +31,7 @@ export function validateTransportToolName(name) {
 
 // A preset tool is consumed as text. Only claim the one declaration the user
 // selected, with the argument shape understood by both streaming decoders.
-export function transportToolBypassReason({ tools, tool_choice: choice }, targetName = "") {
+export function transportToolBypassReason({ tools, tool_choice: choice }, targetName = "", meowCompat = false) {
   if (targetName === "") {
     return choice == null || choice === "auto" || choice === "none" ? null : "tool-choice";
   }
@@ -35,7 +43,7 @@ export function transportToolBypassReason({ tools, tool_choice: choice }, target
   }
   const matches = Array.isArray(tools) ? tools.filter(tool => tool?.function?.name === targetName) : [];
   if (!matches.length) return "target-tool-missing";
-  if (matches.length === 1 && matches[0].type === "function" && soliumbraSchema(targetName, matches)) return null;
+  if (matches.length === 1 && matches[0].type === "function" && soliumbraSchema(targetName, matches, meowCompat)) return null;
   const schema = matches[0].function.parameters;
   if (matches.length !== 1 || matches[0].type !== "function" || schema?.type !== "object" ||
       schema.properties?.content?.type !== "string" || Object.keys(schema.properties).length !== 1 ||

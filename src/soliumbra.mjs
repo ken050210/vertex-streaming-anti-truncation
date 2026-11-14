@@ -1,8 +1,7 @@
 import { protocolError } from "./wire.mjs";
-import { SOLIUMBRA_TOOL } from "./transport-tool-name.mjs";
+import { SOLIUMBRA_TOOL, soliumbraFieldOrder, soliumbraPriority } from "./transport-tool-name.mjs";
 import { pathKeys } from "./vertex-partial-args.mjs";
 
-const priority = ["think_nya", "game_content", "game", "story_body", "extra", "options", "summary", "comment"];
 const tags = new Map([["think_nya", "think_nya"], ["game_content", "game"], ["game", "game"],
   ["options", "options"], ["summary", "summary"], ["comment", "comment"]]);
 const invalid = () => { throw protocolError("anti_truncation_invalid_arguments"); };
@@ -31,19 +30,21 @@ function renderField(key, field) {
 }
 
 export class SoliumbraReply {
-  constructor(schema, stop) {
+  constructor(schema, stop, meowAliases = false) {
     this.schema = schema;
     this.stop = stop;
     this.fields = new Map();
-    this.order = [...priority.filter(key => Object.hasOwn(schema.properties, key)),
-      ...Object.keys(schema.properties).filter(key => !priority.includes(key) && key !== "nya_oath")];
+    this.order = soliumbraFieldOrder(schema.properties);
+    // SPreset appends user-defined keys in argument order after its named fields.
+    this.dynamicOrder = Boolean(meowAliases);
+    if (this.dynamicOrder) this.order = this.order.filter(key => soliumbraPriority.includes(key));
     this.size = 0;
     this.position = 0;
     this.offset = 0;
     this.hasText = false;
     this.pending = "";
   }
-  append(key, fragment, closed = false, nativePartial = false) {
+  append(key, fragment, closed = false, allowEarlyStory = false) {
     if (this.stop?.marker()) return;
     if (!Object.hasOwn(this.schema.properties, key) || typeof fragment !== "string") invalid();
     this.size += fragment.length;
@@ -53,13 +54,14 @@ export class SoliumbraReply {
     if (!field) {
       field = { raw: "", closed: false };
       this.fields.set(key, field);
+      if (this.dynamicOrder && key !== "nya_oath" && !soliumbraPriority.includes(key)) this.order.push(key);
     }
     field.raw += fragment;
     field.closed = closed;
     // Vertex can stream the entire story before its first planning fragment,
     // even with propertyOrdering. Start with the story in that case. A late
     // plan still gets its own tagged section after the story.
-    if (nativePartial && this.position === 0 && this.order[0] === "think_nya" &&
+    if (allowEarlyStory && this.position === 0 && this.order[0] === "think_nya" &&
         this.order[1] === key && (key === "game_content" || key === "game" || key === "story_body") &&
         !this.fields.get("think_nya")?.raw.trim() && field.raw.trim()) {
       [this.order[0], this.order[1]] = [key, "think_nya"];
@@ -105,10 +107,11 @@ export class SoliumbraReply {
 // Produce ordinary text deltas directly from Vertex JSONPath fragments. This
 // runs inside the tag-stop reader so cancellation/usage observes the exact
 // same boundary as display, including tags inserted by the field formatter.
-export function nativeSoliumbra(schema, stop) {
+export function nativeSoliumbra(schema, stop, { meowCompat, meowAliases } = {}) {
   let name, id, reply, owned = false, full = false, cutoff = false;
   let ownedSignature, realSignature, realCalls = 0, terminal = false;
-  return frame => {
+  const original = key => meowAliases ? meowAliases.get(key) : key;
+  const decode = frame => {
     if (frame?.error || frame?.candidates?.length !== 1) return;
     const candidate = frame.candidates[0];
     if (terminal && candidate.content?.parts?.some(part => part.functionCall || part.text)) throw protocolError("anti_truncation_data_after_finish");
@@ -126,7 +129,7 @@ export function nativeSoliumbra(schema, stop) {
         if (name === SOLIUMBRA_TOOL) {
           if (owned) throw protocolError("anti_truncation_multiple_calls");
           owned = true;
-          reply = new SoliumbraReply(schema, stop);
+          reply = new SoliumbraReply(schema, stop, meowAliases);
         }
       } else if ((call.name && call.name !== name) || (call.id && id && call.id !== id)) invalid();
       id ??= call.id;
@@ -142,17 +145,17 @@ export function nativeSoliumbra(schema, stop) {
         if (call.args != null) {
           if (full || reply.fields.size || typeof call.args !== "object" || Array.isArray(call.args)) invalid();
           full = true;
-          for (const [key, value] of Object.entries(call.args)) reply.append(key, value, true);
+          for (const [key, value] of Object.entries(call.args)) reply.append(original(key), value, true);
         }
         if (call.partialArgs != null && !Array.isArray(call.partialArgs)) invalid();
         for (const arg of call.partialArgs ?? []) {
           if (stop?.marker()) break;
           const path = pathKeys(arg?.jsonPath);
           if (path.length !== 1 || full || ["numberValue", "boolValue", "nullValue"].some(k => Object.hasOwn(arg, k))) invalid();
-          const key = path[0];
+          const key = original(path[0]);
           if (typeof arg.stringValue !== "string" && (Object.hasOwn(arg, "stringValue") ||
               !reply.fields.has(key) || arg.willContinue === true)) invalid();
-          reply.append(key, arg.stringValue ?? "", arg.willContinue !== true, true);
+          reply.append(key, arg.stringValue ?? "", arg.willContinue !== true, !meowCompat);
         }
         const ended = call.willContinue !== true;
         const interrupted = candidate.finishReason && candidate.finishReason !== "STOP";
@@ -169,11 +172,13 @@ export function nativeSoliumbra(schema, stop) {
       if (call.willContinue !== true) { name = null; id = null; }
     }
     if (candidate.content) candidate.content.parts = output;
-    if (candidate.finishReason === "STOP" && !cutoff && (!owned || name === SOLIUMBRA_TOOL)) {
+    if (candidate.finishReason === "STOP" && !cutoff && ((!owned && !(meowCompat && realCalls)) || name === SOLIUMBRA_TOOL)) {
       throw protocolError(owned ? "anti_truncation_incomplete_arguments" : "anti_truncation_missing_reply_tool");
     }
     if (candidate.finishReason) terminal = true;
   };
+  decode.hasReply = () => owned;
+  return decode;
 }
 
 // OpenAI relays send fragments of a flat object of string arguments. Retain
