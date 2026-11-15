@@ -65,6 +65,8 @@ function errorMessage(message) {
     "Invalid model enabled setting": "模型的启用状态必须是开或关。",
     "Invalid compatibility toggle": "兼容功能的开关必须是开或关。",
     "Enter custom text before enabling prompt retry": "请先填写自定义文本，再开启提示词提交失败重试。",
+    "Invalid RATE_LIMIT_RETRY_MAX": "429 最大重试次数须为 0–50 的整数。",
+    "Invalid RATE_LIMIT_RETRY_INTERVAL_SECONDS": "429 重试间隔须为 0–120 秒的整数。",
     "Prompt retry text must be at most 192000 UTF-8 bytes": "重试文本不能超过 192000 个 UTF-8 字节。",
     "prompt_submission_failed": "上游仍未接受提示词（The prompt could not be submitted），请调整提示词后重试。",
     "model_disabled": "该模型版本已停用，请先在模型与版本中启用并保存。",
@@ -224,6 +226,7 @@ function draft() {
     transportToolName: $("transport-tool-name").value.trim(),
     accountRotationEnabled: $("account-rotation").checked, accounts: accountDraft(),
     accountTimeoutMs: Number($("account-timeout").value) * 1000, accountFailureThreshold: Number($("account-failures").value), accountCooldownMs: Number($("account-cooldown").value) * 1000,
+    rateLimitRetryMax: Number($("rate-limit-retry-max").value), rateLimitRetryIntervalSeconds: Number($("rate-limit-retry-interval").value),
     unicodeInput: $("unicode-input").value === "all" ? "all" : $("unicode-input").value === "current",
     imageInput: $("image-input").value, hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
     geminiLongDecode: $("long-decode").checked, tucaoStop: $("tucao-stop").checked, stopTag: $("stop-tag").value.trim(), stopExemptTag: $("stop-exempt-tag").value.trim(), stopCount: Number($("stop-count").value), geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
@@ -349,6 +352,8 @@ function fillConfig(c = state.config.settings) {
   $("timeout").value = c.timeoutMs / 1000;
   $("account-rotation").checked = c.accountRotationEnabled === true;
   $("account-timeout").value = (c.accountTimeoutMs ?? 60000) / 1000;
+  $("rate-limit-retry-max").value = c.rateLimitRetryMax;
+  $("rate-limit-retry-interval").value = c.rateLimitRetryIntervalSeconds;
   $("account-failures").value = c.accountFailureThreshold ?? 2;
   $("account-cooldown").value = (c.accountCooldownMs ?? 60000) / 1000;
   $("account-list").replaceChildren(); $("add-account").disabled = false;
@@ -423,12 +428,10 @@ function renderStatus() {
 }
 function updateProbeModel() {
   const s = state.status, row = s?.models.find(m => m.id === $("probe-model").value);
-  const retry = s?.active?.geminiPromptRetryEnabled;
-  $("probe-cost-notice").textContent = retry
-    ? "重试功能已开启：此次测试最多发送 2 次上游请求，每次最多 512 个输出 tokens。重试会带上自定义文本，增加输入用量和费用。"
-    : s?.active?.authMode === "custom" ? "测试将使用已应用的自定义上游发送一次真实请求，可能按上游的规则计费。"
-    : "测试将使用已应用的凭据与服务等级发送一次真实请求，可能产生 Google Cloud 费用。";
-  $("probe-consent-label").textContent = retry ? "我同意此次真实测试及最多 1 次自动重试" : "我同意发送这一次真实测试请求";
+  const maxSubmissions = Math.max(1, s?.accounts?.length || 0) + (s?.active?.rateLimitRetryMax ?? 0) + Number(Boolean(s?.active?.geminiPromptRetryEnabled));
+  $("probe-cost-notice").textContent = `按当前配置，此次测试最多发送 ${maxSubmissions} 次上游请求，每次最多 512 个输出 tokens，可能产生费用。`
+    + (s?.active?.geminiPromptRetryEnabled ? "提示词重试会带上自定义文本。" : "");
+  $("probe-consent-label").textContent = `我同意此次真实测试（最多 ${maxSubmissions} 次上游请求）`;
   $("probe-model-help").textContent = row ? `${row.upstreamModel} · ${modeNames[row.mode]}` + (row.mode === "buffered" ? " · 完整回复到齐后交付正文。" : "")
     : !s?.running ? (isReady(state.config.settings) ? "网关未运行，请先在总览启动网关。" : "网关未运行，请先在连接配置中填写凭据并保存。") + (s?.error ? errorMessage(s.error) : "")
     : s.models.length ? "已应用的模型版本都已停用，请在模型与版本中启用并保存。" : "请先在模型与版本中保存配置。";

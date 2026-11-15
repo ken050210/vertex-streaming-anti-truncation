@@ -139,10 +139,26 @@ test("prefill conversion preserves history and only converts supported plain-tex
   assert.equal(convertGeminiPrefill(parts, "gemini-3.7-flash", true).payload.messages[0].role, "user");
 });
 
+test("Express streaming retries a 429 after the default five seconds with the same request", { timeout: 12000 }, async t => {
+  const times = [];
+  const f = await fixture(t, (call, attempt) => {
+    times.push(performance.now());
+    return attempt === 1 ? new Response(null, { status: 429 }) : success(call);
+  }, { authMode: "express" });
+  const response = await f.post({ ...payload(), stream: true });
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /Fixture answer/);
+  assert.equal(f.calls.length, 2);
+  assert.deepEqual(f.calls[0].body, f.calls[1].body);
+  assert.equal(f.calls[0].url, f.calls[1].url);
+  assert.deepEqual(f.calls[0].headers, f.calls[1].headers);
+  assert.ok(times[1] - times[0] >= 4900);
+});
+
 test("model visibility hides disabled routes and rejected credentials while preserving temporary failures", async t => {
   let status = 429;
   const f = await fixture(t, call => status === 200 ? success(call) : new Response("Fixture failure", { status }), {
-    models: [profile, { ...profile, id: "disabled", enabled: false }],
+    models: [profile, { ...profile, id: "disabled", enabled: false }], rateLimitRetryMax: 0,
   });
   assert.deepEqual(await f.list(), ["roleplay"]); assert.equal(f.calls.length, 0);
   const disabled = await f.post({ ...payload(), model: "disabled" });

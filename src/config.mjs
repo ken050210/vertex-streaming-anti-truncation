@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   port: 4781, timeoutMs: 600000, antiTruncation: true, transportToolName: "", meowCompat: false, tucaoStop: true, stopTag: DEFAULT_STOP_TAG, stopCount: DEFAULT_STOP_COUNT, stopExemptTag: "", models: null,
   hideUnavailableModels: true, geminiPrefillToUser: true, geminiLongDecode: false, unicodeInput: false, imageInput: "off",
   geminiPromptRetryEnabled: false, geminiPromptRetryText: "", geminiPromptRetryMatches: null, customBaseUrl: "",
+  rateLimitRetryMax: 10, rateLimitRetryIntervalSeconds: 5,
   gatewayKeyMode: "strict", gatewayKey: "", serviceAccountJson: "", apiKey: "", accessToken: "", customApiKey: "",
   accountRotationEnabled: false, accountTimeoutMs: 60000, accountFailureThreshold: 2, accountCooldownMs: 60000, accounts: [],
 });
@@ -98,6 +99,8 @@ export async function settingsFromEnv(env = process.env) {
     geminiPrefillToUser: toggle("GEMINI_PREFILL_TO_USER", true), geminiLongDecode: toggle("GEMINI_LONG_DECODE", false),
     geminiPromptRetryEnabled: toggle("GEMINI_PROMPT_RETRY_ENABLED", false), geminiPromptRetryText,
     geminiPromptRetryMatches: retryMatches.length ? retryMatches : null,
+    rateLimitRetryMax: integer(env.RATE_LIMIT_RETRY_MAX, DEFAULT_SETTINGS.rateLimitRetryMax, 0, 50, "RATE_LIMIT_RETRY_MAX"),
+    rateLimitRetryIntervalSeconds: integer(env.RATE_LIMIT_RETRY_INTERVAL_SECONDS, DEFAULT_SETTINGS.rateLimitRetryIntervalSeconds, 0, 120, "RATE_LIMIT_RETRY_INTERVAL_SECONDS"),
     accounts, accountRotationEnabled: toggle("ACCOUNT_ROTATION_ENABLED", false),
     accountTimeoutMs: integer(env.ACCOUNT_TIMEOUT_MS, 60000, 1000, 1800000, "ACCOUNT_TIMEOUT_MS"),
     accountFailureThreshold: integer(env.ACCOUNT_FAILURE_THRESHOLD, 2, 1, 100, "ACCOUNT_FAILURE_THRESHOLD"),
@@ -203,6 +206,8 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
       cooldownMs: integer(s.accountCooldownMs, 60000, 1000, 3600000, "ACCOUNT_COOLDOWN_MS") },
     hideUnavailableModels: s.hideUnavailableModels, geminiPrefillToUser: s.geminiPrefillToUser, geminiLongDecode: s.geminiLongDecode, unicodeInput: s.unicodeInput, imageInput: s.imageInput,
     geminiPromptRetry: { enabled: s.geminiPromptRetryEnabled, text: s.geminiPromptRetryText, ...(matches ? { errorMatches: matches } : {}) },
+    rateLimitRetryMax: integer(s.rateLimitRetryMax, DEFAULT_SETTINGS.rateLimitRetryMax, 0, 50, "RATE_LIMIT_RETRY_MAX"),
+    rateLimitRetryIntervalSeconds: integer(s.rateLimitRetryIntervalSeconds, DEFAULT_SETTINGS.rateLimitRetryIntervalSeconds, 0, 120, "RATE_LIMIT_RETRY_INTERVAL_SECONDS"),
     // Legacy fields remain available to CLI integrations; profiles own behavior.
     model: models[0]?.id || MODEL_ID, upstreamModel: models[0]?.upstreamModel || UPSTREAM_MODEL,
     antiTruncation: s.models == null ? s.antiTruncation : true, transportToolName: validateTransportToolName(s.transportToolName), meowCompat: s.meowCompat,

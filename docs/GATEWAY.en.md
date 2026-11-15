@@ -137,13 +137,21 @@ How it differs from Vertex:
 
 Without tool-calling support upstream, anti-truncation cannot work: the upstream may reject the request, or ignore the tool and reply with plain text (the log shows the text as not restored). Use a normal profile in that case. The SillyTavern plugin (Vertex connection panel) does not use this setting.
 
+## HTTP 429 retries (standalone gateway)
+
+When a generation request receives HTTP 429, the gateway waits 5 seconds and resends the same request on the same account. By default it retries up to 10 times, for at most 11 submissions on a single account. This applies to streaming and non-streaming requests.
+
+In Connection settings → Local gateway, set the maximum retries (0–50) and interval (0–120 seconds). Save to apply to new requests. Set the count to 0 to disable. CLI equivalents are `RATE_LIMIT_RETRY_MAX` and `RATE_LIMIT_RETRY_INTERVAL_SECONDS`. Both request and per-account deadlines include the wait. Disconnecting cancels the wait. Once output has started, the gateway does not replay it.
+
+Account switches, prompt recovery and long-decode segments share the request's 429 retry budget. The request log records additional submissions in `rateLimitRetries`. The smoke script sends `X-Gateway-Retry-429: off` to disable rate-limit retries for its requests.
+
 ## Account rotation (standalone gateway)
 
 Off by default. In Connection settings, add accounts under 多账号轮询, enable the toggle and save. The existing connection is the primary account; up to 19 additional accounts participate in round robin per request. Vertex service accounts, Express keys and OAuth tokens can mix. Custom upstreams can only share a pool with other custom upstreams. All accounts share models and the selected tier and must have access to those models. Model discovery still uses the primary connection.
 
 The per-account timeout defaults to 60 seconds (1–1800), covering authentication and the entire response. The consecutive failure threshold defaults to 2 (1–100); success resets it. Authentication, timeout, network/protocol failures and HTTP 401/403/408/429/5xx count. Invalid client input, exhausted prompt-specific recovery, client cancellation and the overall request deadline do not count. At the threshold the account is skipped for the cooldown, default 60 seconds (1–3600), then becomes eligible again without background inference probes.
 
-At the threshold, a request with no output yet can switch to the next eligible account. Each account is attempted at most once per request. Below the threshold the error is returned. Once streaming output starts, failure closes the stream without replay. If every account is cooling down, requests return `503 accounts_unavailable`. An account timeout is `504 account_timeout`; the existing `UPSTREAM_TIMEOUT_MS` still bounds the entire request, and no switch occurs after that budget expires. Retries can incur additional usage. Prompt recovery and long decode stay within an account attempt.
+At the threshold, a request with no output yet can switch to the next eligible account. Rotation selects each account at most once per request. HTTP 429 retries stay on the selected account and count as one failure if exhausted. Below the threshold the error is returned. Once streaming output starts, failure closes the stream without replay. If every account is cooling down, requests return `503 accounts_unavailable`. An account timeout is `504 account_timeout`; the existing `UPSTREAM_TIMEOUT_MS` still bounds the entire request, and no switch occurs after that budget expires. Retries can incur additional usage. Prompt recovery and long decode stay within an account attempt.
 
 Saving or restarting resets rotation and failure state; in-flight requests retain their snapshot. Disabling rotation uses only the primary account. Additional secrets are stored in the existing settings file, never returned to the page: blank preserves, replacement text updates, removing and saving deletes the entry. Logs include account IDs, statuses and durations in `accountAttempts`, without credentials. Usage estimates reflect only the final attempt's reported usage, excluding possible charges for failed attempts.
 

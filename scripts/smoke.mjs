@@ -20,7 +20,8 @@ const key = settings.gatewayKey;
 if (!key && settings.gatewayKeyMode !== "none") throw new Error("Missing GATEWAY_API_KEY");
 const base = `http://127.0.0.1:${settings.port}`;
 const request = (url, body) => fetch(base + url, { ...(body ? { method: "POST", body: JSON.stringify({ ...body, router_unicode_input: { user_floor: body.messages[0].content } }) } : {}),
-  headers: { ...(settings.gatewayKeyMode === "none" ? {} : { authorization: "Bearer " + key }), "content-type": "application/json" }, signal: AbortSignal.timeout(settings.timeoutMs) });
+  headers: { ...(settings.gatewayKeyMode === "none" ? {} : { authorization: "Bearer " + key }), "content-type": "application/json",
+    "x-gateway-retry-429": "off" }, signal: AbortSignal.timeout(settings.timeoutMs) });
 const results = [];
 console.log(settings.geminiPromptRetryEnabled
   ? "Prompt recovery is enabled: up to 4 upstream submissions, each capped at 512 output tokens; retries include your custom input text."

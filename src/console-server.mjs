@@ -57,6 +57,7 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
         customBaseUrl: activeConfig.authMode === "custom" ? activeConfig.baseUrl : "",
         unicodeInput: activeConfig.unicodeInput, imageInput: activeConfig.imageInput, serviceTier: activeConfig.serviceTier, antiTruncation: activeConfig.antiTruncation,
         accountRotationEnabled: activeConfig.accountRotation.enabled,
+        rateLimitRetryMax: activeConfig.rateLimitRetryMax, rateLimitRetryIntervalSeconds: activeConfig.rateLimitRetryIntervalSeconds,
         geminiPromptRetryEnabled: activeConfig.geminiPromptRetry.enabled } : null,
       requests: events.length, successes: events.filter(e => e.status >= 200 && e.status < 300).length,
       restored: events.filter(e => e.antiTruncation?.restored === true).length,

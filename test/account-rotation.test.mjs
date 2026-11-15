@@ -58,7 +58,7 @@ test("round robin distributes sequential and concurrent requests; disabled alway
 });
 
 test("failure threshold accumulates across requests, switches at threshold and skips cooling accounts", async t => {
-  const cfg = buildConfig({ ...settings(), accountFailureThreshold: 2 });
+  const cfg = buildConfig({ ...settings(), accountFailureThreshold: 2, rateLimitRetryMax: 0 });
   const f = await fixture(t, async url => url.includes("primary") ? Response.json({ error: { message: "busy" } }, { status: 429 }) : completion(), cfg);
   assert.equal((await f.request()).status, 429);
   assert.equal(f.calls.length, 1);
@@ -68,6 +68,41 @@ test("failure threshold accumulates across requests, switches at threshold and s
   assert.equal((await f.request()).status, 200);
   assert.equal(f.calls.at(-1).key, "Bearer synthetic-second");
   assert.ok(f.server.accountStatus()[0].cooldownRemainingMs > 0);
+});
+
+test("persistent HTTP 429 gets ten retries in total even when rotation switches accounts", async t => {
+  let replies = 0, cancelled = 0;
+  const f = await fixture(t, async () => {
+    replies++;
+    if (replies <= 10) return new Response(new ReadableStream({ cancel() { cancelled++; } }), { status: 429 });
+    return Response.json({ error: { message: "busy on attempt " + replies } }, { status: 429, headers: { "retry-after": "7" } });
+  }, { rateLimitRetryIntervalSeconds: 0 });
+  const response = await f.request();
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("retry-after"), "7");
+  assert.equal((await response.json()).error.upstreamError.message, "busy on attempt 12");
+  assert.equal(cancelled, 10);
+  assert.deepEqual(f.calls.map(call => call.key), [...Array(11).fill("Bearer synthetic-primary"), "Bearer synthetic-second"]);
+  assert.equal(f.events[0].rateLimitRetries, 10);
+});
+
+test("a disconnect or total deadline during the 429 wait ends the request before another submission", { timeout: 5000 }, async t => {
+  for (const cancel of [false, true]) {
+    const waiting = Promise.withResolvers();
+    const f = await fixture(t, async () => new Response(new ReadableStream({ cancel: waiting.resolve }), { status: 429 }),
+      { timeoutMs: cancel ? 10000 : 200, rateLimitRetryIntervalSeconds: 5 });
+    const controller = new AbortController();
+    const pending = f.request(body, { signal: controller.signal });
+    await waiting.promise;
+    if (cancel) {
+      controller.abort();
+      await assert.rejects(pending);
+    } else assert.equal((await pending).status, 504);
+    while (f.server.gatewayStats().active) await delay(2);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.events[0].status, cancel ? 499 : 504);
+    assert.ok(f.server.accountStatus().every(a => a.failures === 0));
+  }
 });
 
 test("success clears failure count and cooldown expires without probes", () => {

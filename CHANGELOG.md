@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.21.0
+
+Generation requests now retry upstream HTTP 429 on the same account. The default is 10 additional attempts at 5-second intervals. Adjust both under Connection settings → Local gateway, or set the count to 0 to disable. Streaming output already sent to the client is never replayed.
+
 ## Gateway 0.20.0
 
 Meowssiah 2.1.5 users can enable compatibility in the standalone gateway console or set `MEOW_COMPAT=true`. Select the streaming anti-truncation model and enable streaming in Tavern. In one live Gemini 4 Carbon run, Tavern showed planning at 16.8 seconds and story text at 20.0 seconds. Both grew on screen before generation ended.

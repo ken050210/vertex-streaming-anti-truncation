@@ -329,8 +329,8 @@ test("normal restoration preserves usage and length endings; bypass and fallback
   assert.equal(f.events[2].antiTruncation.restored, false);
 });
 
-test("upstream errors are not retried or logged as provider text, and input/JSON bounds are enforced", async t => {
-  const denied = await fixture(t, () => new Response('private provider error', { status: 429, headers: { "retry-after": "7" } }));
+test("disabling 429 retries preserves the upstream error and input/JSON bounds", async t => {
+  const denied = await fixture(t, () => new Response('private provider error', { status: 429, headers: { "retry-after": "7" } }), { rateLimitRetryMax: 0 });
   const response = await denied.post(payload);
   assert.equal(response.status, 429);
   assert.equal(response.headers.get("retry-after"), "7");

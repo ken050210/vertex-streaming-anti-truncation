@@ -31,7 +31,7 @@
         <button data-page="test"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6m-5 0v7l-5 8a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-8V3M8 15h8"/></svg>连接测试</button>
       </nav>
       <div class="rail-note"><span class="eyebrow">MODEL LIBRARY</span><strong id="rail-models">正在读取模型</strong><span class="small muted">正常 · 非流式 · 流式抗截断</span></div>
-      <div class="rail-foot"><span id="rail-lamp" class="lamp idle"></span><div><strong id="rail-status">正在连接</strong><span id="listen-scope" class="small muted">仅限本机 · 127.0.0.1</span></div><span class="version">0.20.0</span></div>
+      <div class="rail-foot"><span id="rail-lamp" class="lamp idle"></span><div><strong id="rail-status">正在连接</strong><span id="listen-scope" class="small muted">仅限本机 · 127.0.0.1</span></div><span class="version">0.21.0</span></div>
     </aside>
     <div class="main-wrap">
       <header class="topbar"><div><p class="eyebrow">GATEWAY OPERATIONS</p><h1 id="page-title">总览</h1></div>
@@ -74,7 +74,7 @@
                   <label class="field">连续失败阈值（次）<input id="account-failures" type="number" min="1" max="100" value="2" required></label>
                   <label class="field">恢复等待时间（秒）<input id="account-cooldown" type="number" min="1" max="3600" value="60" required></label>
                 </div>
-                <p class="hint">超时、鉴权、限流和上游服务错误计入失败。达到阈值后暂时跳过该账号，等待后重新参与；成功会清零失败次数。尚未输出时可切换下一账号，每次请求每个账号最多尝试一次，总时长仍受下方上游超时限制。重试可能增加上游用量。</p>
+                <p class="hint">429 重试耗尽、超时、鉴权和上游服务错误计入失败。达到阈值且尚未输出时可切换下一账号，同一次请求只轮到每个账号一次。成功会清零失败次数。</p>
                 <p class="hint">可混用 Vertex 的服务账号、Express 和 OAuth；自定义上游只能与自定义上游组成账号池。各账号须能使用相同模型。</p>
                 <div id="account-list"></div>
                 <button id="add-account" class="btn" type="button">添加账号</button>
@@ -93,6 +93,11 @@
               </section>
               <section class="panel"><div class="panel-head"><h2><span class="step">03</span> 本地网关</h2></div>
                 <div class="form-grid"><div class="field"><label for="port">API 端口</label><input id="port" name="port" type="number" min="1" max="65535" value="4781" required aria-describedby="port-help"><p id="port-help" class="hint">仅监听 127.0.0.1，与控制台端口分开。</p></div><div class="field"><label for="timeout">上游超时（秒）</label><input id="timeout" type="number" min="1" max="1800" value="600" required aria-describedby="timeout-help"><p id="timeout-help" class="hint">单次请求从开始到回复结束的总时长上限（含流式输出），默认 600 秒；长回复或 Flex 可调高。</p></div></div>
+                <div class="form-grid">
+                  <div class="field"><label for="rate-limit-retry-max">429 最大重试次数</label><input id="rate-limit-retry-max" type="number" min="0" max="50" value="10" required aria-describedby="rate-limit-retry-help"></div>
+                  <div class="field"><label for="rate-limit-retry-interval">429 重试间隔（秒）</label><input id="rate-limit-retry-interval" type="number" min="0" max="120" value="5" required aria-describedby="rate-limit-retry-help"></div>
+                </div>
+                <p id="rate-limit-retry-help" class="hint">上游返回 HTTP 429 时，用同一账号重发。次数填 0 可关闭。等待计入超时，开始输出后停止重试。</p>
                 <label class="field" for="gateway-key-mode">访问密钥模式<select id="gateway-key-mode" aria-describedby="gateway-access-help"><option value="strict">强密钥（默认）</option><option value="weak">允许弱密钥（如 123456）</option><option value="none">无密钥（API 与控制台均免密）</option></select></label>
                 <p id="gateway-access-help" class="hint">客户端接入和控制台登录共用此设置。保存并应用后生效。</p>
                 <div id="gateway-key-field" class="field"><div class="label-line"><label for="gateway-key">本地网关密钥</label><button id="generate-key" class="text-button" type="button">生成随机密钥</button></div><div class="input-actions"><input id="gateway-key" name="gatewayKey" type="password" maxlength="512" autocomplete="new-password" placeholder="至少 16 个可见 ASCII 字符；已保存后留空保留" aria-describedby="gateway-key-help"><button id="copy-key" class="btn" type="button">复制新密钥</button></div><p id="gateway-key-help" class="hint">用于客户端接入和下次登录。生成后请复制保存；已保存的密钥不回显。</p></div>

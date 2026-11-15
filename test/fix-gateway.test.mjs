@@ -71,7 +71,7 @@ test("a broken upstream error body keeps the upstream status and Retry-After", a
   };
   for (const retry of [false, true]) for (const [shape, body] of Object.entries(bodies)) {
     const f = await gateway(t, () => new Response(body(), { status: 429, headers: { "retry-after": "7" } }),
-      { geminiPromptRetry: { enabled: retry, text: "retry text" } });
+      { rateLimitRetryMax: 0, geminiPromptRetry: { enabled: retry, text: "retry text" } });
     const response = await f.post(payload);
     assert.equal(response.status, 429, `${shape} body, prompt retry ${retry}`);
     assert.equal(response.headers.get("retry-after"), "7");

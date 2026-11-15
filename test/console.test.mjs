@@ -159,6 +159,29 @@ test("console saves account rotation, redacts nested credentials and preserves t
   assert.equal(f.requests.length, 0);
 });
 
+test("console applies and persists the 429 policy, including zero retries", async t => {
+  let calls = 0;
+  const f = await fixture(t, { fetchImpl: async () => { calls++; return new Response(null, { status: 429 }); } });
+  const defaults = (await (await f.api("/api/config")).json()).settings;
+  assert.equal(defaults.rateLimitRetryMax, 10);
+  assert.equal(defaults.rateLimitRetryIntervalSeconds, 5);
+  let revision = "new";
+  for (const rateLimitRetryMax of [2, 0]) {
+    const response = await f.api("/api/config", { revision, settings: { ...f.settings, rateLimitRetryMax, rateLimitRetryIntervalSeconds: 0 } });
+    assert.equal(response.status, 200);
+    const saved = await response.json();
+    revision = saved.revision;
+    assert.equal(saved.status.active.rateLimitRetryMax, rateLimitRetryMax);
+    assert.equal((await f.store.load()).settings.rateLimitRetryIntervalSeconds, 0);
+    const before = calls;
+    assert.equal((await f.api("/api/probe", { confirm: true })).status, 429);
+    assert.equal(calls - before, 1 + rateLimitRetryMax);
+  }
+  for (const invalid of [{ rateLimitRetryMax: -1 }, { rateLimitRetryIntervalSeconds: 121 }]) {
+    assert.equal((await f.api("/api/validate", { settings: invalid })).status, 400);
+  }
+});
+
 test("console protects credentials and mutations with local Host, origin, session and CSRF checks", async t => {
   const f = await fixture(t);
   for (const path of ["/", "/app.js", "/app.css", "/favicon.svg"]) assert.equal((await fetch(f.base + path)).status, 200);

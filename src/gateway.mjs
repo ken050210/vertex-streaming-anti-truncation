@@ -6,6 +6,7 @@ import http from "node:http";
 import packageInfo from "../package.json" with { type: "json" };
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import { prepareAntiTruncation, restoreAntiTruncationCompletion, wrapAntiTruncationStream, antiTruncationLogFields } from "./anti-truncation.mjs";
 import { buildNativeTextBody, buildNativeUrl, nativeRequestBody, supportsNativeRequest, translateUsage } from "./vertex-native.mjs";
 import { estimateCostUsd, usageTokens } from "./pricing.mjs";
@@ -13,7 +14,7 @@ import { wrapNativeTextStream } from "./vertex-text-stream.mjs";
 import { nativeSoliumbra } from "./soliumbra.mjs";
 import { translateNativeCompletion, wrapNativeStream } from "./vertex-protocol.mjs";
 import { geminiModelKey, modelProfiles } from "./model-profiles.mjs";
-import { vertexBaseUrl } from "./config.mjs";
+import { DEFAULT_SETTINGS, vertexBaseUrl } from "./config.mjs";
 import { completionStream, aliasStream } from "./completion-stream.mjs";
 import { convertGeminiPrefill, fetchWithGeminiRecovery, compatibilityLogFields } from "./gemini-compat.mjs";
 import { capGemini4Output, isGemini4Argon, isGemini4Carbon, outputLimitHeaders, prepareGeminiThinkingRequest, validateGemini4Connection } from "./gemini4.mjs";
@@ -190,6 +191,11 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     let unicode = null, image = null, outputLimit = null;
     let stream = false, audit = null, integrity = null, status = 500, code = null, route, droppedParams = [], upstreamError = null, credential = null;
     const compatibility = { prefillConverted: false, promptRetried: false };
+    const promptRetryState = { used: false };
+    // One 429 budget across accounts, prompt recovery and long-decode segments.
+    const retryMax = request.headers["x-gateway-retry-429"] === "off" ? 0 : snapshot.rateLimitRetryMax ?? DEFAULT_SETTINGS.rateLimitRetryMax;
+    const retryDelayMs = (snapshot.rateLimitRetryIntervalSeconds ?? DEFAULT_SETTINGS.rateLimitRetryIntervalSeconds) * 1000;
+    let rateLimitRetries = 0;
     const pool = poolFor(snapshot), tried = new Set(), accountAttempts = [];
     try {
       let payload = await readRequest(request, config.bodyLimitBytes, signal);
@@ -300,19 +306,28 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           // with a cause. A TypeError without one comes from building the request, where the only
           // variable header is the credential (for example a key with non-Latin-1 characters).
           // Errors while reading a body that has started keep their protocol handling.
-          const post = body => {
-            if (longDecode) outputLimit.requests = (outputLimit.requests ?? 0) + 1;
-            return fetchImpl(url, { method: "POST", redirect: "error", signal, dispatcher,
+          const post = async body => {
+            const options = { method: "POST", redirect: "error", signal, dispatcher,
               headers: { ...authentication, ...config.tierHeaders, "content-type": "application/json", accept: upstreamStream ? "text/event-stream" : "application/json" },
-              body: JSON.stringify(body) }).catch(error => {
-              throw error instanceof TypeError ? new Problem(502, error.cause ? "upstream_unreachable" : "credential_error") : error;
-            });
+              body: JSON.stringify(body) };
+            for (;;) {
+              signal.throwIfAborted();
+              if (longDecode) outputLimit.requests = (outputLimit.requests ?? 0) + 1;
+              const reply = await fetchImpl(url, options).catch(error => {
+                throw error instanceof TypeError ? new Problem(502, error.cause ? "upstream_unreachable" : "credential_error") : error;
+              });
+              if (reply.status !== 429 || rateLimitRetries >= retryMax || response.headersSent) return reply;
+              // Discard only intermediate responses. Preserve the last status, headers and diagnostic body.
+              reply.body?.cancel().catch(() => {});
+              await delay(retryDelayMs, undefined, { signal });
+              rateLimitRetries++;
+            }
           };
           let upstream = await fetchWithGeminiRecovery(value => {
             const body = value === upstreamPayload ? firstBody : requestBody(value);
             return longDecode ? fetchLongDecode(post, body, upstreamStream) : post(body);
           }, upstreamPayload, modelKey, {
-            settings: config.geminiPromptRetry, signal, bodyLimit: config.bodyLimitBytes,
+            settings: config.geminiPromptRetry, state: promptRetryState, signal, bodyLimit: config.bodyLimitBytes,
             onRetry: () => { compatibility.promptRetried = true; },
           });
           response.setHeader("x-gemini-prompt-retried", String(compatibility.promptRetried));
@@ -442,6 +457,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         ...upstreamErrorLogFields(upstreamError), ...(droppedParams.length ? { droppedParams } : {}), ...(outputLimit ? { outputLimit } : {}), ...(code ? { code } : {}),
         ...(tokens ? { usage: tokens, estimatedCostUsd: cost } : {}) };
       if (pool) event.accountAttempts = accountAttempts;
+      if (rateLimitRetries) event.rateLimitRetries = rateLimitRetries;
       events.push(event);
       if (events.length > 200) events.shift();
       logger(event);
