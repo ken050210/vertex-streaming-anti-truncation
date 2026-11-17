@@ -23,21 +23,23 @@
     if (value && typeof value === 'object') return String(value.text ?? value.content ?? '');
     return value == null ? '' : String(value);
   }
-  function currentFloor() {
+  function currentFloors(recent) {
     const chats = [];
     const add = value => { if (Array.isArray(value) && !chats.includes(value)) chats.push(value); };
     for (const host of hosts) { try { add(host.SillyTavern?.getContext?.()?.chat); } catch (_) {} }
     if (!chats.length) for (const host of hosts) { try { add(host.context?.chat); } catch (_) {} }
     if (!chats.length) for (const host of hosts) { try { add(host.chat); } catch (_) {} }
     const chat = chats[0] || [];
-    for (let index = chat.length - 1; index >= 0; index--) {
+    let user;
+    const assistants = [];
+    for (let index = chat.length - 1; index >= 0 && (user === undefined || (recent && assistants.length < 2)); index--) {
       const floor = chat[index];
       if (!floor || floor.is_system === true) continue;
-      if (typeof floor.is_user === 'boolean' ? floor.is_user : String(floor.role || '').toLowerCase() === 'user') {
-        return asText(floor.mes ?? floor.content ?? floor.message ?? floor.text ?? '');
-      }
+      const role = typeof floor.is_user === 'boolean' ? (floor.is_user ? 'user' : 'assistant') : String(floor.role || '').toLowerCase();
+      if (role === 'user' && user === undefined) user = asText(floor.mes ?? floor.content ?? floor.message ?? floor.text);
+      if (role === 'assistant' && recent && assistants.length < 2) assistants.unshift(asText(floor.mes ?? floor.content ?? floor.message ?? floor.text));
     }
-    return '';
+    return { user_floor: user ?? '', ...(recent ? { ai_floors: assistants } : {}) };
   }
   function targetsRouter(body) {
     if (body?.chat_completion_source !== 'custom') return false;
@@ -51,16 +53,17 @@
     let body;
     try { body = JSON.parse(raw); } catch (_) { return raw; }
     if (!targetsRouter(body)) return raw;
-    const floor = currentFloor();
-    // No inferred final-user fallback. The router reports missing floor on opt-in models.
-    if (!floor) return raw;
     const yaml = await (yamlPromise ||= loadYaml(owner));
     let parsed;
     try { parsed = body.custom_include_body ? yaml.parse(body.custom_include_body) : {}; }
     catch (_) { throw new Error('Gateway Unicode: custom request-body YAML is invalid'); }
     const object = value => value && typeof value === 'object' && !Array.isArray(value);
     const merged = Array.isArray(parsed) ? Object.assign({}, ...parsed.filter(object)) : object(parsed) ? { ...parsed } : {};
-    merged.router_unicode_input = { user_floor: floor };
+    // Only send assistant text when this local connection explicitly requests it.
+    const recent = merged.router_unicode_input === 'recent';
+    const floors = currentFloors(recent);
+    if (!floors.user_floor && !recent) return raw;
+    merged.router_unicode_input = floors;
     return JSON.stringify({ ...body, custom_include_body: JSON.stringify(merged) });
   }
   for (const host of hosts) {

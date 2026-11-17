@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.cmd text eol=crlf
+# Blank context lines in unified patches are a single space.
+*.patch whitespace=-blank-at-eol

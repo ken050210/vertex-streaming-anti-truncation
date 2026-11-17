@@ -291,6 +291,14 @@ export function translateUsage(usageMetadata) {
   return usage;
 }
 
+// Some Vertex receipts contain a total without an output count. Translating
+// those would invent a zero output count in the OpenAI usage and cost log.
+export function finalStopUsage(stop) {
+  const receipt = stop.receipt();
+  const count = receipt.usageMetadata?.candidatesTokenCount;
+  if (receipt.final && Number.isSafeInteger(count) && count >= 0) return translateUsage(receipt.usageMetadata);
+}
+
 export function mapFinishReason(finishReason, hasToolCalls) {
   // A tool call does not make a truncated or blocked candidate complete.
   if (finishReason === "STOP") return hasToolCalls ? "tool_calls" : "stop";

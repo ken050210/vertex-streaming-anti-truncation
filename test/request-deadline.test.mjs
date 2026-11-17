@@ -138,16 +138,17 @@ test("SillyTavern authentication respects deadline and disconnect before startin
     const serviceAccount = JSON.stringify({ type: "service_account", project_id: "example-project",
       client_email: "fixture@example.invalid", token_uri: "https://oauth2.googleapis.com/token",
       private_key: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }) });
-    const fetchMock = t.mock.method(globalThis, "fetch", async input => {
-      assert.equal(input, "https://oauth2.googleapis.com/token");
-      started.resolve(); return credential.promise;
-    });
     let inference = 0;
+    const fetchImpl = async url => {
+      if (url === "https://oauth2.googleapis.com/token") { started.resolve(); return credential.promise; }
+      inference++;
+      throw new Error("Unexpected inference");
+    };
     const handler = createGenerateHandler({
       getPromptNames: () => ({}), convertGooglePrompt: () => ({ contents: [{ role: "user", parts: [{ text: "fixture" }] }] }),
       calculateGoogleBudgetTokens: () => undefined, safetySettings: [],
       SECRET_KEYS: { VERTEXAI_SERVICE_ACCOUNT: "fixture" }, readSecret: () => serviceAccount,
-    }, { timeoutMs: 50, fetchImpl: async () => { inference++; throw new Error("Unexpected inference"); } });
+    }, { timeoutMs: 50, fetchImpl });
     const response = new EventEmitter();
     response.setHeader = () => {};
     response.status = code => { response.statusCode = code; return response; };
@@ -161,7 +162,7 @@ test("SillyTavern authentication respects deadline and disconnect before startin
     if (!disconnect) assert.equal(response.body.error.code, "vertex_timeout");
     assert.equal(response.listenerCount("close"), 0);
     credential.resolve(Response.json({ access_token: "synthetic-token", expires_in: 3600 }));
-    await delay(0); fetchMock.mock.restore();
+    await delay(0);
     assert.equal(inference, 0);
   }
 });

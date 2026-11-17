@@ -137,6 +137,8 @@ How it differs from Vertex:
 
 Without tool-calling support upstream, anti-truncation cannot work: the upstream may reject the request, or ignore the tool and reply with plain text (the log shows the text as not restored). Use a normal profile in that case. The SillyTavern plugin (Vertex connection panel) does not use this setting.
 
+For `bad-woman/vertex2openai`, its Express streaming path also needs to enable and convert Google's argument fragments. A [patch and validation guide for a pinned upstream revision](../patches/vertex2openai/README.md) is included. Apply it to vertex2openai; updating this gateway alone does not enable argument streaming inside the relay.
+
 ## HTTP 429 retries (standalone gateway)
 
 When a generation request receives HTTP 429, the gateway waits 5 seconds and resends the same request on the same account. By default it retries up to 10 times, for at most 11 submissions on a single account. This applies to streaming and non-streaming requests.
@@ -172,13 +174,15 @@ If your preset already uses a similar text-tool transport script, keep only one 
 
 The gateway accepts the Anthropic-style field `thinking: {type: "disabled"}` as a no-op, matching Vertex's compatible endpoint. It does not disable Gemini thinking. Use `extra_body.google.thinking_config` for Gemini thinking settings.
 
+With Meow compatibility enabled, requests declaring `soliumbra_reply` use the preset fields. Plain text turns without a tool declaration or explicit tool policy use `router_emit`.
+
 ## Custom tag stop
 
 In the console, open Connection settings and find 自定义标签截停 (custom tag stop). The default rule ends an anti-truncation reply at the second complete `<tucao>…</tucao>` pair. Enter `A` and `1` to keep the first complete `<A>…</A>` pair and end the reply there. The closing tag stays in the text. Any later content, including an MVU update, is discarded.
 
 The matcher reads the current reply's visible text, including tags split across chunks. Names are case-sensitive and tags must have no attributes. A stray closing tag contributes zero pairs. When tags of the same name nest, only the outer pair counts. Each request starts at zero, including Continue. History, native thoughts and client tool arguments are excluded. Normal profiles and bypassed requests use their ordinary finish conditions.
 
-With a streaming upstream the gateway cancels the reader when the rule matches. With a non-streaming upstream it clips the completed response. A local stop supplies no final token count. Upstream charges already incurred still apply.
+Visible text stops at the closing tag. For native Vertex streams, set `STOP_USAGE_WAIT` to `immediate` (default), `250ms`, or `natural` to disconnect, wait up to 250 ms for usage, or read the same request to its natural end. Generation after the tag can incur charges. Confirmed usage appears in the request log and, with `stream_options.include_usage=true`, before `[DONE]`. Compatible and long-decode streams disconnect at the tag. Buffered replies retain upstream usage when clipped.
 
 For CLI use, set `TAG_STOP=true`, `STOP_TAG=tucao` and `STOP_COUNT=2`, or turn it off with `TAG_STOP=false`. The legacy `TUCAO_STOP` toggle still works. An explicitly saved opt-out stays off.
 
@@ -211,6 +215,7 @@ Choose a scope in the console's Unicode input selector, then save and apply. CLI
 | --- | --- |
 | `false` | Off (default) |
 | `true` | Text matching the current user input supplied by the client |
+| `recent` | Current user input and the last two assistant floors supplied by the client, matched backwards in the assembled prompt |
 | `all` | System, developer, user and assistant message text, including the current input. No floor field is needed |
 
 Current-input mode reads the latest user message from the client field below. A missing or invalid value returns `400 unicode_floor_required`. The gateway matches the original, trimmed and newline-normalized forms, preferring the longest at each position. The matcher skips replacements it has already made, existing encoded blocks and text inside complete single-line tags such as `<剧情>`. A stray `<` such as `<3` leaves later text eligible. If nothing matches, the original text is forwarded.
@@ -219,7 +224,9 @@ Current-input mode reads the latest user message from the client field below. A 
 {"router_unicode_input":{"user_floor":"latest user message"}}
 ```
 
-Both scopes write Han characters and ASCII letters as `⟦U:…⟧`. Tags, existing encoded blocks, digits, punctuation and emoji keep their original form. Letters inside `{{user}}` are encoded. Model IDs, tool arguments, schemas and media URLs keep their original values. Full-context mode also skips separate tool results. Input encoding still applies when a tool or schema request bypasses output restoration. The encoding and floor-matching rules follow an encoder by 灰鸠「GoldRush」 and are included with the author's permission. [Attribution](../NOTICE.md)
+For recent floors, send `{"router_unicode_input":{"user_floor":"current input","ai_floors":["older reply","newer reply"]}}`. Use an empty array when there is no assistant history, or an empty user string on an assistant-only turn. In Tavern, update the linked floor bridge and add `router_unicode_input: recent` to the custom request body. The bridge includes assistant text only for a connection with this setting. A missing array returns `400 unicode_ai_floors_required`.
+
+All scopes write Han characters and ASCII letters as `⟦U:…⟧`. Tags, existing encoded blocks, digits, punctuation and emoji keep their original form. Letters inside `{{user}}` are encoded. Model IDs, tool arguments, schemas and media URLs keep their original values. Full-context mode also skips separate tool results. Input encoding still applies when a tool or schema request bypasses output restoration. The encoding and floor-matching rules follow an encoder by 灰鸠「GoldRush」 and are included with the author's permission. [Attribution](../NOTICE.md)
 
 The gateway strips `router_unicode_input` before forwarding the request. An encoded body above the size limit returns `413 unicode_input_too_large`. The `x-unicode-input` header gives the outcome. Logs record the encoding status and counts. Encoding can increase token use and latency. The live short-prompt checks covered current-input mode. [Acceptance record](UNICODE-INPUT-AUDIT.md)
 

@@ -1,12 +1,14 @@
 import { PLUGIN_ID, PLUGIN_PATH, PLUGIN_VERSION, MIN_SERVER_VERSION, MODES, compareVersions, createFetchInterceptor, latestUserInput } from "./shared.js";
 import { normalizeStopUsageWait, DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { validateTransportToolName } from "../../src/transport-tool-name.mjs";
+import { installMeowStreamPreview } from "./meow-stream-preview.js";
 
 // TauriTavern has no Node server to host the plugin, so the extension shapes the
 // request and restores the reply itself. Rendering text as images needs the server.
 const tauri = window.__TAURITAVERN__ ? await import("../../src/tauritavern.mjs") : null;
 const direct = tauri && { prepare: tauri.prepareTauriTavernRequest, restore: tauri.restoreTauriTavernResponse };
 const context = SillyTavern.getContext();
+const meowStreams = installMeowStreamPreview(() => SillyTavern.getContext());
 const events = context.eventTypes ?? context.event_types;
 const labels = { off: "关闭（普通 Vertex）", buffered: "非流式抗截断", streaming: "流式抗截断" };
 const reasons = { "existing-tools": "旧版 functions 工具", "tool-choice": "请求指定必须调用工具", "tool-schema": "工具定义无法转为 Vertex 原生格式",
@@ -78,7 +80,8 @@ function updateStatus(result) {
   const output = !limit ? "" : limit.longDecode
     ? `本次输出上限 ${tokens(limit.applied)} token（含思考）超过单次上限，写满后自动续写。`
     : `本次输出上限按单次上限 ${tokens(limit.applied)} token（含思考）发送，预设未改动；写满会停止并标记为长度截断。`;
-  showStatus([result.payGo && "本次通过 Vertex PayGo 发送。", unicode, optimized, image, delivery, bypass, continuation, output].filter(Boolean).join(" "));
+  const builtin = result.builtinForMeow && "本次请求没有预设工具声明，已使用内置正文工具 router_emit 抗截断。";
+  showStatus([result.payGo && "本次通过 Vertex PayGo 发送。", builtin, unicode, optimized, image, delivery, bypass, continuation, output].filter(Boolean).join(" "));
 }
 
 async function checkBackend(silent = false) {
@@ -296,7 +299,15 @@ function installTransport(compat) {
   let transport;
   window.fetch = (input, init) => {
     const meowActive = context.extensionSettings?.[PLUGIN_ID]?.meowCompat === true && mode() !== "off";
-    return transport && meowActive === compat ? transport(input, init) : previous(input, init);
+    if (!transport || meowActive !== compat) return previous(input, init);
+    const processor = compat && SillyTavern.getContext().streamingProcessor;
+    const result = transport(input, init);
+    if (!processor || mode() !== "streaming") return result;
+    return result.then(response => {
+      const kind = response.headers.get("x-anti-truncation-transport");
+      if (response.ok && (kind === "native-streaming" || kind === "paygo-streaming")) meowStreams.add(processor);
+      return response;
+    });
   };
   return window[key] = payGoInstalled => {
     transport = createFetchInterceptor(previous, { origin: location.origin, getMode: mode,

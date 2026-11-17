@@ -143,6 +143,8 @@ NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7890 NO_PROXY=127.0.0.1,localh
 
 上游不支持工具调用时，抗截断起不了作用：上游可能直接报错，也可能忽略工具、照常返回正文（请求日志显示“未还原”）。这种情况请改用正常版本。酒馆插件（Vertex 连接面板）不使用这项设置。
 
+接入 `bad-woman/vertex2openai` 时，其 Express 真流式路径还需要启用并转换 Google 参数流，才能逐段交付文本工具参数。仓库提供了针对指定上游版本的[本地补丁与验证说明](../patches/vertex2openai/README.md)；补丁需应用到 vertex2openai，仅更新本网关不会启用中转内部的参数流。
+
 ## HTTP 429 自动重试（独立网关）
 
 上游返回 HTTP 429 时，网关默认等待 5 秒，用同一账号重发原请求，最多重试 10 次。单账号最多提交 11 次，第一次成功即结束。流式和非流式生成都适用。
@@ -186,7 +188,7 @@ CLI 可在 `.env` 配置 `ACCOUNT_ROTATION_ENABLED=true`、`ACCOUNT_TIMEOUT_MS=6
 
 网关只数本次正文中完整、无属性、大小写一致的标签对。标签可以跨流式分块，单独的结束标签不计数，同名标签嵌套时只算最外层一对。“继续”从零开始计数，聊天历史、原生思考和客户端工具参数都不参与。普通模型版本和旁路请求照常结束。
 
-上游以流式返回时，网关命中规则就取消读取。上游整段返回时，网关收到回复后再裁剪。本地截停没有最终 token 用量，已经产生的上游费用照常结算。
+命中标签后正文立即停显。原生 Vertex 流可用 `STOP_USAGE_WAIT=immediate`（默认）、`250ms` 或 `natural`，分别表示立即断流、最多等 250 毫秒收取用量、读取同一请求至自然结束。等待期间生成的 token 仍可能计费。网关在日志中记录已确认的用量，客户端设置 `stream_options.include_usage=true` 时也能在 `[DONE]` 之前收到用量。兼容接口和 long decode 流仍立即断开。整包回复在本地裁剪时保留上游的完整用量。
 
 CLI 使用 `TAG_STOP=true`、`STOP_TAG=tucao`、`STOP_COUNT=2`，关闭时设为 `TAG_STOP=false`。旧开关 `TUCAO_STOP` 仍可使用，升级前已明确关闭的配置会保持关闭。
 
@@ -219,6 +221,7 @@ Google 的 [Gemini 3.7 Flash](https://docs.cloud.google.com/gemini-enterprise-ag
 | --- | --- |
 | `false` | 关闭（默认） |
 | `true` | 当前输入。客户端提供最新真实用户楼层，网关只转换消息中匹配的文字 |
+| `recent` | 当前输入与最近两个 AI 楼层。客户端按时间从旧到新传入原文，网关在拼装后的提示词中从后向前匹配 |
 | `all` | 系统、开发者、用户和 AI 消息的文本，含当前输入。无需提供楼层原文 |
 
 当前输入模式使用下面的请求字段。缺少有效原文会返回 `400 unicode_floor_required`。网关匹配原文、去除首尾空白或归一换行后的文本，同一位置取较长者。已替换的文字不会再次参与匹配。消息里完整的单行标签（如 `<剧情>`）和已有编码块能保护内部文字，孤立的 `<`（如 `<3`）不影响后面的匹配。未匹配时按原文发送。
@@ -227,7 +230,9 @@ Google 的 [Gemini 3.7 Flash](https://docs.cloud.google.com/gemini-enterprise-ag
 {"router_unicode_input":{"user_floor":"最新真实用户楼层原文"}}
 ```
 
-两种模式都把汉字和 ASCII 字母写作 `⟦U:…⟧`，保留标签、已有编码块、数字、标点和 emoji。`{{user}}` 中的字母也会转码。模型 ID、工具参数、Schema 和媒体地址保留原值。全部上下文模式还会跳过独立的工具结果。工具或 Schema 请求旁路输出抗截断时，输入转码仍会执行。编码和楼层匹配规则来自灰鸠「GoldRush」的编码器，经作者许可收录。[来源说明](../NOTICE.zh-CN.md)
+最近两层模式使用 `{"router_unicode_input":{"user_floor":"当前输入","ai_floors":["较早回复","较新回复"]}}`。无 AI 历史时传空数组，无用户楼层时可传空字符串。酒馆用户请更新本页的楼层传递脚本，在自定义请求体中加入一行 `router_unicode_input: recent`。脚本只在该连接显式选择时附上 AI 原文。缺少数组会返回 `400 unicode_ai_floors_required`。
+
+各转码范围都把汉字和 ASCII 字母写作 `⟦U:…⟧`，保留标签、已有编码块、数字、标点和 emoji。`{{user}}` 中的字母也会转码。模型 ID、工具参数、Schema 和媒体地址保留原值。全部上下文模式还会跳过独立的工具结果。工具或 Schema 请求旁路输出抗截断时，输入转码仍会执行。编码和楼层匹配规则来自灰鸠「GoldRush」的编码器，经作者许可收录。[来源说明](../NOTICE.zh-CN.md)
 
 网关会移除本地字段 `router_unicode_input`。编码后超过请求体上限会返回 `413 unicode_input_too_large`。响应头 `x-unicode-input` 给出结果，日志记录状态和计数。转码可能增加 token 用量与延迟。已有真实模型短请求验收仅覆盖当前输入模式。[验收记录](UNICODE-INPUT-AUDIT.md)
 
@@ -286,6 +291,8 @@ Express 和 Flex 的普通/流式请求均走原生接口。完整模式（服�
 默认使用内置正文工具时，请求带 `tools` 且 `tool_choice` 省略或为 `auto` 时，合成工具排在客户端工具之后，`tool_choice` 改为 `required`（模型必须调用某个工具），末尾格式说明改为“正文放进合成工具，其他工具按需调用”；客户端的 `parallel_tool_calls` 原样保留。回复里合成工具还原为正文，真实工具调用原样交给客户端，结束原因保持 `tool_calls`；流式中真实调用的 `index` 从 0 连续编号，补上合成调用留下的空位。`tool_choice: "none"` 时客户端工具仍声明但不可调用，照旧强制合成工具。带工具调用历史（`assistant.tool_calls`、`role: tool`）的请求也照常包装，格式说明排在工具结果之后。
 
 截停设置可指定豁免块名，例如 `konatan_planning~`；命令行对应 `STOP_EXEMPT_TAG`。完整豁免块中的截停标签不计数。
+
+开启小猫兼容模式时，有 `soliumbra_reply` 声明的请求使用预设栏目。未声明工具、也未指定工具策略的普通文本请求自动使用内置 `router_emit`。
 
 Meowssiah 2.1.0 在「预设正文工具名」填写 `soliumbra_reply`。保留预设的函数、历史与本轮工具选择，按本次声明收取思考、剧情、选项、总结等字段。流式模式在上游提供参数分片时逐段显示。Vertex 原生参数流先返回正文时，插件和网关会立即输出正文，随后到达的思考显示在正文之后。截停按显示出来的标签及豁免块计数，保留命中的结束标签。字段仅包含思考、缺少必填栏目、传输中断和达到 token 上限时不会标成完整回复。
 

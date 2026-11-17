@@ -22,6 +22,7 @@ test("Tavern bridge reads the live user floor, preserves custom parameters and s
   assert.equal(await host.fetch('/api/backends/chat-completions/generate', init), response);
   const posted = JSON.parse(calls[0][1].body), custom = JSON.parse(posted.custom_include_body);
   assert.equal(custom.router_unicode_input.user_floor, '最新😀');
+  assert.equal(custom.router_unicode_input.ai_floors, undefined);
   assert.equal(custom.temperature, 0.5);
   assert.deepEqual(custom.thinking, { type: 'disabled' });
   assert.deepEqual(posted.messages, body.messages);
@@ -34,6 +35,14 @@ test("Tavern bridge reads the live user floor, preserves custom parameters and s
   chat.push({ is_user: true, mes: ['next ', { text: 'floor' }] });
   await host.fetch(new Request('http://127.0.0.1:8000/api/backends/chat-completions/generate', init));
   assert.equal(JSON.parse(JSON.parse(calls[1][1].body).custom_include_body).router_unicode_input.user_floor, 'next floor');
+  chat.push({ role: 'assistant', content: 'old' }, { is_user: false, mes: 'earlier' }, { is_user: false, mes: 'latest' },
+    { is_user: false, is_system: true, mes: 'ignored' });
+  const recent = { ...init, body: JSON.stringify({ ...body, custom_include_body: JSON.stringify({ router_unicode_input: 'recent' }) }) };
+  await host.fetch('/api/backends/chat-completions/generate', recent);
+  assert.deepEqual(JSON.parse(JSON.parse(calls.at(-1)[1].body).custom_include_body).router_unicode_input,
+    { user_floor: 'next floor', ai_floors: ['earlier', 'latest'] });
+  const exported = JSON.parse(await readFile(new URL('../integrations/sillytavern-unicode-floor.json', import.meta.url), 'utf8'));
+  assert.equal(exported.content, await readFile(new URL('../integrations/sillytavern-unicode-floor.js', import.meta.url), 'utf8'));
   for (const custom_url of ['https://example.com/v1', 'http://127.0.0.1:5000/v1', 'http://127.0.0.1:4781/wrong']) {
     const other = { ...init, body: JSON.stringify({ ...body, custom_url }) };
     await host.fetch('/api/backends/chat-completions/generate', other);

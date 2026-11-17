@@ -42,9 +42,9 @@ function signedAssertion(serviceAccount, nowMs) {
   return unsigned + "." + signer.sign(serviceAccount.private_key, "base64url");
 }
 
-async function mintToken(serviceAccountJson, timeoutMs) {
+async function mintToken(serviceAccountJson, timeoutMs, fetchImpl) {
   const serviceAccount = parseServiceAccount(serviceAccountJson);
-  const response = await fetch(serviceAccount.token_uri, {
+  const response = await fetchImpl(serviceAccount.token_uri, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -53,6 +53,8 @@ async function mintToken(serviceAccountJson, timeoutMs) {
     }),
     redirect: "error",
     signal: AbortSignal.timeout(timeoutMs),
+  }).catch(cause => {
+    throw Object.assign(new Error("Vertex token exchange received no response", { cause }), { unreachable: true });
   });
   let parsed = null;
   try {
@@ -70,14 +72,14 @@ async function mintToken(serviceAccountJson, timeoutMs) {
   return { token: parsed.access_token, expiresAt: Date.now() + lifetimeSeconds * 1000 };
 }
 
-export function vertexAccessToken(serviceAccountJson, timeoutMs = 10_000) {
+export function vertexAccessToken(serviceAccountJson, timeoutMs = 10_000, fetchImpl = fetch) {
   const cached = tokenCache.get(serviceAccountJson);
   if (cached?.token && cached.expiresAt - EXPIRY_MARGIN_MS > Date.now()) {
     return Promise.resolve(cached.token);
   }
   if (cached?.pending) return cached.pending;
   const entry = {
-    pending: mintToken(serviceAccountJson, timeoutMs)
+    pending: mintToken(serviceAccountJson, timeoutMs, fetchImpl)
       .then((minted) => {
         tokenCache.set(serviceAccountJson, minted);
         return minted.token;

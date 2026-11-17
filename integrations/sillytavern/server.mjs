@@ -1,11 +1,11 @@
 import { once } from "node:events";
+import { Readable } from "node:stream";
 import { buildConnectionConfig } from "../../src/config.mjs";
 import { prepareImageInput } from "../../src/image-input.mjs";
 import { buildNativeUrl } from "../../src/vertex-native.mjs";
 import { parseServiceAccount } from "../../src/vertex-auth.mjs";
 import { isGemini4Carbon, outputLimitHeaders, validateGemini4Connection } from "../../src/gemini4.mjs";
 import { fetchLongDecode, longDecodeUrl } from "../../src/vertex-long-decode.mjs";
-import { upstreamDispatcher } from "../../src/gateway.mjs";
 import { prepareSillyTavernRequest, restoreSillyTavernResponse, requestError } from "../../src/sillytavern.mjs";
 import { googleErrorDetail, sseData, upstreamMessage } from "../../src/wire.mjs";
 import { waitWithSignal } from "../../src/abort.mjs";
@@ -38,7 +38,15 @@ export async function convertImages(request, response) {
   } finally { response.off("close", close); }
 }
 
-export function connectionForRequest(request, { readSecret, SECRET_KEYS }) {
+// Tavern's node-fetch uses the http(s).globalAgent installed by requestProxy.
+// Convert its Node body without buffering so disconnects and deltas propagate.
+export const webFetch = nodeFetch => async (url, init) => {
+  const reply = await nodeFetch(url, init);
+  const body = reply.body && ![204, 205, 304].includes(reply.status) ? Readable.toWeb(reply.body) : null;
+  return new Response(body, { status: reply.status, headers: reply.headers });
+};
+
+export function connectionForRequest(request, { readSecret, SECRET_KEYS }, fetchImpl) {
   const body = request.body;
   const auth = body.vertexai_auth_mode ?? "express";
   if (!["express", "full"].includes(auth) || body.reverse_proxy) throw requestError("unsupported_authentication_mode");
@@ -51,7 +59,7 @@ export function connectionForRequest(request, { readSecret, SECRET_KEYS }) {
     settings.apiKey = readSecret(request.user.directories, SECRET_KEYS.VERTEXAI, body.secret_id);
   }
   // Reuse the gateway's validated official Google destinations and token cache.
-  const config = buildConnectionConfig(settings);
+  const config = buildConnectionConfig(settings, { fetchImpl });
   validateGemini4Connection(config, body.model);
   return config;
 }
@@ -78,20 +86,17 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
         response.setHeader("x-image-input-pages", String(converted.metadata?.pages ?? 0));
       }
       stage = "configuration";
-      const config = connectionForRequest(request, adapters);
+      const config = connectionForRequest(request, adapters, fetchImpl);
       stage = "authentication";
       credential = await waitWithSignal(() => config.accessToken(), signal);
       signal.throwIfAborted();
       const headers = { ...config.tierHeaders, "content-type": "application/json",
         ...(config.authMode === "express" ? { "x-goog-api-key": credential } : { authorization: `Bearer ${credential}` }) };
       stage = "upstream";
-      const dispatcher = await waitWithSignal(() => upstreamDispatcher(timeoutMs), signal);
-      signal.throwIfAborted();
       const longDecode = prepared.outputLimit?.longDecode === true;
       const url = buildNativeUrl(config.baseUrl, prepared.model, prepared.upstreamStream);
       const post = body => fetchImpl(longDecode ? longDecodeUrl(url) : url, {
         method: "POST", headers, body: JSON.stringify(body), signal, redirect: "error",
-        dispatcher,
       });
       const upstream = await (longDecode ? fetchLongDecode(post, prepared.body, prepared.upstreamStream) : post(prepared.body));
       stage = "restoration";
@@ -114,9 +119,11 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       const upstreamError = deadline.aborted ? null : error.upstreamError ?? googleErrorDetail(error.upstreamBody, credential);
       const status = deadline.aborted ? 504 : error.status ?? upstreamError?.code ?? (stage === "configuration" ? 400 : stage === "image" ? 503 : 502);
       const code = deadline.aborted ? "vertex_timeout" : error.protocolFailure || error.status ? error.code
+        : error.unreachable && stage === "authentication" ? "vertex_authentication_unreachable"
         : stage === "image" ? "image_render_failed" : `vertex_${stage}_failed`;
       const detail = code === "express_project_required" ? "快速模式使用此 Gemini 4 模型需要填写 API Key 所属的项目 ID，以指定 global 地区。" :
         stage === "configuration" ? "检查 Vertex 凭据和地区；Express、Flex、Priority 需要 global。" :
+        code === "vertex_authentication_unreachable" ? "无法连接 Google 换取 Vertex 令牌。请检查网络和酒馆 config.yaml 中的 requestProxy 代理设置。" :
         stage === "authentication" ? "Vertex 鉴权失败，请检查已保存的凭据。" : stage === "image" ? "图片输入转换失败，未改用明文发送。" :
         imageMode !== "off" && request.body?.vertex_anti_truncation === "off" ? "Vertex 图片输入请求失败。" : "Vertex 抗截断请求失败。";
       const location = imageErrorLocation(error);
@@ -135,10 +142,11 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
 
 export async function init(router) {
   // Installed at <SillyTavern>/plugins/<repo>/integrations/sillytavern/server.mjs.
-  const [prompts, secrets, constants] = await Promise.all([
+  const [prompts, secrets, constants, nodeFetch] = await Promise.all([
     import(new URL("../../../../src/prompt-converters.js", import.meta.url)),
     import(new URL("../../../../src/endpoints/secrets.js", import.meta.url)),
     import(new URL("../../../../src/constants.js", import.meta.url)),
+    import("node-fetch"),
   ]);
   const adapters = { ...prompts, ...secrets, safetySettings: [...constants.GEMINI_SAFETY, ...constants.VERTEX_SAFETY] };
   router.get("/status", (request, response) => {
@@ -146,6 +154,6 @@ export async function init(router) {
     if (!request.user?.directories) return response.sendStatus(401);
     response.json({ id: PLUGIN_ID, version: PLUGIN_VERSION, ready: true, features: PLUGIN_FEATURES });
   });
-  router.post("/generate", createGenerateHandler(adapters));
+  router.post("/generate", createGenerateHandler(adapters, { fetchImpl: webFetch(nodeFetch.default) }));
   router.post("/image-input", convertImages);
 }

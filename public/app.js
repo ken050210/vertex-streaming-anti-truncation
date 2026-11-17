@@ -113,6 +113,7 @@ function errorMessage(message) {
     "image_input_unsupported_characters": "文本含图片字体无法显示的字符（如部分表情或控制字符），请删除这些字符或关闭图片输入。",
     "image_input_conflict": "Unicode 输入转码与图片输入不能同时开启。",
     "unicode_input_too_large": "Unicode 转码后请求超过大小上限，请缩短内容或关闭 Unicode 输入转码。",
+    "unicode_ai_floors_required": "最近两层转码需要 ai_floors。请更新楼层传递脚本，并在酒馆自定义请求体中填入 router_unicode_input: recent。",
     "unicode_floor_required": "已开启 Unicode 输入转码，但请求没有附带 router_unicode_input.user_floor（最新用户楼层原文）。请让客户端附带该字段，或关闭 Unicode 输入转码。",
     "gateway_port_changed": "网关端口已更改，旧端口不再接受请求，请改用新端口。",
     "request_too_large": "请求超过 8 MiB 上限。",
@@ -125,7 +126,9 @@ function errorMessage(message) {
   };
   const envPrefix = "Environment settings were ignored: ";
   if (message?.startsWith(envPrefix)) return "已忽略环境变量中的设置：" + errorMessage(message.slice(envPrefix.length)) + "请在连接配置中填写并保存；保存后控制台改用保存的配置。";
-  const toggle = /^Invalid (UNICODE_INPUT|HIDE_UNAVAILABLE_MODELS|GEMINI_PREFILL_TO_USER|GEMINI_LONG_DECODE|GEMINI_PROMPT_RETRY_ENABLED)$/.exec(message || "");
+  if (message === "Invalid UNICODE_INPUT") return "UNICODE_INPUT 可选 false、true、recent 或 all。";
+  if (message === "Invalid STOP_USAGE_WAIT") return "STOP_USAGE_WAIT 可选 immediate、250ms 或 natural。";
+  const toggle = /^Invalid (HIDE_UNAVAILABLE_MODELS|GEMINI_PREFILL_TO_USER|GEMINI_LONG_DECODE|GEMINI_PROMPT_RETRY_ENABLED)$/.exec(message || "");
   if (toggle) return `环境变量 ${toggle[1]} 只能是 true 或 false。`;
   if (message?.startsWith("anti_truncation_")) return `抗截断正文还原失败（${message}），可以重试，或用正常版本对比。`;
   if (message?.startsWith("Express model listing is unavailable")) return `当前 Express API Key 无法读取模型目录（${message.match(/HTTP \d+/)?.[0] || "访问受限"}）。可以手动添加模型 ID，或改用服务账号拉取；已保存的模型不受影响。`;
@@ -227,7 +230,8 @@ function draft() {
     accountRotationEnabled: $("account-rotation").checked, accounts: accountDraft(),
     accountTimeoutMs: Number($("account-timeout").value) * 1000, accountFailureThreshold: Number($("account-failures").value), accountCooldownMs: Number($("account-cooldown").value) * 1000,
     rateLimitRetryMax: Number($("rate-limit-retry-max").value), rateLimitRetryIntervalSeconds: Number($("rate-limit-retry-interval").value),
-    unicodeInput: $("unicode-input").value === "all" ? "all" : $("unicode-input").value === "current",
+    unicodeInput: ({ off: false, current: true, recent: "recent", all: "all" })[$("unicode-input").value],
+    stopUsageWait: $("stop-usage-wait").value,
     imageInput: $("image-input").value, hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
     geminiLongDecode: $("long-decode").checked, tucaoStop: $("tucao-stop").checked, stopTag: $("stop-tag").value.trim(), stopExemptTag: $("stop-exempt-tag").value.trim(), stopCount: Number($("stop-count").value), geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
     geminiPromptRetryMatches: retryMatches() };
@@ -358,7 +362,8 @@ function fillConfig(c = state.config.settings) {
   $("account-cooldown").value = (c.accountCooldownMs ?? 60000) / 1000;
   $("account-list").replaceChildren(); $("add-account").disabled = false;
   for (const account of c.accounts || []) addAccount(account);
-  $("unicode-input").value = c.unicodeInput === "all" ? "all" : c.unicodeInput ? "current" : "off";
+  $("unicode-input").value = c.unicodeInput === true ? "current" : c.unicodeInput || "off";
+  $("stop-usage-wait").value = c.stopUsageWait ?? "immediate";
   $("image-input").value = c.imageInput || "off";
   $("hide-unavailable").checked = c.hideUnavailableModels !== false;
   $("prefill-to-user").checked = c.geminiPrefillToUser !== false;

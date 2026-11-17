@@ -11,6 +11,7 @@ service-account*.json
 credentials*.json
 runtime/
 coverage/
+.playwright-cli/
 dist/
 *.zip
 *.tgz

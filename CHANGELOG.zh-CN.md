@@ -2,6 +2,14 @@
 
 中文 | [English](CHANGELOG.md)
 
+## 网关 0.22.0 / 酒馆插件 0.17.1
+
+- 开启小猫兼容模式后，无工具声明的普通文本请求自动使用内置 `router_emit`。预设声明了 `soliumbra_reply` 时继续使用预设栏目。
+- 网关新增「最近两个 AI 楼层与当前输入」Unicode 转码。在酒馆自定义 API 连接中，更新楼层传递脚本并在自定义请求体中加入 `router_unicode_input: recent`。[设置说明](docs/GATEWAY.md#unicode-输入转码)
+- 原生 Vertex 流命中截停标签后，可立即断流（默认）、最多等 250 毫秒收取最终用量，或等同一次请求自然结束。确认的用量进入请求日志，客户端可用 `stream_options.include_usage` 接收。等待期间的后续生成可能计费。[截停设置](docs/GATEWAY.md#自定义标签截停)
+- 酒馆插件修复小猫规划和正文同批到达时的显示顺序。普通 SillyTavern 的令牌交换和生成请求使用酒馆的请求代理。TT 的结构化回复遇到宿主报错时显示上游错误。
+- 附带适用于指定 `vertex2openai` 版本的可选参数流补丁。[补丁及验收说明](patches/vertex2openai/README.md)
+
 ## Gateway 0.21.0
 
 生成请求遇到上游 HTTP 429 时，默认每隔 5 秒用同一账号重试，最多重试 10 次。在「连接配置 → 本地网关」可调整次数和间隔，次数填 0 可关闭。已发给客户端的流式内容不会重放。

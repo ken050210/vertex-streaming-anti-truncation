@@ -1,11 +1,11 @@
 import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 import { prepareOptimizedInput } from "./optimized-input.js";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
-import { SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason } from "../../src/transport-tool-name.mjs";
+import { SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason, useBuiltinForMeow } from "../../src/transport-tool-name.mjs";
 import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.17.0";
+export const PLUGIN_VERSION = "0.17.1";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -160,8 +160,13 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const payGo = !direct && (payGoInstalled || marked || url.pathname === PAYGO_GENERATE_PATH
       || (ticket && typeof globalThis.vertexPayGoGemini4GenerateInterceptor === "function"));
     const ownPayGoProxy = payGo && (ticket || (marked?.sink === body.reverse_proxy && body.reverse_proxy === "vertex-paygo-blocked://request"));
-    const meowCompat = mode !== "off" && getMeowCompat() === true;
-    const transportToolName = meowCompat ? SOLIUMBRA_TOOL : mode !== "off" ? getTransportToolName() : "";
+    const meowSelected = mode !== "off" && getMeowCompat() === true;
+    // The preset's final-request hook may be absent. A plain text generation can
+    // still use the built-in transport without inventing Meow's dynamic schema.
+    const builtinForMeow = meowSelected && useBuiltinForMeow(body);
+    const meowCompat = meowSelected && !builtinForMeow;
+    const transportToolName = meowCompat ? SOLIUMBRA_TOOL : mode === "off" || builtinForMeow ? "" : getTransportToolName();
+    const reportTransport = state => onStatus(builtinForMeow && state.mode && !state.bypass ? { ...state, builtinForMeow: true } : state);
     let reason = bypassReason(body, imageEnabled && mode === "off" ? "buffered" : mode, ownPayGoProxy, transportToolName, meowCompat);
     if (!reason && meowCompat && !soliumbraSchema(transportToolName, body.tools, true)) reason = "target-tool-schema";
     // Image conversion still needs its normal backend when only the text tool is skipped.
@@ -203,7 +208,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
       const { sendPayGoRequest } = await import("./paygo.js");
       try {
         const reply = await sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, waitForStopUsage, unicode, transportToolName, meowCompat, longDecode: getLongDecode() === true,
-          ensureBackend, getRequestHeaders, onStatus });
+          ensureBackend, getRequestHeaders, onStatus: reportTransport });
         return await reportResponse(reply, onStatus);
       } catch (error) {
         onStatus({ error: error.code ?? error.message, ...(error.message && error.message !== error.code ? { message: error.message } : {}),
@@ -228,7 +233,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (!reason && !direct && (imageEnabled || body.type === "continue") && !await ensureBackend()) {
       onStatus({ error: "plugin_not_ready" }); throw new Error("plugin_not_ready");
     }
-    onStatus({ mode, bypass: reason ?? imageOnlyBypass, unicode });
+    reportTransport({ mode, bypass: reason ?? imageOnlyBypass, unicode });
     if (reason) payload = JSON.stringify(body);
     const target = reason || direct ? url.href : new URL(`${PLUGIN_PATH}/generate`, origin).href;
     let response;
@@ -251,7 +256,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
       longDecode: response.headers.get("x-gemini-long-decode") === "true" } : null;
     if (response.ok && !reason && (imageEnabled || body.type === "continue" || outputLimit)) {
       // The plugin reports whether any text was converted; "no-text" was sent as plain text.
-      onStatus({ mode,
+      reportTransport({ mode,
         ...(imageOnlyBypass ? { bypass: imageOnlyBypass } : {}),
         ...(unicode ? { unicode } : {}),
         ...(outputLimit ? { outputLimit } : {}),

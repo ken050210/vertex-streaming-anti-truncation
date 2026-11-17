@@ -579,6 +579,44 @@ test("a named preset tool reaches a capable server, and ineligible requests use 
   }
 });
 
+test("Meow streaming uses the built-in tool for a text-only regenerate when the preset hook is absent", async () => {
+  const calls = [], statuses = [];
+  const intercept = createFetchInterceptor(async (url, init) => {
+    calls.push([url, JSON.parse(init.body)]);
+    return new Response();
+  }, { origin: "http://localhost", getMode: () => "streaming", getMeowCompat: () => true,
+    getTransportToolName: () => "inactive_custom_tool", onStatus: state => statuses.push(state) });
+  const base = { ...body, type: "regenerate", model: "gemini-4-carbon",
+    messages: [{ role: "system", content: "<run_tool_replacement>" }, ...body.messages] };
+  const send = data => intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify(data) });
+  for (const extra of [{}, { tools: [], tool_choice: "auto" }]) {
+    await send({ ...base, ...extra });
+    const [url, received] = calls.at(-1);
+    assert.equal(url, PLUGIN_PATH + "/generate");
+    assert.equal(received.vertex_meow_compat, undefined);
+    assert.equal(received.vertex_transport_tool_name, undefined);
+    assert.deepEqual(received.messages, base.messages);
+    assert.equal(statuses.at(-1).builtinForMeow, true);
+    const prepared = prepareSillyTavernRequest({ body: received }, adapters);
+    assert.equal(prepared.upstreamStream, true);
+    assert.deepEqual(prepared.body.toolConfig.functionCallingConfig,
+      { mode: "ANY", allowedFunctionNames: ["router_emit"], streamFunctionCallArguments: true });
+  }
+  const meowTool = { type: "function", function: { name: "soliumbra_reply", parameters: { type: "object",
+    properties: { think_nya: { type: "string" }, game_content: { type: "string" } }, required: ["think_nya", "game_content"] } } };
+  await send({ ...base, tools: [meowTool], tool_choice: "required" });
+  assert.equal(calls.at(-1)[0], PLUGIN_PATH + "/generate");
+  assert.equal(calls.at(-1)[1].vertex_meow_compat, true);
+  assert.equal(calls.at(-1)[1].vertex_transport_tool_name, "soliumbra_reply");
+  for (const extra of [{ tool_choice: "none" }, { tools: [lookupTool] }, { tools: [presetTextTool] },
+    { toolConfig: { functionCallingConfig: { mode: "NONE" } } }, { json_schema: { type: "object" } }]) {
+    const data = { ...base, ...extra };
+    await send(data);
+    assert.deepEqual(calls.at(-1), [GENERATE_PATH, data]);
+    assert.ok(statuses.at(-1).bypass);
+  }
+});
+
 test("Unicode transforms before off/tools/schema bypass and retains Request metadata", async () => {
   const calls = [], statuses = [];
   let enabled = true, floor = "你好", mode = "off";

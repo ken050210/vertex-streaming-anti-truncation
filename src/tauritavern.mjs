@@ -6,7 +6,7 @@ import { guardCompletionStream } from "./completion-integrity.mjs";
 import { createTagStop } from "./tag-stop.mjs";
 import { capGemini4Output, outputLimitHeaders } from "./gemini4.mjs";
 import { completedSillyTavernResponse, toSillyTavernStream } from "./sillytavern.mjs";
-import { createSseParser, googleErrorDetail, isObject, sseData, transformSse, upstreamMessage } from "./wire.mjs";
+import { createSseParser, googleErrorDetail, isObject, protocolError, sseData, transformSse, upstreamMessage } from "./wire.mjs";
 import { BODY_LIMIT } from "../integrations/sillytavern/shared.js";
 
 // TauriTavern replaces SillyTavern's Node server with a Rust backend, so no
@@ -47,22 +47,34 @@ export function prepareTauriTavernRequest(body, mode, tagStop, transportToolName
   };
 }
 
-// TauriTavern reports a failed request as assistant text in exactly this chunk:
-// {candidates:[{index, content:{parts:[{text}]}}]}, with none of Google's role,
-// ids, usage or finishReason. Give it an ending so its text arrives as written
-// instead of as an interrupted reply.
+// TT's buildErrorStreamChunk wraps failures as one text part with its localized
+// API Error label, index 0, and no Google metadata or finish reason.
 const only = (value, ...allowed) => isObject(value) && Object.keys(value).every(key => allowed.includes(key));
-function tauriErrorFrame(parsed) {
-  const candidate = only(parsed, "candidates") && parsed.candidates?.length === 1 ? parsed.candidates[0] : null;
-  const part = only(candidate, "index", "content") && only(candidate.content, "parts") && candidate.content.parts?.length === 1 ? candidate.content.parts[0] : null;
-  if (only(part, "text") && typeof part.text === "string") return { candidates: [{ ...candidate, finishReason: "STOP" }] };
+function tauriErrorFrame(parsed, structuredReply) {
+  if (!only(parsed, "candidates") || parsed.candidates?.length !== 1) return;
+  const candidate = parsed.candidates[0];
+  if (!only(candidate, "index", "content") || candidate.index !== 0 ||
+      !only(candidate.content, "parts") || candidate.content.parts?.length !== 1) return;
+  const part = candidate.content.parts[0];
+  if (!only(part, "text") || typeof part.text !== "string" || !part.text.startsWith("[")) return;
+  if (!part.text.startsWith("[API Error]")) {
+    const label = globalThis.SillyTavern?.i18n?.translate?.("API Error", "API Error");
+    if (!label || !part.text.startsWith(`[${label}]`)) return;
+  }
+  if (!structuredReply) return { candidates: [{ ...candidate, finishReason: "STOP" }] };
+  // A synthetic STOP would make the preset validate a tool call that never
+  // arrived. Some TT diagnostics name the HTTP status; others only have text.
+  const diagnostic = part.text.slice(part.text.indexOf("]") + 1).trimStart();
+  const match = /^(?:HTTP\s+|(?:Google )?Vertex AI endpoint failed with status\s+)([45]\d{2})\b/i.exec(diagnostic);
+  const status = match ? Number(match[1]) : undefined;
+  throw Object.assign(protocolError("upstream_stream_error"), { status, upstreamBody: { error: { code: status, message: part.text } } });
 }
 
-function normalizeTauriStream(response) {
+function normalizeTauriStream(response, normalizeError) {
   return transformSse(response, ({ raw, data }, emit) => {
     let parsed;
     try { parsed = JSON.parse(data); } catch { return emit(raw + "\n\n"); }
-    const error = tauriErrorFrame(parsed);
+    const error = normalizeError(parsed);
     emit(error ? sseData(error) : raw + "\n\n");
   });
 }
@@ -139,8 +151,9 @@ export async function restoreBrowserStream(response, prepared, signal, tauri = f
   let usageMetadata, textSignature;
   const getReceipt = () => stop?.marker() ? stop.receipt() : undefined;
   const fields = prepared.schema && nativeSoliumbra(prepared.schema, stop, prepared);
-  const native = stop ? stop.stream(response, prepared.waitForStopUsage, tauri ? tauriErrorFrame : undefined, fields)
-    : tauri ? normalizeTauriStream(response) : response;
+  const normalizeError = tauri ? frame => tauriErrorFrame(frame, prepared.schema) : undefined;
+  const native = stop ? stop.stream(response, prepared.waitForStopUsage, normalizeError, fields)
+    : normalizeError ? normalizeTauriStream(response, normalizeError) : response;
   const translated = wrapNativeTextStream(native, fields ? null : prepared.toolName, prepared.model,
     usage => { usageMetadata = usage; }, true, prepared.tools, tauri ? undefined : signature => { textSignature = signature; }, stop ? undefined : fields);
   const restored = guardCompletionStream(wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools, undefined, fields?.hasReply), () => {}, null, BODY_LIMIT);

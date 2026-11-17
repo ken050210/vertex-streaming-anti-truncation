@@ -8,7 +8,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { prepareAntiTruncation, restoreAntiTruncationCompletion, wrapAntiTruncationStream, antiTruncationLogFields } from "./anti-truncation.mjs";
-import { buildNativeTextBody, buildNativeUrl, nativeRequestBody, supportsNativeRequest, translateUsage } from "./vertex-native.mjs";
+import { buildNativeTextBody, buildNativeUrl, finalStopUsage, nativeRequestBody, supportsNativeRequest, translateUsage } from "./vertex-native.mjs";
 import { estimateCostUsd, usageTokens } from "./pricing.mjs";
 import { wrapNativeTextStream } from "./vertex-text-stream.mjs";
 import { nativeSoliumbra } from "./soliumbra.mjs";
@@ -102,9 +102,15 @@ async function readCompletion(response, limit, native, model, transport, stop) {
     const inspected = inspectCompletion(parsed);
     if (!inspected.valid) throw Object.assign(new Problem(502, inspected.reason), { integrity: inspected.integrity });
   }
+  const bufferedUsage = parsed.usage;
   if (native && schema) parsed.router_anti_truncation = { restored: fields.hasReply() && parsed.choices[0].native_finish_reason === "STOP" };
   else parsed = restoreAntiTruncationCompletion(parsed, toolName, native ? undefined : stop, schema, transport);
-  if (stop?.marker()) { delete parsed.usage; parsed.router_stop_after = stop.marker(); }
+  if (stop?.marker()) {
+    parsed.router_stop_after = stop.marker();
+    const usage = native ? finalStopUsage(stop) : bufferedUsage;
+    if (usage) parsed.usage = usage;
+    else delete parsed.usage;
+  }
   if (stop) {
     const inspected = inspectCompletion(parsed);
     if (!inspected.valid) throw Object.assign(new Problem(502, inspected.reason), { integrity: inspected.integrity });
@@ -227,7 +233,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
             const prepared = prepareUnicodeInput(payload, config.unicodeInput, config.bodyLimitBytes);
             payload = prepared.payload; unicode = prepared.metadata;
           } catch (error) {
-            if (["unicode_floor_required", "unicode_input_too_large"].includes(error.code)) throw new Problem(error.status, error.code);
+            if (["unicode_floor_required", "unicode_ai_floors_required", "unicode_input_too_large"].includes(error.code)) throw new Problem(error.status, error.code);
             throw error;
           }
           response.setHeader("x-unicode-input", unicode?.reason || "disabled");
@@ -357,11 +363,14 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
               upstream = completionStream(await readReply(upstream), includeUsage);
             } else {
               const fields = native && transport.schema && nativeSoliumbra(transport.schema, stop, transport);
-              if (native && stop) upstream = stop.stream(upstream, false, undefined, fields);
+              if (native && stop) {
+                const wait = !longDecode && (config.stopUsageWait === "natural" ? "natural" : config.stopUsageWait === "250ms");
+                upstream = stop.stream(upstream, wait, undefined, fields);
+              }
               if (transport.nativeStreaming || fields) upstream = wrapNativeTextStream(upstream, fields ? null : transport.toolName, route.upstreamModel, usage => { audit.trafficType = usage?.trafficType; audit.usage = translateUsage(usage); }, includeUsage, transport.payload.tools, undefined, stop ? undefined : fields);
               else if (native) upstream = wrapNativeStream(upstream, route.id, usage => { audit.trafficType = usage?.traffic_type; audit.usage = usage; }, includeUsage);
               upstream = wrapAntiTruncationStream(upstream, transport.toolName, metadata => Object.assign(audit, metadata), transport.payload.tools, native ? undefined : stop, fields?.hasReply, transport);
-              upstream = aliasStream(upstream, route.id, metadata => Object.assign(audit, metadata), includeUsage, () => stop?.marker());
+              upstream = aliasStream(upstream, route.id, metadata => Object.assign(audit, metadata), includeUsage, stop);
             }
             upstream = guardCompletionStream(upstream, metadata => { integrity = metadata; }, expectation, config.bodyLimitBytes);
             if (!upstream.body) throw new Problem(502, "empty_upstream_stream");
@@ -377,7 +386,6 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
             if (!received) throw new Problem(502, "empty_upstream_stream");
             if (response.destroyed) throw new Problem(499, "client_disconnected");
             response.end();
-            if (stop?.marker()) audit.usage = undefined;
             if (buffered) audit.streamDone = true;
           } else {
             const completion = await readReply(upstream);

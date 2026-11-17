@@ -47,8 +47,11 @@ export function prepareUnicodeInput(input, enabled, limitBytes, codec) {
   const all = enabled === "all";
   const recent = enabled === "recent";
   if (!all && (!source || typeof source !== "object" || Array.isArray(source) ||
-      Object.keys(source).some(key => key !== "user_floor" && !(recent && key === "ai_floors")) || typeof source.user_floor !== "string" || (!recent && !source.user_floor.length))) {
+      Object.keys(source).some(key => key !== "user_floor" && key !== "ai_floors") || typeof source.user_floor !== "string" || (!recent && !source.user_floor.length))) {
     throw inputError(400, "unicode_floor_required", "Unicode input requires router_unicode_input.user_floor from the latest real user chat floor");
+  }
+  if (recent && !Array.isArray(source.ai_floors)) {
+    throw inputError(400, "unicode_ai_floors_required", "Recent input requires router_unicode_input.ai_floors in chronological order");
   }
   const floor = all ? "" : source.user_floor;
   // Longest form first, so at one position the original wins over its trimmed copy.
@@ -160,7 +163,7 @@ export function prepareUnicodeInput(input, enabled, limitBytes, codec) {
     return { ...message, content };
   });
   if (metadata.occurrences) payload = { ...payload, messages };
-  else if (!all && !userVariants.length && !source.ai_floors?.some(Boolean)) metadata.reason = "no-encodable-text";
+  else if (!all && !userVariants.length && !(recent && source.ai_floors.some(Boolean))) metadata.reason = "no-encodable-text";
   if (metadata.occurrences) metadata.reason = "encoded";
   if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > limitBytes) {
     throw inputError(413, "unicode_input_too_large", "Unicode-encoded request exceeds the configured body limit");

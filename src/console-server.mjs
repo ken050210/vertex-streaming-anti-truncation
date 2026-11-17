@@ -197,7 +197,7 @@ export async function createConsole({ store = createSettingsStore(), fetchImpl =
               // The gateway answers by its own upstream timeout; fetch's built-in 300 s limit must not cut a slower probe first.
               dispatcher: await upstreamDispatcher(activeConfig.timeoutMs + 30000),
               headers: { ...(activeConfig.gatewayKeyMode === "none" ? {} : { authorization: "Bearer " + activeConfig.gatewayKey }), "content-type": "application/json" },
-              body: JSON.stringify({ model, router_unicode_input: { user_floor: "Write three short lines about a river." }, messages: [{ role: "user", content: "Write three short lines about a river." }], max_tokens: 512, stream: body.stream === true,
+              body: JSON.stringify({ model, router_unicode_input: { user_floor: "Write three short lines about a river.", ai_floors: [] }, messages: [{ role: "user", content: "Write three short lines about a river." }], max_tokens: 512, stream: body.stream === true,
                 ...(body.stream === true ? { stream_options: { include_usage: true } } : {}) }),
             });
           } catch (error) {

@@ -22,7 +22,8 @@ const partial = (name, pieces) => call({ name, willContinue: true }) +
   pieces.map((stringValue, index) => call({ partialArgs: [{ jsonPath: "$.content", stringValue, willContinue: index < pieces.length - 1 }], willContinue: true })).join("") +
   call({});
 const errorText = "[API Error]\nHTTP 401 <tucao>1</tucao><tucao>2</tucao> details";
-const hostError = sseData({ candidates: [{ index: 0, content: { parts: [{ text: errorText }] } }] });
+const hostText = text => sseData({ candidates: [{ index: 0, content: { parts: [{ text }] } }] });
+const hostError = hostText(errorText);
 const done = sseData("[DONE]");
 const events = text => text.split("\n").filter(line => line.startsWith("data:") && !line.includes("[DONE]")).map(line => JSON.parse(line.slice(5)));
 const contents = text => events(text).flatMap(event => event.candidates ?? []).flatMap(candidate => candidate.content?.parts ?? [])
@@ -264,6 +265,51 @@ test("TauriTavern's own error text and quiet-request errors pass through", async
   assert.equal(events(await (await send(intercept(host(model + done), "streaming"))).text()).at(-1).error.code, "anti_truncation_native_stream_interrupted");
   const quiet = new Response('{"error":{"message":"failed"}}', { status: 502 });
   assert.strictEqual(await send(intercept(host(() => quiet), "buffered")), quiet);
+});
+
+test("TT reports host errors before validating a Meowssiah reply, and still requires the tool on a model STOP", async t => {
+  const name = "soliumbra_reply";
+  const tools = [{ type: "function", function: { name, parameters: {
+    type: "object", properties: { think_nya: { type: "string" }, game_content: { type: "string" } },
+    required: ["think_nya", "game_content"],
+  } } }];
+  globalThis.SillyTavern = { i18n: { translate: () => "API 错误" } };
+  t.after(() => { delete globalThis.SillyTavern; });
+  const expired = "[API Error]\nHTTP 401 UNAUTHENTICATED";
+  const busy = "[API 错误]\nGoogle Vertex AI endpoint failed with status 429: RESOURCE_EXHAUSTED";
+  for (const [model, status, diagnostic] of [["gemini-4-argon", 401, expired], ["gemini-4-carbon", 429, busy], ["gemini-4-hydrogen", 429, busy]]) {
+    for (const tagStop of [null, { tag: "tucao", count: 2 }]) {
+      for (const stream of [true, false]) {
+        const statuses = [];
+        const wrapped = intercept(host(hostText(diagnostic) + done), stream ? "streaming" : "buffered", {
+          getMeowCompat: () => true, getTagStop: () => tagStop, onStatus: status => statuses.push(status),
+        });
+        const response = await send(wrapped, { model, tools, stream });
+        const records = stream ? events(await response.text()) : [await response.json()];
+        assert.equal(records.length, 1);
+        const error = records[0].error;
+        assert.equal(error?.code, "upstream_stream_error");
+        assert.equal(error.upstreamError.code, status);
+        assert.ok(error.message.includes(diagnostic.replace("\n", " ")));
+        assert.equal(statuses.at(-1).message, error.message);
+        assert.equal(response.status, stream ? 200 : status);
+      }
+    }
+  }
+
+  const interrupted = call({ name, willContinue: true }) + hostText("[API Error]\nConnection lost after 429 ms") + done;
+  const buffered = await send(intercept(host(interrupted), "buffered", { getMeowCompat: () => true }), { tools, stream: false });
+  assert.equal(buffered.status, 502);
+  const error = (await buffered.json()).error;
+  assert.equal(error.code, "upstream_stream_error");
+  assert.equal(error.upstreamError.code, undefined);
+  assert.match(error.message, /Connection lost after 429 ms/);
+
+  for (const ordinary of [hostText("[Scene]\nA story about HTTP 429"), google({ content: { role: "model", parts: [{ text: expired }] } })]) {
+    const wrapped = intercept(host(ordinary + finish() + done), "streaming", { getMeowCompat: () => true, getTagStop: () => null });
+    const records = events(await (await send(wrapped, { tools })).text());
+    assert.equal(records.at(-1).error?.code, "anti_truncation_missing_reply_tool");
+  }
 });
 
 test("a cancelled request stops without an error event or a failure response", async () => {

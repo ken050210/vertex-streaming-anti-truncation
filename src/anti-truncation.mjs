@@ -1,6 +1,6 @@
 import { prepareMeowFields } from "./meow-compat.mjs";
 import { supportsNativeRequest } from "./vertex-native.mjs";
-import { DEFAULT_TRANSPORT_TOOL_NAME, SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason } from "./transport-tool-name.mjs";
+import { DEFAULT_TRANSPORT_TOOL_NAME, SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason, useBuiltinForMeow } from "./transport-tool-name.mjs";
 import { SoliumbraArguments } from "./soliumbra.mjs";
 // Restoration failures describe one reply, not the connection, and keep their code.
 import { isObject, protocolError as failure, sseData, trafficType, transformSse } from "./wire.mjs";
@@ -34,7 +34,10 @@ export function prepareAntiTruncation(payload, enabled, streamArguments = false,
     if (payload.response_format && payload.response_format.type !== "text") return skip("structured-output");
     if ((payload.n != null && payload.n !== 1) || (payload.best_of != null && payload.best_of !== 1)) return skip("multiple-candidates");
     if (payload.messages.some(message => message.role === "function" || message.function_call)) return skip("tool-history");
-    if (meowCompat) transportToolName = SOLIUMBRA_TOOL;
+    if (meowCompat) {
+        meowCompat = !useBuiltinForMeow(payload);
+        transportToolName = meowCompat ? SOLIUMBRA_TOOL : "";
+    }
     const bypass = transportToolBypassReason(payload, transportToolName, meowCompat);
     if (bypass) return skip(bypass);
     const clientTools = Array.isArray(payload.tools) ? payload.tools : [];

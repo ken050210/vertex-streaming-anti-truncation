@@ -2,6 +2,14 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.22.0 / SillyTavern 0.17.1
+
+- In Meow compatibility mode, plain text turns without a tool declaration use the built-in `router_emit`. Turns declaring `soliumbra_reply` use the preset fields.
+- The gateway can Unicode-encode the current input and the last two assistant floors. Update the Tavern floor bridge and add `router_unicode_input: recent` to the custom request body. [Encoding setup](docs/GATEWAY.en.md#unicode-input)
+- Native Vertex streams can disconnect at a tag (default), wait up to 250 ms for final usage, or read the same request to its natural end. Confirmed usage reaches the request log and clients requesting `stream_options.include_usage`. Generation after the tag may incur charges. [Cutoff settings](docs/GATEWAY.en.md)
+- The Tavern extension paints Meow planning before coalesced story text. SillyTavern uses its request proxy for OAuth and generation. TauriTavern surfaces host API errors on structured turns.
+- Added an optional argument-streaming patch for a pinned `vertex2openai` upstream revision. [Patch and validation notes](patches/vertex2openai/README.md)
+
 ## Gateway 0.21.0
 
 Generation requests now retry upstream HTTP 429 on the same account. The default is 10 additional attempts at 5-second intervals. Adjust both under Connection settings → Local gateway, or set the count to 0 to disable. Streaming output already sent to the client is never replayed.

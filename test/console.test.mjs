@@ -424,6 +424,9 @@ test("Unicode save/apply persists and affects new requests independently of tran
   assert.equal(response.status, 400);
   assert.equal((await response.json()).error.code, "unicode_floor_required");
   assert.equal(f.requests.length, before);
+  result = await (await f.api("/api/config", { revision: result.revision, settings: { unicodeInput: "recent", stopUsageWait: "natural" } })).json();
+  assert.equal(f.app.status().active.unicodeInput, "recent");
+  assert.equal((await f.store.load()).settings.stopUsageWait, "natural");
   result = await (await f.api("/api/config", { revision: result.revision, settings: { unicodeInput: false } })).json();
   assert.equal(f.app.status().active.unicodeInput, false);
   assert.equal((await f.store.load()).settings.unicodeInput, false);

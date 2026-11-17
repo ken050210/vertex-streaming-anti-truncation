@@ -57,6 +57,8 @@ Open the setup link printed in the terminal. The console defaults to `http://127
 
 Choose **自定义上游** in Connection settings to use an OpenAI-compatible service that serves Gemini models. Enter its base URL and API key. The relay must support tool calls for anti-truncation and forward partial arguments for progressive delivery. [Relay configuration](docs/GATEWAY.en.md#custom-upstream)
 
+For `bad-woman/vertex2openai`, its Express streaming path also needs to enable and convert Google's argument fragments. A [patch and validation guide for a pinned upstream revision](patches/vertex2openai/README.md) is included. Apply it to vertex2openai; updating this gateway alone does not enable argument streaming inside the relay.
+
 ## Documentation
 
 | Task | Guide |

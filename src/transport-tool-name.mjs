@@ -1,6 +1,13 @@
 export const DEFAULT_TRANSPORT_TOOL_NAME = "router_emit";
 export const SOLIUMBRA_TOOL = "soliumbra_reply";
 
+// Without the preset's final-request hook, a plain text turn still qualifies
+// for the built-in tool. An explicit tool policy belongs to the caller.
+export function useBuiltinForMeow({ tools, tool_choice, toolConfig }) {
+  return (tools == null || (Array.isArray(tools) && !tools.length)) &&
+    (tool_choice == null || tool_choice === "auto") && toolConfig == null;
+}
+
 export const soliumbraPriority = ["think_nya", "game_content", "game", "story_body", "extra", "options", "summary", "comment"];
 
 export function soliumbraFieldOrder(properties) {

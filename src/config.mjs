@@ -10,7 +10,7 @@ export { MODEL_ID, UPSTREAM_MODEL };
 export const DEFAULT_SETTINGS = Object.freeze({
   projectId: "", location: "global", authMode: "service-account", serviceTier: "standard",
   // Keep the persisted switch name so existing explicit opt-outs survive upgrades.
-  port: 4781, timeoutMs: 600000, antiTruncation: true, transportToolName: "", meowCompat: false, tucaoStop: true, stopTag: DEFAULT_STOP_TAG, stopCount: DEFAULT_STOP_COUNT, stopExemptTag: "", models: null,
+  port: 4781, timeoutMs: 600000, antiTruncation: true, transportToolName: "", meowCompat: false, tucaoStop: true, stopTag: DEFAULT_STOP_TAG, stopCount: DEFAULT_STOP_COUNT, stopExemptTag: "", stopUsageWait: "immediate", models: null,
   hideUnavailableModels: true, geminiPrefillToUser: true, geminiLongDecode: false, unicodeInput: false, imageInput: "off",
   geminiPromptRetryEnabled: false, geminiPromptRetryText: "", geminiPromptRetryMatches: null, customBaseUrl: "",
   rateLimitRetryMax: 10, rateLimitRetryIntervalSeconds: 5,
@@ -92,9 +92,10 @@ export async function settingsFromEnv(env = process.env) {
     meowCompat: toggle("MEOW_COMPAT", false),
     tucaoStop: toggle("TAG_STOP", toggle("TUCAO_STOP", true)),
     stopExemptTag: env.STOP_EXEMPT_TAG ?? "",
+    stopUsageWait: env.STOP_USAGE_WAIT || "immediate",
     stopTag: env.STOP_TAG ?? DEFAULT_STOP_TAG,
     stopCount: integer(env.STOP_COUNT, DEFAULT_STOP_COUNT, 1, Number.MAX_SAFE_INTEGER, "STOP_COUNT"),
-    unicodeInput: env.UNICODE_INPUT === "all" ? "all" : toggle("UNICODE_INPUT", false), imageInput: env.IMAGE_INPUT || "off",
+    unicodeInput: ["all", "recent"].includes(env.UNICODE_INPUT) ? env.UNICODE_INPUT : toggle("UNICODE_INPUT", false), imageInput: env.IMAGE_INPUT || "off",
     hideUnavailableModels: toggle("HIDE_UNAVAILABLE_MODELS", true),
     geminiPrefillToUser: toggle("GEMINI_PREFILL_TO_USER", true), geminiLongDecode: toggle("GEMINI_LONG_DECODE", false),
     geminiPromptRetryEnabled: toggle("GEMINI_PROMPT_RETRY_ENABLED", false), geminiPromptRetryText,
@@ -131,7 +132,7 @@ export function vertexBaseUrl(authMode, projectId, location) {
   return `https://${host}/v1${projectPath}` + (authMode === "express" ? "" : "/endpoints/openapi");
 }
 
-export function buildConnectionConfig(settings, { requireAscii = true } = {}) {
+export function buildConnectionConfig(settings, { requireAscii = true, fetchImpl } = {}) {
   const s = { ...DEFAULT_SETTINGS, ...settings };
   if (!["service-account", "express", "access-token", "custom"].includes(s.authMode)) throw new Error("Invalid authentication mode");
   if (s.authMode === "custom") return customConnection(s, requireAscii);
@@ -146,7 +147,7 @@ export function buildConnectionConfig(settings, { requireAscii = true } = {}) {
     try {
       if (createPrivateKey(account.private_key).asymmetricKeyType !== "rsa") throw new Error();
     } catch { throw new Error("Service account must contain a valid RSA private key"); }
-    accessToken = () => vertexAccessToken(s.serviceAccountJson);
+    accessToken = () => vertexAccessToken(s.serviceAccountJson, undefined, fetchImpl);
   } else {
     const [name, value] = s.authMode === "express" ? ["VERTEX_API_KEY", s.apiKey] : ["VERTEX_ACCESS_TOKEN", s.accessToken];
     if (typeof value !== "string" || !value || /\s/.test(value) || value.length > 8192) throw new Error("Invalid " + name);
@@ -182,7 +183,8 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
   if (s.unicodeInput && s.imageInput !== "off") throw new Error("Unicode and image input are mutually exclusive");
   if (typeof s.antiTruncation !== "boolean") throw new Error("Invalid anti-truncation setting");
   validateTagStopRule({ tag: s.stopTag, count: s.stopCount, exemptTag: s.stopExemptTag });
-  if (![false, true, "all"].includes(s.unicodeInput)) throw new Error("Invalid Unicode input toggle or scope");
+  if (!["immediate", "250ms", "natural"].includes(s.stopUsageWait)) throw new Error("Invalid STOP_USAGE_WAIT");
+  if (![false, true, "recent", "all"].includes(s.unicodeInput)) throw new Error("Invalid Unicode input toggle or scope");
   for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiLongDecode", "geminiPromptRetryEnabled", "accountRotationEnabled", "tucaoStop", "meowCompat"]) {
     if (typeof s[name] !== "boolean") throw new Error("Invalid compatibility toggle");
   }
@@ -211,7 +213,7 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
     // Legacy fields remain available to CLI integrations; profiles own behavior.
     model: models[0]?.id || MODEL_ID, upstreamModel: models[0]?.upstreamModel || UPSTREAM_MODEL,
     antiTruncation: s.models == null ? s.antiTruncation : true, transportToolName: validateTransportToolName(s.transportToolName), meowCompat: s.meowCompat,
-    tucaoStop: s.tucaoStop, stopTag: s.stopTag, stopCount: s.stopCount, stopExemptTag: s.stopExemptTag,
+    tucaoStop: s.tucaoStop, stopTag: s.stopTag, stopCount: s.stopCount, stopExemptTag: s.stopExemptTag, stopUsageWait: s.stopUsageWait,
     port: integer(s.port, 4781, 1, 65535, "PORT"),
     timeoutMs: integer(s.timeoutMs, 600000, 1000, 1800000, "UPSTREAM_TIMEOUT_MS"),
     bodyLimitBytes: 8 * 1024 * 1024,

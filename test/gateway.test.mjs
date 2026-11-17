@@ -132,6 +132,34 @@ test("Meow compatibility restores aliased planning before the next HTTP fragment
   }
 });
 
+test("Meow uses the built-in transport on a plain turn and respects an explicit tool policy", async t => {
+  const f = await fixture(t, ({ json }) => json.tools?.length ? Response.json(completion(json.tools[0].function.name))
+    : Response.json({ choices: [{ message: { role: "assistant", content: "plain" }, finish_reason: "stop" }] }),
+    { meowCompat: true, transportToolName: "saved_preset_tool" });
+  const result = await (await f.post({ ...payload, tools: [], tool_choice: "auto" })).json();
+  assert.equal(f.requests[0].json.tool_choice.function.name, "router_emit");
+  assert.equal(result.choices[0].message.content, "OK");
+  assert.equal(result.router_anti_truncation.restored, true);
+  const bypass = await f.post({ ...payload, tool_choice: "none" });
+  assert.equal(bypass.headers.get("x-anti-truncation-transport"), "target-tool-choice");
+  assert.equal((await bypass.json()).choices[0].message.content, "plain");
+});
+
+test("gateway rejects a missing recent-floor list before forwarding and strips supplied floors upstream", async t => {
+  const f = await fixture(t, () => Response.json(completion("router_emit")), { unicodeInput: "recent" });
+  const send = ai_floors => f.post({ ...payload, messages: [{ role: "system", content: "丙/乙/丙/甲" }],
+    router_unicode_input: { user_floor: "甲", ai_floors } });
+  const missing = await send(undefined);
+  assert.equal(missing.status, 400);
+  assert.equal((await missing.json()).error.code, "unicode_ai_floors_required");
+  assert.equal(f.requests.length, 0);
+  const ok = await send(["乙", "丙"]);
+  assert.equal(ok.status, 200);
+  await ok.json();
+  assert.equal(f.requests[0].json.router_unicode_input, undefined);
+  assert.equal(f.requests[0].json.messages[0].content, "丙/⟦U:4E59⟧/⟦U:4E19⟧/⟦U:7532⟧");
+});
+
 test("gateway renders the preset's split native or compatible arguments and stops before the following field", async t => {
   const name = "soliumbra_reply";
   const fields = {type:"object", properties:{think_nya:{type:"string"},story_body:{type:"string"},summary:{type:"string"}},

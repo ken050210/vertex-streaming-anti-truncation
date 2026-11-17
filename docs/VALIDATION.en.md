@@ -2,6 +2,12 @@
 
 [中文](VALIDATION.md) | English
 
+## Gateway 0.22.0 / SillyTavern 0.17.1 (2026-11-17)
+
+Loopback HTTP tests cover Meow fallback and explicit tool policies, recent-floor matching, cutoff metering and long decode. The fixture sends the visible cutoff before releasing its metering tail. Clients receive final usage only when requested. When the 250 ms wait expires without a final receipt, interim counts stay out of the cost log. [Gateway tests](../test/gateway.test.mjs) · [Cutoff tests](../test/tucao-stop.test.mjs)
+
+Headless Edge loaded the packaged extension and server plugin in an isolated Tavern page. Two synthetic Vertex replays placed the last planning fragment alongside the story, or after story fragments. Both displayed the complete plan before the story and preserved the expected floor and selected swipe. An additional run used Tavern's installed `node-fetch` with a loopback proxy to verify OAuth, progressive delivery and cancellation. TauriTavern host errors were tested with recorded-shape fixtures. These release checks used no live inference. [Proxy tests](../test/sillytavern-proxy.test.mjs) · [TT tests](../test/tauritavern.test.mjs)
+
 ## SillyTavern 0.16.1 / Gateway 0.19.1 (2026-11-13)
 
 The section test splits the opening story tag across fragments. The loopback HTTP test reads story text from the gateway before sending the planning field from the simulated Vertex upstream. It checks the final tags, stop reason and single end marker. [Section tests](../test/soliumbra.test.mjs) · [Gateway tests](../test/gateway.test.mjs)

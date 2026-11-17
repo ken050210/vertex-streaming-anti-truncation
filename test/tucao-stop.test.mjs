@@ -27,10 +27,11 @@ async function fixture(t, native, upstream, settings = {}) {
     ...(native ? { authMode: "express", apiKey: "fixture-express" } : { authMode: "custom", customBaseUrl: "https://fixture.invalid/v1", customApiKey: "fixture-custom" }),
     models: [{ id: "fixture", upstreamModel: "gemini-4-argon", mode: "streaming" }], tucaoStop: true, ...settings });
   let calls = 0;
-  const server = createGatewayServer(config, { fetchImpl: async (url, options) => { calls++; return upstream(JSON.parse(options.body), url); } });
+  const events = [];
+  const server = createGatewayServer(config, { logger: event => events.push(event), fetchImpl: async (url, options) => { calls++; return upstream(JSON.parse(options.body), url); } });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   t.after(() => { server.closeAllConnections(); server.close(); });
-  return { calls: () => calls, post: (extra = {}) => fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, {
+  return { events, calls: () => calls, post: (extra = {}) => fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, {
     method: "POST", headers: { authorization: "Bearer " + env.GATEWAY_API_KEY, "content-type": "application/json" },
     body: JSON.stringify({ model: "fixture", messages: [{ role: "user", content: "Synthetic input" }], stream: true, ...extra }),
   }) };
@@ -61,17 +62,57 @@ test("gateway native and compatible streams stop at the second tag, even with un
   }
 });
 
+test("native gateway delivers the clipped reply before its metering tail and records only confirmed usage", { timeout: 8000 }, async t => {
+  const encoder = new TextEncoder();
+  for (const [wait, include, final] of [["natural", true, true], ["natural", false, true], ["250ms", true, false]]) {
+    let source;
+    const f = await fixture(t, true, () => new Response(new ReadableStream({ start(controller) {
+      source = controller;
+      source.enqueue(encoder.encode(sseData({ usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1 } })
+        + nativeCall({ name, willContinue: true }) + nativePart(body + noise)));
+    } })), { stopUsageWait: wait });
+    const response = await f.post({ stream_options: { include_usage: include } });
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let wire = "";
+    while (!wire.includes(tag)) {
+      const { value, done } = await reader.read();
+      assert.equal(done, false);
+      wire += value;
+    }
+    if (final) {
+      source.enqueue(encoder.encode(nativePart("hidden tail") + sseData({ candidates: [{ finishReason: "STOP" }],
+        usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 9, cachedContentTokenCount: 3, totalTokenCount: 14 } })));
+      source.close();
+    }
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      wire += value;
+    }
+    assert.equal(visible(wire), body);
+    assert.equal(wire.split("[DONE]").length - 1, 1);
+    const usage = records(wire).filter(x => x.usage);
+    assert.equal(usage.length, Number(final && include));
+    if (usage.length) assert.equal(usage[0].usage.total_tokens, 14);
+    assert.deepEqual(f.events[0].usage, final ? { promptTokens: 5, outputTokens: 9, cachedTokens: 3 } : undefined);
+    assert.equal(f.calls(), 1);
+  }
+});
+
 test("buffered and nonstream native/compatible replies clip only when enabled, including plain fallback", async t => {
   for (const native of [true, false]) for (const plain of [true, false]) for (const stream of [true, false]) for (const enabled of [true, false]) {
     const f = await fixture(t, native, () => Response.json(native
-      ? { candidates: [{ content: { parts: [plain ? { text: body + noise } : { functionCall: { name, args: { content: body + noise } } }] }, finishReason: "STOP" }] }
-      : { choices: [{ index: 0, message: plain ? { role: "assistant", content: body + noise } : { role: "assistant", tool_calls: [{ id: "fixture", type: "function", function: { name, arguments: JSON.stringify({ content: body + noise }) } }] }, finish_reason: plain ? "stop" : "tool_calls" }] }),
+      ? { candidates: [{ content: { parts: [plain ? { text: body + noise } : { functionCall: { name, args: { content: body + noise } } }] }, finishReason: "STOP" }],
+        usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 8, totalTokenCount: 20 } }
+      : { choices: [{ index: 0, message: plain ? { role: "assistant", content: body + noise } : { role: "assistant", tool_calls: [{ id: "fixture", type: "function", function: { name, arguments: JSON.stringify({ content: body + noise }) } }] }, finish_reason: plain ? "stop" : "tool_calls" }],
+        usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 } }),
     { tucaoStop: enabled, models: [{ id: "fixture", upstreamModel: "gemini-4-argon", mode: "buffered" }] });
-    const response = await f.post({ stream });
+    const response = await f.post({ stream, stream_options: { include_usage: true } });
     assert.equal(response.status, 200);
     const output = stream ? await response.text() : await response.json();
     assert.equal(stream ? visible(output) : output.choices[0].message.content, enabled ? body : body + noise);
     assert.equal(stream ? records(output).some(x => x.router_stop_after === tag) : output.router_stop_after === tag, enabled);
+    assert.equal((stream ? records(output).find(x => x.usage)?.usage : output.usage)?.total_tokens, 20);
   }
 });
 
@@ -105,7 +146,7 @@ test("a native local stop cancels long-decode before another inference hop", asy
         if (completed) controller.close();
       },
       cancel() { cancelled = true; },
-    })), { geminiLongDecode: true });
+    })), { geminiLongDecode: true, stopUsageWait: "natural" });
     assert.equal(visible(await (await f.post({ max_tokens: 70000 })).text()), body);
     await new Promise(resolve => setImmediate(resolve));
     if (!completed) assert.equal(cancelled, true);
@@ -121,7 +162,10 @@ test("tag stop defaults on, preserves legacy opt-outs and persists custom rules 
   assert.equal((await loadConfig({ ...env, TUCAO_STOP: "true" })).tucaoStop, true);
   assert.equal((await loadConfig({ ...env, TUCAO_STOP: "false" })).tucaoStop, false);
   assert.equal((await loadConfig({ ...env, TUCAO_STOP: "true", TAG_STOP: "false" })).tucaoStop, false);
-  const custom = await loadConfig({ ...env, TAG_STOP: "true", STOP_TAG: "A", STOP_COUNT: "1", STOP_EXEMPT_TAG: "plan~" });
+  const custom = await loadConfig({ ...env, TAG_STOP: "true", STOP_TAG: "A", STOP_COUNT: "1", STOP_EXEMPT_TAG: "plan~", STOP_USAGE_WAIT: "250ms", UNICODE_INPUT: "recent" });
+  assert.equal(custom.stopUsageWait, "250ms");
+  assert.equal(custom.unicodeInput, "recent");
+  await assert.rejects(loadConfig({ ...env, STOP_USAGE_WAIT: "invalid" }), /STOP_USAGE_WAIT/);
   assert.equal(custom.stopExemptTag, "plan~");
   assert.equal(custom.stopTag, "A");
   assert.equal(custom.stopCount, 1);

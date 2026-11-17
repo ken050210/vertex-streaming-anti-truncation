@@ -57,6 +57,8 @@ npm start
 
 使用提供 Gemini 模型的 OpenAI 兼容中转时，在「连接配置」里选择「自定义上游」，填中转地址和 API Key。抗截断需要中转支持工具调用，逐段显示正文还需要它分段转发工具参数。[中转配置](docs/GATEWAY.md#自定义上游)
 
+接入 `bad-woman/vertex2openai` 时，其 Express 真流式路径还需要启用并转换 Google 参数流，才能逐段交付文本工具参数。仓库提供了针对指定上游版本的[本地补丁与验证说明](patches/vertex2openai/README.md)；补丁需应用到 vertex2openai，仅更新本网关不会启用中转内部的参数流。
+
 ## 文档
 
 | 想做的事 | 去哪里看 |

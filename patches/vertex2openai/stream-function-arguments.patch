@@ -1,0 +1,486 @@
+--- a/app/api_helpers.py
++++ b/app/api_helpers.py
+@@ -22,6 +22,7 @@
+ 
+ import model_capabilities as mc
+ from runtime_state import app_state
++from text_tool_stream import TextToolStream, configure_text_tool_stream
+ 
+ # 引入报错重试统计器
+ from logger import stats
+@@ -466,8 +467,9 @@
+     每次重试都要新建一个实例（重试会重发整轮，序号需要归零）。
+     """
+ 
+-    def __init__(self):
++    def __init__(self, text_tool=None):
+         self._next: Dict[int, int] = {}
++        self.text_stream = TextToolStream(*text_tool) if text_tool else None
+         self._seen_tool_calls: set[int] = set()
+         self._ordinary_parts: Dict[int, list] = {}
+         self._part_order: Dict[int, list] = {}
+@@ -516,6 +518,12 @@
+ 
+     if hasattr(chunk, "candidates") and chunk.candidates and len(chunk.candidates) > candidate_index:
+         candidate = chunk.candidates[candidate_index]
++        if indexer and indexer.text_stream:
++            if len(chunk.candidates) != 1:
++                indexer.text_stream.fail("multiple_candidates")
++            if (indexer.text_stream.finished
++                    and getattr(getattr(candidate, "content", None), "parts", None)):
++                indexer.text_stream.fail("data_after_finish")
+         raw_gemini_finish_reason = getattr(candidate, "finish_reason", None)
+         if raw_gemini_finish_reason:
+             if hasattr(raw_gemini_finish_reason, "name"): raw_gemini_finish_reason_str = raw_gemini_finish_reason.name.upper()
+@@ -562,6 +570,22 @@
+                         ordinary_signature = sig
+                         ordinary_signature_kind = kind
+                     continue
++                text_stream = indexer.text_stream if indexer else None
++                if text_stream:
++                    first = not text_stream.started
++                    arguments = text_stream.consume(fc)
++                    if first:
++                        text_stream.index = indexer.next_index(candidate_index)
++                        indexer.record_tool_call(candidate_index, text_stream.index)
++                    tc = {"index": text_stream.index, "function": {"arguments": arguments}}
++                    if first:
++                        tc.update({"id": build_tool_call_id(fc, part), "type": "function"})
++                        tc["function"]["name"] = text_stream.name
++                    extra = thought_signature_extra(sig)
++                    if extra:
++                        tc["extra_content"] = extra
++                    tool_call_deltas.append(tc)
++                    continue
+                 tc_index = indexer.next_index(candidate_index) if indexer else len(tool_call_deltas)
+                 tc = {
+                     "index": tc_index,
+@@ -582,6 +606,9 @@
+                 if indexer:
+                     indexer.record_tool_call(candidate_index, tc_index)
+                 tool_call_deltas.append(tc)
++
++        if raw_gemini_finish_reason and indexer and indexer.text_stream:
++            indexer.text_stream.finish(raw_gemini_finish_reason_str)
+ 
+         # Google often emits the functionCall in one chunk and a final STOP in a
+         # later empty chunk. Once this candidate has produced any tool call, the
+@@ -980,6 +1007,8 @@
+                 ), media_type="text/event-stream"
+             )
+         else: # True Streaming
++            stream_config, text_tool = configure_text_tool_stream(
++                request_obj, gen_config_dict, model_to_call, types)
+             response_id_for_stream = f"chatcmpl-realstream-{int(time.time())}"
+             async def _gemini_real_stream_generator_inner():
+                 # 钉定失败要在这里改写模型名与客户端，必须声明 nonlocal。
+@@ -998,13 +1027,13 @@
+                         stream_gen_obj = await current_client.aio.models.generate_content_stream(
+                             model=model_to_call,
+                             contents=actual_prompt_for_call,
+-                            config=gen_config_dict
++                            config=stream_config
+                         )
+ 
+                         # 预填充智能兼容：把预填充文本作为回复开头先发出（仅一次）；
+                         # 同时启用流式去重器，模型若复述预填充开头会被自动裁掉（n>1 时不启用）。
+                         # 每次 attempt 都重置 tool_calls 序号（重试会重发整轮）
+-                        tool_indexer = ToolCallIndexer()
++                        tool_indexer = ToolCallIndexer(text_tool)
+                         deduper = PrefillDeduper(prefill_text) if (prefill_text and (request_obj.n or 1) == 1) else None
+                         if prefill_text and not has_yielded:
+                             has_yielded = True
+@@ -1029,6 +1058,9 @@
+                                     if sse_chunk is None:
+                                         continue  # 正文暂存于去重器，跳过空 chunk
+                                 yield sse_chunk
++
++                        if tool_indexer.text_stream:
++                            tool_indexer.text_stream.validate_end()
+ 
+                         # 去重器可能还攒着开头文本（上游没发 finish chunk 的场景）
+                         if deduper is not None and not deduper.done:
+@@ -1101,8 +1133,8 @@
+                         s_err = str(e_stream_call); s_err = s_err[:1024]+"..." if len(s_err)>1024 else s_err
+                         if is_auto_attempt:
+                             raise e_stream_call
+-                        # 已经输出过内容：不再重发错误体，只补结束标记，避免污染已有输出
+-                        if has_yielded:
++                        # Partial text-tool failures must remain visible after content.
++                        if has_yielded and not text_tool:
+                             yield "data: [DONE]\n\n"
+                         else:
+                             err_resp = create_openai_error_response(500, s_err, "server_error")
+--- /dev/null
++++ b/app/text_tool_stream.py
+@@ -0,0 +1,113 @@
++"""Incremental arguments for a single forced tool with one string parameter."""
++import json
++import re
++
++
++def configure_text_tool_stream(request, config, model, sdk_types):
++    """Enable a closed single-string schema; callers must use real SDK streaming."""
++    model = model.rsplit("/", 1)[-1].lower()
++    version = re.match(r"gemini-(\d+)(?:[.-]|$)", model)
++    if (not getattr(request, "stream", False) or not version or int(version[1]) < 3
++            or model.startswith("gemini-3.1-flash-lite") or (getattr(request, "n", None) or 1) != 1):
++        return config, None
++    tools = getattr(request, "tools", None)
++    if not isinstance(tools, list) or len(tools) != 1 or not isinstance(tools[0], dict):
++        return config, None
++    tool = tools[0]
++    function = tool.get("function")
++    if not isinstance(function, dict):
++        return config, None
++    name = function.get("name", "")
++    schema = function.get("parameters") or {}
++    if not isinstance(schema, dict):
++        return config, None
++    properties = schema.get("properties")
++    if not isinstance(properties, dict) or len(properties) != 1:
++        return config, None
++    key, parameter = next(iter(properties.items()))
++    if (not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key)
++            or not isinstance(parameter, dict) or parameter.get("type") != "string"
++            or schema.get("type") != "object" or schema.get("required") != [key]
++            or schema.get("additionalProperties") is not False):
++        return config, None
++    if (tool.get("type") != "function" or not isinstance(name, str) or not name
++            or getattr(request, "tool_choice", None) != {"type": "function", "function": {"name": name}}):
++        return config, None
++    # Older SDKs can discard response fields or reject the request option. Keep
++    # the existing buffered conversion unless both sides of the API are present.
++    fields = getattr(getattr(sdk_types, "FunctionCall", None), "model_fields", {})
++    options = getattr(getattr(sdk_types, "FunctionCallingConfig", None), "model_fields", {})
++    if not {"partial_args", "will_continue"} <= fields.keys() or "stream_function_call_arguments" not in options:
++        return config, None
++    calling = dict((config.get("tool_config") or {}).get("function_calling_config") or {})
++    if calling.get("mode") != "ANY" or calling.get("allowed_function_names") != [name]:
++        return config, None
++    calling["stream_function_call_arguments"] = True
++    updated = dict(config)
++    updated["tool_config"] = {**config["tool_config"], "function_calling_config": calling}
++    return updated, (name, key)
++
++
++class TextToolStream:
++    def __init__(self, name, key="content"):
++        self.name = name
++        self.key = key
++        self.started = self.string_started = self.string_closed = False
++        self.closed = self.full_args = self.finished = False
++        self.index = None
++
++    @staticmethod
++    def fail(reason):
++        raise ValueError("text_tool_stream_" + reason)
++
++    def consume(self, fc):
++        if self.closed or self.finished or getattr(fc, "name", None) not in (None, self.name):
++            self.fail("unexpected_call")
++        if not self.started:
++            if getattr(fc, "name", None) != self.name:
++                self.fail("missing_name")
++            self.started = True
++        result = []
++        full = getattr(fc, "args", None)
++        if full is not None:
++            if (self.string_started or self.full_args or not isinstance(full, dict)
++                    or set(full) != {self.key} or not isinstance(full[self.key], str)):
++                self.fail("invalid_args")
++            self.full_args = self.string_closed = True
++            result.append(json.dumps(full, ensure_ascii=True))
++        partial = getattr(fc, "partial_args", None)
++        if partial is not None and not isinstance(partial, list):
++            self.fail("invalid_partial_args")
++        for part in partial or []:
++            value = getattr(part, "string_value", None)
++            more = getattr(part, "will_continue", None) is True
++            if (self.full_args or self.string_closed or getattr(part, "json_path", None) != "$." + self.key
++                    or any(getattr(part, key, None) is not None for key in ("number_value", "bool_value", "null_value"))
++                    or not (isinstance(value, str) or (value is None and self.string_started and not more))):
++                self.fail("invalid_partial_args")
++            if not self.string_started:
++                result.append("{" + json.dumps(self.key) + ':"')
++                self.string_started = True
++            if value:
++                result.append(json.dumps(value, ensure_ascii=True)[1:-1])
++            if not more:
++                result.append('"')
++                self.string_closed = True
++        if getattr(fc, "will_continue", None) is not True:
++            if not self.string_closed:
++                self.fail("incomplete_args")
++            if not self.full_args:
++                result.append("}")
++            self.closed = True
++        return "".join(result)
++
++    def finish(self, reason):
++        if self.finished:
++            self.fail("duplicate_finish")
++        if reason == "STOP" and self.started and not self.closed:
++            self.fail("incomplete_args")
++        self.finished = True
++
++    def validate_end(self):
++        if not self.finished:
++            self.fail("missing_finish_reason")
+--- /dev/null
++++ b/tests/test_text_tool_stream.py
+@@ -0,0 +1,254 @@
++"""Offline tests: execute the real adapter functions with a simulated SDK."""
++import ast
++import asyncio
++import contextlib
++import io
++import json
++from pathlib import Path
++import sys
++import time
++from types import ModuleType, SimpleNamespace as NS
++import unittest
++from unittest.mock import patch
++import __future__
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / "app"))
++from text_tool_stream import TextToolStream, configure_text_tool_stream
++
++NAME = "deliver_text"
++SPEC = (NAME, "content")
++SDK = NS(FunctionCall=NS(model_fields={"partial_args": None, "will_continue": None}),
++         FunctionCallingConfig=NS(model_fields={"stream_function_call_arguments": None}))
++
++
++def request(**changes):
++    data = dict(model="gemini-4-argon", stream=True, n=1, messages=[], stream_options=None,
++                tools=[{"type": "function", "function": {"name": NAME, "parameters": {
++                    "type": "object", "properties": {"content": {"type": "string"}},
++                    "required": ["content"], "additionalProperties": False}}}],
++                tool_choice={"type": "function", "function": {"name": NAME}})
++    return NS(**(data | changes))
++
++
++def config():
++    return {"tool_config": {"function_calling_config": {
++        "mode": "ANY", "allowed_function_names": [NAME]}}}
++
++
++def chunk(fc=None, reason=None, text=None, sig=None):
++    parts = []
++    if fc is not None:
++        parts.append(NS(function_call=fc, thought_signature=sig))
++    if text is not None:
++        parts.append(NS(function_call=None, text=text, thought=False, thought_signature=None))
++    return NS(candidates=[NS(content=NS(parts=parts), finish_reason=reason)])
++
++
++def fragment(value, more=True):
++    return NS(partial_args=[NS(json_path="$.content", string_value=value, will_continue=more)],
++              will_continue=True)
++
++
++def decode(sse):
++    return json.loads(sse.removeprefix("data: ").strip())
++
++
++def load_adapter():
++    # Keep tests independent of credentials, server startup and SDK installation.
++    # Compile the actual production functions; only their external dependencies
++    # (SDK/network, metadata helpers and response wrapper) are simulated.
++    tree = ast.parse((ROOT / "app/api_helpers.py").read_text(encoding="utf-8"))
++    names = {"ToolCallIndexer", "convert_chunk_to_openai", "execute_gemini_call",
++             "_extract_usage", "wants_usage", "make_usage_chunk"}
++    selected = ast.Module(body=[node for node in tree.body if getattr(node, "name", None) in names],
++                          type_ignores=[])
++    scope = dict(json=json, time=time, asyncio=asyncio, types=SDK, TextToolStream=TextToolStream,
++                 configure_text_tool_stream=configure_text_tool_stream,
++                 _safety_score_enabled=lambda: False,
++                 StreamingResponse=lambda it, **kwargs: NS(body_iterator=it),
++                 get_retry_settings=lambda: (0, 0),
++                 app_config=NS(FAKE_STREAMING_ENABLED=False),
++                 app_state=NS(get_setting=lambda *args: False),
++                 mc=NS(get_profile=lambda model: {"is_image": False}),
++                 stats=NS(add_tokens=lambda *args: None),
++                 create_openai_error_response=lambda code, msg, kind: {"error": {"message": msg, "type": kind}})
++    exec(compile(selected, str(ROOT / "app/api_helpers.py"), "exec",
++                 flags=__future__.annotations.compiler_flag), scope)
++    return scope
++
++
++class AdapterTest(unittest.IsolatedAsyncioTestCase):
++    def setUp(self):
++        messages = ModuleType("message_processing")
++        messages.parse_gemini_response_for_reasoning_and_content = lambda c: (
++            "", "".join(getattr(p, "text", "") for p in c.content.parts))
++        messages.build_tool_call_id = lambda *args, **kwargs: "call_test"
++        messages.thought_signature_extra = lambda sig: {"google": {"thought_signature": sig}} if sig else None
++        messages.ordinary_part_metadata = lambda kind, text, sig: {"kind": kind, "text": text}
++        messages._convert_image_to_markdown = lambda *args: ""
++        messages._signature_bytes = lambda part, fc: getattr(part, "thought_signature", None)
++        signatures = ModuleType("signature_store")
++        signatures.SignatureState = NS(UNSIGNED_FOLLOWER="follower", UNKNOWN="unknown")
++        self.modules = patch.dict(sys.modules, message_processing=messages, signature_store=signatures)
++        self.modules.start()
++        self.addCleanup(self.modules.stop)
++        self.adapter = load_adapter()
++        self.calls = []
++        output = contextlib.redirect_stdout(io.StringIO())
++        output.__enter__()
++        self.addCleanup(output.__exit__, None, None, None)
++
++    def test_eligible_request_and_sdk_gate(self):
++        original = config()
++        enabled, name = configure_text_tool_stream(request(), original,
++            "projects/example/locations/global/publishers/google/models/gemini-4-argon", SDK)
++        self.assertEqual(name, SPEC)
++        self.assertTrue(enabled["tool_config"]["function_calling_config"]["stream_function_call_arguments"])
++        self.assertEqual(original, config())
++        for model in ("gemini-2.5-pro", "gemini-3.1-flash-lite", "other-model"):
++            self.assertIsNone(configure_text_tool_stream(request(), original, model, SDK)[1])
++        wrong_schema = request()
++        wrong_schema.tools[0]["function"]["parameters"]["properties"]["other"] = {"type": "string"}
++        for req in (request(stream=False), request(n=2), request(tool_choice="auto"),
++                    request(tools=[]), request(tools=request().tools * 2), wrong_schema):
++            self.assertIsNone(configure_text_tool_stream(req, original, req.model, SDK)[1])
++        self.assertIsNone(configure_text_tool_stream(request(), original, "gemini-4-argon", NS())[1])
++
++    def test_single_string_parameter_is_not_coupled_to_tool_or_argument_name(self):
++        req = request()
++        schema = req.tools[0]["function"]["parameters"]
++        schema["properties"] = {"message": {"type": "string", "description": "Text to deliver"}}
++        schema["required"] = ["message"]
++        enabled, spec = configure_text_tool_stream(req, config(), req.model, SDK)
++        self.assertEqual(spec, (NAME, "message"))
++        parser = TextToolStream(*spec)
++        result = parser.consume(NS(name=NAME, partial_args=[
++            NS(json_path="$.message", string_value="hello", will_continue=True)], will_continue=True))
++        result += parser.consume(NS(partial_args=[NS(json_path="$.message")]))
++        self.assertEqual(json.loads(result), {"message": "hello"})
++        parser.finish("STOP")
++        parser.validate_end()
++
++    def test_fragments_use_one_identity_and_preserve_signatures(self):
++        indexer = self.adapter["ToolCallIndexer"](SPEC)
++        fragments = ['中文 "quoted"\\path\n', "\ud83d", "\ude00"]
++        chunks = [chunk(NS(name=NAME, will_continue=True))]
++        chunks += [chunk(fragment(value)) for value in fragments]
++        chunks += [chunk(NS(partial_args=[NS(json_path="$.content")], will_continue=True), sig="late-signature"),
++                   chunk(NS()), chunk(reason="STOP")]
++        records = [decode(self.adapter["convert_chunk_to_openai"](item, "test", "id", indexer=indexer))
++                   for item in chunks]
++        deltas = [tc for record in records for tc in record["choices"][0]["delta"].get("tool_calls", [])]
++        self.assertEqual([tc["index"] for tc in deltas], [0] * len(deltas))
++        self.assertEqual(sum("id" in tc for tc in deltas), 1)
++        self.assertEqual(sum("name" in tc["function"] for tc in deltas), 1)
++        arguments = "".join(tc["function"]["arguments"] for tc in deltas)
++        self.assertEqual(json.loads(arguments)["content"], '中文 "quoted"\\path\n😀')
++        self.assertEqual(deltas[-2]["extra_content"]["google"]["thought_signature"], "late-signature")
++        self.assertEqual(records[-1]["choices"][0]["finish_reason"], "tool_calls")
++        self.assertEqual(records[-1]["choices"][0]["delta"]["extra_content"]["google"]["part_order"],
++                         [{"type": "tool_call", "index": 0}])
++        indexer.text_stream.validate_end()
++        with self.assertRaisesRegex(ValueError, "data_after_finish"):
++            self.adapter["convert_chunk_to_openai"](chunk(text="late"), "test", "id", indexer=indexer)
++
++    def test_full_arguments_plain_text_and_regular_multiple_tools(self):
++        indexer = self.adapter["ToolCallIndexer"](SPEC)
++        record = decode(self.adapter["convert_chunk_to_openai"](
++            chunk(NS(name=NAME, args={"content": "complete"}), "STOP"), "test", "id", indexer=indexer))
++        self.assertEqual(json.loads(record["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]),
++                         {"content": "complete"})
++        indexer = self.adapter["ToolCallIndexer"](SPEC)
++        record = decode(self.adapter["convert_chunk_to_openai"](chunk(reason="STOP", text="plain"),
++            "test", "id", indexer=indexer))
++        self.assertEqual(record["choices"][0]["delta"]["content"], "plain")
++        indexer = self.adapter["ToolCallIndexer"]()
++        for i in range(2):
++            record = decode(self.adapter["convert_chunk_to_openai"](
++                chunk(NS(name="regular", args={"n": i})), "test", "id", indexer=indexer))
++            self.assertEqual(record["choices"][0]["delta"]["tool_calls"][0]["index"], i)
++
++    def test_rejects_invalid_fragments_and_false_success(self):
++        for part in (NS(json_path="$.other", string_value="x"), NS(json_path="$.content", number_value=0),
++                     NS(json_path="$.content", bool_value=False), NS(json_path="$.content", will_continue=True)):
++            parser = TextToolStream(NAME)
++            parser.consume(NS(name=NAME, will_continue=True))
++            parser.consume(fragment("prefix"))
++            with self.assertRaisesRegex(ValueError, "invalid_partial_args"):
++                parser.consume(NS(partial_args=[part]))
++        parser = TextToolStream(NAME)
++        parser.consume(NS(name=NAME, will_continue=True))
++        with self.assertRaisesRegex(ValueError, "invalid_partial_args"):
++            parser.consume(NS(partial_args=[NS(json_path="$.content")]))
++        parser.consume(fragment("incomplete"))
++        with self.assertRaisesRegex(ValueError, "incomplete_args"):
++            parser.finish("STOP")
++        with self.assertRaisesRegex(ValueError, "missing_finish_reason"):
++            parser.validate_end()
++        parser.finish("MAX_TOKENS")
++        parser.validate_end()
++        with self.assertRaisesRegex(ValueError, "unexpected_call"):
++            parser.consume(fragment("late"))
++
++    async def run_stream(self, stream):
++        async def generate(**kwargs):
++            self.calls.append(kwargs)
++            return stream
++        client = NS(aio=NS(models=NS(generate_content_stream=generate)))
++        result = await self.adapter["execute_gemini_call"](
++            client, "gemini-4-argon", lambda messages: [], config(), request())
++        return result.body_iterator
++
++    async def test_real_generator_delivers_before_upstream_finishes(self):
++        release = asyncio.Event()
++        async def upstream():
++            yield chunk(NS(name=NAME, will_continue=True))
++            yield chunk(fragment("early text"))
++            await release.wait()
++            yield chunk(NS(partial_args=[NS(json_path="$.content")]))
++            yield chunk(reason="STOP")
++        stream = await self.run_stream(upstream())
++        first = []
++        while True:
++            value = await asyncio.wait_for(anext(stream), 1)
++            first.append(value)
++            if "early text" in value:
++                break
++        self.assertFalse(release.is_set())
++        self.assertTrue(self.calls[0]["config"]["tool_config"]["function_calling_config"]["stream_function_call_arguments"])
++        release.set()
++        tail = [item async for item in stream]
++        self.assertIn('"finish_reason": "tool_calls"', "".join(tail))
++        self.assertEqual(tail[-1], "data: [DONE]\n\n")
++
++    async def test_interruption_remains_error_after_content_without_retry(self):
++        for failure in ("eof", "exception", "stop"):
++            self.calls.clear()
++            async def upstream():
++                yield chunk(NS(name=NAME, will_continue=True))
++                yield chunk(fragment("partial"))
++                if failure == "exception":
++                    raise RuntimeError("upstream interrupted")
++                if failure == "stop":
++                    yield chunk(reason="STOP")
++            stream = await self.run_stream(upstream())
++            wire = "".join([item async for item in stream])
++            self.assertIn('"error":', wire)
++            self.assertNotIn('"finish_reason": "stop"', wire)
++            self.assertNotIn('"finish_reason": "tool_calls"', wire)
++            self.assertEqual(len(self.calls), 1)
++
++    async def test_safety_and_length_stay_non_success(self):
++        for reason, expected in (("MAX_TOKENS", "length"), ("SAFETY", "content_filter")):
++            async def upstream():
++                yield chunk(NS(name=NAME, will_continue=True))
++                yield chunk(fragment("partial"))
++                yield chunk(reason=reason)
++            wire = "".join([item async for item in await self.run_stream(upstream())])
++            self.assertIn(f'"finish_reason": "{expected}"', wire)
++            self.assertNotIn('"error":', wire)
++
++
++if __name__ == "__main__":
++    unittest.main()
