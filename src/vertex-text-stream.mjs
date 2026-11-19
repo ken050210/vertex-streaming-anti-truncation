@@ -1,5 +1,5 @@
 import { mapFinishReason, translateUsage, SIGNATURE_ID_PREFIX } from "./vertex-native.mjs";
-import { encodeGemini4ToolId, isGemini4Argon } from "./gemini4.mjs";
+import { encodeGemini4ToolId, usesGeminiToolIds } from "./gemini4.mjs";
 import { NativePartialArgs } from "./vertex-partial-args.mjs";
 import { checkPromptFeedback, checkSseError, isObject, protocolError, sseData, transformSse } from "./wire.mjs";
 
@@ -53,7 +53,7 @@ export function wrapNativeTextStream(response, toolName, model, onNativeUsage = 
       if (!realCalls && removedSignature && !current.signature) current.signature = "skip_thought_signature_validator";
       realCalls++;
       const nativePart = { functionCall: { id: current.id ?? "call_" + crypto.randomUUID() }, thoughtSignature: current.signature };
-      const callId = isGemini4Argon(model) ? encodeGemini4ToolId(nativePart)
+      const callId = usesGeminiToolIds(model) ? encodeGemini4ToolId(nativePart)
         : current.signature ? SIGNATURE_ID_PREFIX + current.signature : nativePart.functionCall.id;
       chunk(emit, { role: "assistant", tool_calls: [{ index: current.index, id: callId, type: "function",
         function: { name: current.name, arguments: JSON.stringify(current.fullArgs ?? current.partial.value) } }] });

@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { nativeRequestBody } from "../src/vertex-native.mjs";
 import { translateNativeCompletion, wrapNativeStream } from "../src/vertex-protocol.mjs";
 
-test("Gemini 4 native tool history round-trips IDs and signatures for Express/flex", async () => {
-  const model = "google/gemini-4-argon";
+for (const model of ["google/gemini-4-argon", "google/gemini-4-neon"]) test(model + " native tool history round-trips IDs and signatures for Express/flex", async () => {
   const native = { candidates: [{ content: { parts: [{ thoughtSignature: "fixture-signature", functionCall: { id: "call-native-42", name: "lookup", args: { query: "fixture" } } }] }, finishReason: "STOP" }] };
   const message = translateNativeCompletion(native, model).choices[0].message;
   const stream = await wrapNativeStream(new Response("data: " + JSON.stringify(native) + "\n\n"), model).text();

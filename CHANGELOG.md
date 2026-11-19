@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.23.0
+
+The standalone gateway adds normal, buffered and streaming anti-truncation profiles for Gemini 4 Neon. For existing model lists, use the Neon button in the console and save. Direct Vertex requests support XHIGH thinking and Neon cost estimates.
+
 ## Gateway 0.22.0 / SillyTavern 0.17.1
 
 - In Meow compatibility mode, plain text turns without a tool declaration use the built-in `router_emit`. Turns declaring `soliumbra_reply` use the preset fields.

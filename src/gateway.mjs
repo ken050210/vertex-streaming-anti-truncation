@@ -17,7 +17,7 @@ import { geminiModelKey, modelProfiles } from "./model-profiles.mjs";
 import { DEFAULT_SETTINGS, vertexBaseUrl } from "./config.mjs";
 import { completionStream, aliasStream } from "./completion-stream.mjs";
 import { convertGeminiPrefill, fetchWithGeminiRecovery, compatibilityLogFields } from "./gemini-compat.mjs";
-import { capGemini4Output, isGemini4Argon, isGemini4Carbon, outputLimitHeaders, prepareGeminiThinkingRequest, validateGemini4Connection } from "./gemini4.mjs";
+import { capGemini4Output, isGemini4Argon, isGemini4Carbon, isGemini4Neon, outputLimitHeaders, prepareGeminiThinkingRequest, validateGemini4Connection } from "./gemini4.mjs";
 import { fetchLongDecode, longDecodeUrl } from "./vertex-long-decode.mjs";
 import { documentedUnsupported, dropParams } from "./unsupported-params.mjs";
 import { checkCompatibleRejection, googleErrorDetail, readUpstreamError, sseData, trafficType, upstreamErrorLogFields, upstreamMessage } from "./wire.mjs";
@@ -223,7 +223,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         try {
           validateGemini4Connection(config, route.upstreamModel);
           const custom = config.authMode === "custom";
-          location = !custom && isGemini4Carbon(route.upstreamModel) ? "global" : config.location;
+          location = !custom && (isGemini4Carbon(route.upstreamModel) || isGemini4Neon(route.upstreamModel)) ? "global" : config.location;
           // A custom upstream gets its own model name verbatim. Gemini-specific handling follows the
           // model that name refers to, and is skipped when none is recognizable.
           const modelKey = custom ? geminiModelKey(route.upstreamModel) : route.upstreamModel;

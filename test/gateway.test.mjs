@@ -249,7 +249,8 @@ test("loopback HTTP API requires auth and validates requests before any upstream
     assert.equal((await f.get(path, "wrong-key")).status, 401);
   }
   assert.deepEqual((await (await f.get("/v1/models")).json()).data.map(x => x.id),
-    [MODEL_ID, "gemini-4-carbon", "gemini-4-carbon-antitruncation-nonstream", "gemini-4-carbon-antitruncation-stream"]);
+    [MODEL_ID, "gemini-4-carbon", "gemini-4-carbon-antitruncation-nonstream", "gemini-4-carbon-antitruncation-stream",
+      "gemini-4-neon", "gemini-4-neon-antitruncation-nonstream", "gemini-4-neon-antitruncation-stream"]);
   assert.equal((await f.get("/unknown")).status, 404);
   for (const body of ["bad-json", {}, { ...payload, model: "unavailable" }, { ...payload, messages: [] }, { ...payload, stream: "true" }]) {
     assert.equal((await f.post(body)).status, 400);
@@ -257,7 +258,7 @@ test("loopback HTTP API requires auth and validates requests before any upstream
   assert.equal(f.requests.length, 0);
 });
 
-test("Carbon uses the global Vertex URL for all three profiles on a regional account", async t => {
+test("Carbon and Neon use the global Vertex URL for all three profiles on a regional account", async t => {
   const regional = buildConfig({ ...DEFAULT_SETTINGS, gatewayKey: key, authMode: "access-token",
     projectId: "example-project", accessToken: token, location: "us-central1" });
   const f = await fixture(t, request => {
@@ -268,19 +269,23 @@ test("Carbon uses the global Vertex URL for all three profiles on a regional acc
     const tool = request.json.tools?.[0].function;
     return Response.json(tool ? completion(tool.name) : { choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] });
   }, regional);
-  for (const model of ["gemini-4-carbon", "gemini-4-carbon-antitruncation-nonstream", "gemini-4-carbon-antitruncation-stream", MODEL_ID]) {
+  for (const model of ["gemini-4-carbon", "gemini-4-carbon-antitruncation-nonstream", "gemini-4-carbon-antitruncation-stream",
+      "gemini-4-neon", "gemini-4-neon-antitruncation-nonstream", "gemini-4-neon-antitruncation-stream", MODEL_ID]) {
     const streamed = model.endsWith("-stream");
-    const response = await f.post({ ...payload, model, stream: streamed });
+    const neon = model.startsWith("gemini-4-neon");
+    const response = await f.post({ ...payload, model, stream: streamed, ...(neon ? { reasoning_effort: "xhigh" } : {}) });
     assert.equal(response.status, 200);
     if (streamed) assert.equal(visible(await response.text()), "OK");
     else assert.equal((await response.json()).choices[0].message.content, "OK");
     const { url, json } = f.requests.at(-1);
     const regionalModel = model === MODEL_ID;
+    if (neon) assert.equal(streamed ? json.generationConfig.thinkingConfig.thinkingLevel : json.extra_body.google.thinking_config.thinking_level, "XHIGH");
+    const upstream = model.split("-antitruncation")[0];
     const expected = regionalModel ? regional.baseUrl : "https://aiplatform.googleapis.com/v1/projects/example-project/locations/global/endpoints/openapi";
-    if (streamed) assert.equal(url, "https://aiplatform.googleapis.com/v1/projects/example-project/locations/global/publishers/google/models/gemini-4-carbon:streamGenerateContent?alt=sse");
+    if (streamed) assert.equal(url, "https://aiplatform.googleapis.com/v1/projects/example-project/locations/global/publishers/google/models/" + upstream + ":streamGenerateContent?alt=sse");
     else {
       assert.equal(url, expected + "/chat/completions");
-      assert.equal(json.model, regionalModel ? UPSTREAM_MODEL : "google/gemini-4-carbon");
+      assert.equal(json.model, regionalModel ? UPSTREAM_MODEL : "google/" + upstream);
     }
   }
 });

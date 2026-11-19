@@ -7,6 +7,7 @@ const DOCUMENTED = new Map(Object.entries({
   // candidate_count; migration also removes temperature, top_p and top_k.
   // https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon
   "gemini-4-argon": [...PENALTIES, ...SAMPLING, "n"],
+  "gemini-4-neon": [...PENALTIES, ...SAMPLING, "n"],
   // Guides: "Remove the following unsupported parameters: frequency_penalty, presence_penalty,
   // candidate_count, temperature, top_p, and top_k." candidate_count is OpenAI's `n`.
   "gemini-3.8-flash": [...PENALTIES, ...SAMPLING, "n"],

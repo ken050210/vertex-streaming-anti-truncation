@@ -1,6 +1,6 @@
 import { SIGNATURE_ID_PREFIX, mapFinishReason, translateUsage } from "./vertex-native.mjs";
 import { checkPromptFeedback, checkSseError, isObject, protocolError, sseData, transformSse } from "./wire.mjs";
-import { isGemini4Argon, encodeGemini4ToolId } from "./gemini4.mjs";
+import { usesGeminiToolIds, encodeGemini4ToolId } from "./gemini4.mjs";
 // Native replies for requests without the synthetic transport: complete replies,
 // and streams whose function calls arrive whole.
 
@@ -14,7 +14,7 @@ function candidateMessage(candidate, model) {
       // FunctionCall.args is optional: a call to a parameterless function may omit it.
       const args = fc.args ?? {};
       if (fc.partialArgs || typeof fc.name !== "string" || !isObject(args)) throw protocolError("invalid_native_tool");
-      (message.tool_calls ??= []).push({ id: isGemini4Argon(model) && fc.id ? encodeGemini4ToolId(part) : part.thoughtSignature ? SIGNATURE_ID_PREFIX + part.thoughtSignature : "call_" + crypto.randomUUID(),
+      (message.tool_calls ??= []).push({ id: usesGeminiToolIds(model) && fc.id ? encodeGemini4ToolId(part) : part.thoughtSignature ? SIGNATURE_ID_PREFIX + part.thoughtSignature : "call_" + crypto.randomUUID(),
         type: "function", function: { name: fc.name, arguments: JSON.stringify(args) } });
     }
   }

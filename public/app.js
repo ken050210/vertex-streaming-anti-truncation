@@ -299,11 +299,12 @@ function updateDraft(dirty = true) {
   if (forcedGlobal) $("location").value = "global";
   const custom = d.authMode === "custom";
   $("add-carbon").hidden = custom;
+  $("add-neon").hidden = custom;
   // Hidden fields must not block saving through their own browser validation.
   $("location").disabled = forcedGlobal || custom;
   $("project-id").required = !["express", "custom"].includes(d.authMode);
   $("project-optional").hidden = d.authMode !== "express";
-  $("project-help").textContent = d.authMode === "express" ? "填写 API Key 所属的项目 ID 或项目编号，以明确使用 global 地区。Gemini 4 Argon 和 Carbon 必填。" : "填写目标 Google Cloud 项目 ID，可与服务账号所属项目不同。";
+  $("project-help").textContent = d.authMode === "express" ? "填写 API Key 所属的项目 ID 或项目编号，以明确使用 global 地区。Gemini 4 Argon、Carbon 和 Neon 必填。" : "填写目标 Google Cloud 项目 ID，可与服务账号所属项目不同。";
   $("credential-service").hidden = d.authMode !== "service-account";
   $("credential-express").hidden = d.authMode !== "express";
   $("credential-token").hidden = d.authMode !== "access-token";
@@ -636,6 +637,7 @@ $("add-selected").addEventListener("click", e => action(e.currentTarget, () => {
 }, "discovery-error"));
 $("add-manual").addEventListener("click", e => action(e.currentTarget, () => { addModels([$("manual-model").value]); $("manual-model").value = ""; }, "discovery-error"));
 $("add-carbon").addEventListener("click", e => action(e.currentTarget, () => addModels(["gemini-4-carbon"]), "discovery-error"));
+$("add-neon").addEventListener("click", e => action(e.currentTarget, () => addModels(["gemini-4-neon"]), "discovery-error"));
 $("manual-model").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); $("add-manual").click(); } });
 $("model-rows").addEventListener("input", e => {
   const field = e.target.dataset.field, row = e.target.closest("[data-row]");

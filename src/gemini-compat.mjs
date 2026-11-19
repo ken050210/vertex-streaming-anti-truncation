@@ -1,5 +1,5 @@
 import { createSseParser } from "./wire.mjs";
-import { isGemini4Argon } from "./gemini4.mjs";
+import { isGemini4Argon, isGemini4Neon } from "./gemini4.mjs";
 
 export const MAX_RETRY_TEXT_BYTES = 192_000;
 const DEFAULT_RETRY_ERROR_MATCHES = ["The prompt could not be submitted"];
@@ -14,7 +14,7 @@ export function convertGeminiPrefill(payload, upstreamModel, enabled) {
     Array.isArray(last?.content) && last.content.length > 0 &&
     last.content.every(part => part?.type === "text" && typeof part.text === "string") &&
     last.content.some(part => part.text.trim());
-  if (!enabled || !(isGemini4Argon(upstreamModel) || /(?:^|\/)gemini-3\.[78]-flash(?:-preview(?:-[\d-]+)?)?(?:@[a-z0-9-]+)?$/i.test(upstreamModel || "")) ||
+  if (!enabled || !(isGemini4Argon(upstreamModel) || isGemini4Neon(upstreamModel) || /(?:^|\/)gemini-3\.[78]-flash(?:-preview(?:-[\d-]+)?)?(?:@[a-z0-9-]+)?$/i.test(upstreamModel || "")) ||
       last?.role !== "assistant" || !textOnly ||
       Object.keys(last).some(key => !["role", "content", "name"].includes(key))) {
     return { payload, converted: false };

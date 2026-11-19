@@ -25,7 +25,7 @@ Open the console link printed in the terminal (default `http://127.0.0.1:4780/`)
 
 Import the complete service-account JSON or choose Express, OAuth or a [custom upstream](#custom-upstream). The console fills the project ID from the service account. You can change it to another project that account can access. Express keys, access tokens and relay keys accept visible ASCII characters. Smart quotes and full-width characters cause a validation error on save.
 
-Select Standard, Flex or Priority. Express and the two non-standard tiers require `global`. In Express mode, enter the key's project ID or number to use `projects/{project}/locations/global`. Leaving the project blank lets Express choose the location. Gemini 4 Argon and Carbon require the project and return `express_project_required` locally if it is missing.
+Select Standard, Flex or Priority. Express and the two non-standard tiers require `global`. In Express mode, enter the key's project ID or number to use `projects/{project}/locations/global`. Leaving the project blank lets Express choose the location. Gemini 4 Argon, Carbon and Neon require the project and return `express_project_required` locally if it is missing.
 
 The local access mode applies to both the client API and the console.
 
@@ -94,7 +94,7 @@ Replace `http://127.0.0.1:7890` with your proxy. `UPSTREAM_TIMEOUT_MS` also appl
 
 ## Model library and variants
 
-Direct Vertex requests for `gemini-4-carbon` always use `global`. The default model list includes normal, buffered and streaming anti-truncation profiles. With an existing model list, check the variants you want, click **添加 Gemini 4 Carbon（global）**, save, then refresh the model list in your client.
+Direct Vertex requests for `gemini-4-carbon` and `gemini-4-neon` always use `global`. The default model list includes normal, buffered and streaming anti-truncation profiles. With an existing model list, check the variants you want, click **添加 Gemini 4 Carbon（global）** or **添加 Gemini 4 Neon（global）**, save, then refresh the model list in your client.
 
 Enter credentials under **连接配置**, then open **模型与版本** and click **拉取 Model List**. Discovery uses the current connection form plus saved credentials, without starting inference or saving the draft. Search and select multiple models, check the variants to add, then click **保存全部配置** to save both connection and model drafts. Refresh the model list in your client afterwards.
 

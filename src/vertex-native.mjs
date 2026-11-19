@@ -1,6 +1,6 @@
 import { responseJsonSchema, vertexJsonSchema } from "./vertex-schema.mjs";
 import { isObject } from "./wire.mjs";
-import { isGemini4Argon, gemini4ToolMetadata } from "./gemini4.mjs";
+import { usesGeminiToolIds, gemini4ToolMetadata } from "./gemini4.mjs";
 // OpenAI-compatible requests translated to Vertex's native generateContent format,
 // with the checks that decide whether a request translates without loss.
 
@@ -136,7 +136,7 @@ function functionResponsePart(message, callNames, model) {
   } catch {
     response = { result: typeof message.content === "string" ? message.content : "" };
   }
-  return { functionResponse: { name, response, ...(isGemini4Argon(model) ? { id: gemini4ToolMetadata(message.tool_call_id).id } : {}) } };
+  return { functionResponse: { name, response, ...(usesGeminiToolIds(model) ? { id: gemini4ToolMetadata(message.tool_call_id).id } : {}) } };
 }
 
 function assistantParts(message, model) {
@@ -150,7 +150,7 @@ function assistantParts(message, model) {
       throw Object.assign(new Error("invalid_tool_history"), { status: 400, code: "invalid_tool_history" });
     }
     const part = { functionCall: { name: call.function?.name || "tool", args } };
-    if (isGemini4Argon(model)) {
+    if (usesGeminiToolIds(model)) {
       const metadata = gemini4ToolMetadata(call.id);
       part.functionCall.id = metadata.id;
       if (metadata.signature) part.thoughtSignature = metadata.signature;

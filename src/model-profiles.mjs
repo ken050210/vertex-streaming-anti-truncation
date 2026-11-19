@@ -27,11 +27,14 @@ export function modelProfiles(value, legacyEnabled = true, { custom = false } = 
     const legacy = { id: MODEL_ID, upstreamModel: custom ? UPSTREAM_MODEL.slice("google/".length) : UPSTREAM_MODEL,
       mode: legacyEnabled ? "streaming" : "normal" };
     if (custom) return [legacy];
-    const upstreamModel = "google/gemini-4-carbon";
-    const defaults = [legacy, { id: "gemini-4-carbon", upstreamModel, mode: "normal" }];
-    if (legacyEnabled) defaults.push(
-      { id: "gemini-4-carbon-antitruncation-nonstream", upstreamModel, mode: "buffered" },
-      { id: "gemini-4-carbon-antitruncation-stream", upstreamModel, mode: "streaming" });
+    const defaults = [legacy];
+    for (const id of ["gemini-4-carbon", "gemini-4-neon"]) {
+      const upstreamModel = "google/" + id;
+      defaults.push({ id, upstreamModel, mode: "normal" });
+      if (legacyEnabled) defaults.push(
+        { id: id + "-antitruncation-nonstream", upstreamModel, mode: "buffered" },
+        { id: id + "-antitruncation-stream", upstreamModel, mode: "streaming" });
+    }
     return defaults;
   }
   if (!Array.isArray(value) || value.length > 100) throw new Error("Model list must contain at most 100 entries");

@@ -2,6 +2,10 @@
 
 中文 | [English](CHANGELOG.md)
 
+## 网关 0.23.0
+
+独立网关新增 Gemini 4 Neon 的普通、非流式抗截断和流式抗截断模型。已有模型列表可在控制台点「添加 Gemini 4 Neon（global）」并保存。直连 Vertex 支持 XHIGH 思考等级和 Neon 费用估算。
+
 ## 网关 0.22.0 / 酒馆插件 0.17.1
 
 - 开启小猫兼容模式后，无工具声明的普通文本请求自动使用内置 `router_emit`。预设声明了 `soliumbra_reply` 时继续使用预设栏目。

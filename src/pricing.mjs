@@ -9,6 +9,7 @@ const argonAndCarbon = dated("2026-12-01", [2, 0.1, 10], [4, 0.2, 20]);
 const PRICES = {
   "gemini-4-argon": argonAndCarbon,
   "gemini-4-carbon": argonAndCarbon,
+  "gemini-4-neon": [{ rates: [3, 0.15, 15] }],
   "gemini-4-hydrogen": [{ rates: [1.5, 0.075, 7.5] }],
   "gemini-3.8-flash": flash, "gemini-3.7-flash": flash, "gemini-3.6-flash": flash,
   "gemini-3.5-flash": [{ rates: [1.5, 0.15, 9] }],
