@@ -1,11 +1,12 @@
 import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
+import { inputEncodingMode } from "../../src/optimized-input.mjs";
 import { prepareOptimizedInput } from "./optimized-input.js";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
 import { SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason, useBuiltinForMeow } from "../../src/transport-tool-name.mjs";
 import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.17.1";
+export const PLUGIN_VERSION = "0.18.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -126,8 +127,8 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     const mode = getMode();
     const unicodeMode = getUnicodeInput();
-    const recent = unicodeMode === "recent" || unicodeMode === "optimized-recent";
-    const optimized = ["optimized", "optimized-all", "optimized-recent"].includes(unicodeMode);
+    const optimized = inputEncodingMode(unicodeMode);
+    const recent = unicodeMode === "recent" || optimized?.[2] === "recent";
     const unicodeEnabled = recent || optimized || unicodeMode === true || unicodeMode === "all";
     const imageMode = getImageInput();
     const imageEnabled = imageMode !== "off";
@@ -144,11 +145,11 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     let unicode;
     if (unicodeEnabled) {
       try {
-        const scope = recent ? "recent" : unicodeMode === "all" || unicodeMode === "optimized-all" ? "all" : true;
+        const scope = recent ? "recent" : unicodeMode === "all" || optimized?.[2] === "all" ? "all" : true;
         const source = scope === "all" ? body : { ...body, router_unicode_input: { user_floor: getUserFloor(), ...(recent ? { ai_floors: getRecentAiFloors() } : {}) } };
         const prepared = optimized
           ? await prepareOptimizedInput(source, scope, BODY_LIMIT, { originalFetch, headers: getRequestHeaders(),
-            signal: init?.signal ?? (input instanceof Request ? input.signal : undefined) })
+            signal: init?.signal ?? (input instanceof Request ? input.signal : undefined) }, optimized[1])
           : prepareUnicodeInput(source, scope, BODY_LIMIT);
         body = prepared.payload; unicode = prepared.metadata;
       } catch (error) { onStatus({ error: error.code || "unicode_input_failed" }); throw error; }

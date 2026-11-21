@@ -680,3 +680,20 @@ test("image configuration rejects conflicting or unknown encoding selections",as
  await assert.rejects(loadConfig({...env,IMAGE_INPUT:'bad'}),/image input/);
  await assert.rejects(loadConfig({...env,IMAGE_INPUT:'all',UNICODE_INPUT:'true'}),/mutually exclusive/);
 });
+
+test("gateway auto selects a format using its packaged tokenizer and honors a fixed recent-floor format", async t => {
+  for (const [mode, floor, expected] of [["optimized-all", "湖".repeat(600), "table"], ["gbk-recent", "你好", "gbk"]]) {
+    const config = await loadConfig({ GATEWAY_API_KEY: key, VERTEX_PROJECT_ID: "example-project", VERTEX_ACCESS_TOKEN: token, UNICODE_INPUT: mode });
+    const f = await fixture(t, () => Response.json({ choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] }),
+      { ...config, antiTruncation: false });
+    const r = await f.post({ ...payload, messages: [{ role: "assistant", content: "昨天" }, { role: "user", content: floor }],
+      router_unicode_input: { user_floor: floor, ai_floors: ["昨天"] } });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get("x-input-encoding-format"), expected);
+    await r.text();
+    const body = f.requests[0].json;
+    assert.equal(body.router_unicode_input, undefined);
+    assert.ok(body.messages[1].content.includes(expected === "gbk" ? "{C4E3BAC3}" : "{a a a"));
+    assert.equal(f.events[0].unicodeInput.mode, expected);
+  }
+});

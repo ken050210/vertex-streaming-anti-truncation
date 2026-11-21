@@ -6,7 +6,7 @@ import { prepareOptimizedInput } from "../integrations/sillytavern/optimized-inp
 const tokenizer = "/api/tokenizers/gemma/encode";
 const noFetch = () => assert.fail("unexpected tokenizer request");
 
-test("optimized current input counts both guides, changes floor copies and delivers one provider response", async () => {
+test("optimized current input counts all three guides, changes floor copies and delivers one provider response", async () => {
   const floor = "你好𠀀", requests = [], comparisons = [], statuses = [];
   let tokenizerLoading = false;
   const artifact = { type: "image_url", image_url: { url: "https://example.invalid/" + floor } };
@@ -40,7 +40,7 @@ test("optimized current input counts both guides, changes floor copies and deliv
   const reply = await intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify(input) });
   assert.deepEqual(await reply.json(), refusal);
   assert.equal(requests.length, 1);
-  assert.equal(comparisons.length, 2);
+  assert.equal(comparisons.length, 3);
   assert.ok(comparisons.every(text => text.split("<vat-reading>").length === 2));
   assert.ok(comparisons.every(text => !text.includes("example.invalid")));
   const [sent] = requests;
@@ -122,9 +122,30 @@ test("optimized input distinguishes size bounds, missing floors, tokenizer failu
   assert.equal(missing.metadata.reason, "floor-not-found");
   assert.deepEqual(missing.payload, source);
   const unavailable = async () => Response.json({ count: 0 });
-  const fallback = await prepareOptimizedInput(source, "all", 65536, { originalFetch: unavailable });
-  assert.equal(fallback.metadata.selection, "utf8");
-  assert.equal(fallback.metadata.format, "table");
+  await assert.rejects(prepareOptimizedInput(source, "all", 65536, { originalFetch: unavailable }),
+    { code: "input_tokenizer_unavailable" });
   await assert.rejects(prepareOptimizedInput(source, "all", 65536,
     { originalFetch: unavailable, signal: AbortSignal.abort() }), { name: "AbortError" });
+});
+
+test("manual formats skip tokenization and preserve GBK literals and unsupported Han", async () => {
+  const text = "你好𠀀，{ABCD} A7B2 {{名字}} <人>❤️";
+  const source = { messages: [{ role: "user", content: text }] };
+  for (const format of ["alternate", "table", "gbk"]) {
+    const result = await prepareOptimizedInput(source, "all", 65536, { originalFetch: noFetch }, format);
+    assert.equal(result.metadata.selection, "manual");
+    assert.equal(result.metadata.format, format);
+    if (format === "gbk") assert.ok(result.payload.messages[0].content.endsWith("<vat-encoded>{C4E3BAC3}𠀀，\\{ABCD\\} A7B2 {{名字}} <人>❤️</vat-encoded>"));
+  }
+  const compared = [];
+  const sample = { messages: [...source.messages, { role: "user", content: "𠀀" }] };
+  const result = await prepareOptimizedInput(sample, "all", 65536, { originalFetch: async (_, init) => {
+    const { text } = JSON.parse(init.body);
+    compared.push(text);
+    return Response.json({ count: text.includes("GBK") ? 10 : 20 });
+  } });
+  assert.equal(result.metadata.format, "gbk");
+  assert.equal(compared.length, 3);
+  assert.ok(compared.find(text => text.includes("GBK")).endsWith("\n𠀀"));
+  assert.ok(compared.find(text => text.includes("共用字表")).includes("=𠀀"));
 });

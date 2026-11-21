@@ -218,6 +218,8 @@ Choose a scope in the console's Unicode input selector, then save and apply. CLI
 | `recent` | Current user input and the last two assistant floors supplied by the client, matched backwards in the assembled prompt |
 | `all` | System, developer, user and assistant message text, including the current input. No floor field is needed |
 
+Use `optimized` for automatic selection or `alternate`, `table` or `gbk` for a fixed format. Append `-recent` or `-all` to change the default current-input scope. The gateway compares candidates locally with Gemma, including guides, delimiters and the table. The response header `x-input-encoding-format` identifies the selected format. A tokenizer failure returns `503 input_tokenizer_unavailable`.
+
 Current-input mode reads the latest user message from the client field below. A missing or invalid value returns `400 unicode_floor_required`. The gateway matches the original, trimmed and newline-normalized forms, preferring the longest at each position. The matcher skips replacements it has already made, existing encoded blocks and text inside complete single-line tags such as `<剧情>`. A stray `<` such as `<3` leaves later text eligible. If nothing matches, the original text is forwarded.
 
 ```json
@@ -226,7 +228,7 @@ Current-input mode reads the latest user message from the client field below. A 
 
 For recent floors, send `{"router_unicode_input":{"user_floor":"current input","ai_floors":["older reply","newer reply"]}}`. Use an empty array when there is no assistant history, or an empty user string on an assistant-only turn. In Tavern, update the linked floor bridge and add `router_unicode_input: recent` to the custom request body. The bridge includes assistant text only for a connection with this setting. A missing array returns `400 unicode_ai_floors_required`.
 
-All scopes write Han characters and ASCII letters as `⟦U:…⟧`. Tags, existing encoded blocks, digits, punctuation and emoji keep their original form. Letters inside `{{user}}` are encoded. Model IDs, tool arguments, schemas and media URLs keep their original values. Full-context mode also skips separate tool results. Input encoding still applies when a tool or schema request bypasses output restoration. The encoding and floor-matching rules follow an encoder by 灰鸠「GoldRush」 and are included with the author's permission. [Attribution](../NOTICE.md)
+The original Unicode format writes Han characters and ASCII letters as `⟦U:…⟧`. Tags, existing encoded blocks, digits, punctuation and emoji keep their original form. Letters inside `{{user}}` are encoded. Model IDs, tool arguments, schemas and media URLs keep their original values. Full-context mode also skips separate tool results. Input encoding still applies when a tool or schema request bypasses output restoration. The encoding and floor-matching rules follow an encoder by 灰鸠「GoldRush」 and are included with the author's permission. [Attribution](../NOTICE.md)
 
 The gateway strips `router_unicode_input` before forwarding the request. An encoded body above the size limit returns `413 unicode_input_too_large`. The `x-unicode-input` header gives the outcome. Logs record the encoding status and counts. Encoding can increase token use and latency. The live short-prompt checks covered current-input mode. [Acceptance record](UNICODE-INPUT-AUDIT.md)
 

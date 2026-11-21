@@ -215,7 +215,7 @@ Google 的 [Gemini 3.7 Flash](https://docs.cloud.google.com/gemini-enterprise-ag
 
 ## Unicode 输入转码
 
-在控制台的「Unicode 输入转码（所有模型）」选择范围，保存并应用后对后续请求生效。命令行使用 `UNICODE_INPUT`。
+在控制台的「输入转码范围（所有模型）」和「文本转码方式」选择范围与格式，保存并应用后对后续请求生效。命令行使用 `UNICODE_INPUT`。
 
 | 值 | 转码范围 |
 | --- | --- |
@@ -223,6 +223,8 @@ Google 的 [Gemini 3.7 Flash](https://docs.cloud.google.com/gemini-enterprise-ag
 | `true` | 当前输入。客户端提供最新真实用户楼层，网关只转换消息中匹配的文字 |
 | `recent` | 当前输入与最近两个 AI 楼层。客户端按时间从旧到新传入原文，网关在拼装后的提示词中从后向前匹配 |
 | `all` | 系统、开发者、用户和 AI 消息的文本，含当前输入。无需提供楼层原文 |
+
+使用 `optimized` 自动选择，或用 `alternate`、`table`、`gbk` 固定格式。默认范围为当前输入，加 `-recent` 或 `-all` 切换范围，例如 `UNICODE_INPUT=gbk-recent`。自动选择用网关内置的 Gemma 分词器比较包含说明、编码标记和字表的文本，响应头 `x-input-encoding-format` 给出选中的格式。分词失败会返回 `503 input_tokenizer_unavailable`。
 
 当前输入模式使用下面的请求字段。缺少有效原文会返回 `400 unicode_floor_required`。网关匹配原文、去除首尾空白或归一换行后的文本，同一位置取较长者。已替换的文字不会再次参与匹配。消息里完整的单行标签（如 `<剧情>`）和已有编码块能保护内部文字，孤立的 `<`（如 `<3`）不影响后面的匹配。未匹配时按原文发送。
 
@@ -232,7 +234,7 @@ Google 的 [Gemini 3.7 Flash](https://docs.cloud.google.com/gemini-enterprise-ag
 
 最近两层模式使用 `{"router_unicode_input":{"user_floor":"当前输入","ai_floors":["较早回复","较新回复"]}}`。无 AI 历史时传空数组，无用户楼层时可传空字符串。酒馆用户请更新本页的楼层传递脚本，在自定义请求体中加入一行 `router_unicode_input: recent`。脚本只在该连接显式选择时附上 AI 原文。缺少数组会返回 `400 unicode_ai_floors_required`。
 
-各转码范围都把汉字和 ASCII 字母写作 `⟦U:…⟧`，保留标签、已有编码块、数字、标点和 emoji。`{{user}}` 中的字母也会转码。模型 ID、工具参数、Schema 和媒体地址保留原值。全部上下文模式还会跳过独立的工具结果。工具或 Schema 请求旁路输出抗截断时，输入转码仍会执行。编码和楼层匹配规则来自灰鸠「GoldRush」的编码器，经作者许可收录。[来源说明](../NOTICE.zh-CN.md)
+原有 Unicode 格式在各范围都把汉字和 ASCII 字母写作 `⟦U:…⟧`，保留标签、已有编码块、数字、标点和 emoji。`{{user}}` 中的字母也会转码。模型 ID、工具参数、Schema 和媒体地址保留原值。全部上下文模式还会跳过独立的工具结果。工具或 Schema 请求旁路输出抗截断时，输入转码仍会执行。编码和楼层匹配规则来自灰鸠「GoldRush」的编码器，经作者许可收录。[来源说明](../NOTICE.zh-CN.md)
 
 网关会移除本地字段 `router_unicode_input`。编码后超过请求体上限会返回 `413 unicode_input_too_large`。响应头 `x-unicode-input` 给出结果，日志记录状态和计数。转码可能增加 token 用量与延迟。已有真实模型短请求验收仅覆盖当前输入模式。[验收记录](UNICODE-INPUT-AUDIT.md)
 

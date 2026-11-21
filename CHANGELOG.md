@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.24.0 / SillyTavern 0.18.0
+
+The plugin and gateway now compare alternating Unicode, a shared character table and GBK hex using local Gemma token counts. Each candidate includes its reading guide, delimiters and any table. All three formats can also be selected manually.
+
 ## Gateway 0.23.0
 
 The standalone gateway adds normal, buffered and streaming anti-truncation profiles for Gemini 4 Neon. For existing model lists, use the Neon button in the console and save. Direct Vertex requests support XHIGH thinking and Neon cost estimates.

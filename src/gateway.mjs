@@ -1,4 +1,5 @@
 import { prepareImageInput, imageInputLogFields } from "./image-input.mjs";
+import { inputEncodingMode, prepareEncodedInput } from "./optimized-input.mjs";
 import { prepareUnicodeInput, unicodeInputLogFields } from "./unicode-input.mjs";
 import { guardCompletionStream, inspectCompletion, integrityLogFields } from "./completion-integrity.mjs";
 import { assertStructuredOutput, structuredOutputExpectation } from "./vertex-schema.mjs";
@@ -24,6 +25,13 @@ import { checkCompatibleRejection, googleErrorDetail, readUpstreamError, sseData
 import { waitWithSignal } from "./abort.mjs";
 import { createAccountPool } from "./account-pool.mjs";
 import { createTagStop } from "./tag-stop.mjs";
+
+let gemmaTokenizer;
+async function countGemmaTokens(text) {
+  gemmaTokenizer ??= import("@lenml/tokenizer-gemma").then(module => module.fromPreTrained());
+  const tokenizer = await gemmaTokenizer;
+  return tokenizer.encode(text, { add_special_tokens: false }).length;
+}
 
 class Problem extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -230,13 +238,16 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           // Generic OpenAI relays own their effort mapping. Retain the existing Argon relay contract.
           if (!custom || isGemini4Argon(modelKey)) payload = prepareGeminiThinkingRequest(payload, modelKey);
           try {
-            const prepared = prepareUnicodeInput(payload, config.unicodeInput, config.bodyLimitBytes);
+            const mode = inputEncodingMode(config.unicodeInput);
+            const prepared = mode ? await prepareEncodedInput(payload, mode[2] ?? true, config.bodyLimitBytes, mode[1], countGemmaTokens, signal)
+              : prepareUnicodeInput(payload, config.unicodeInput, config.bodyLimitBytes);
             payload = prepared.payload; unicode = prepared.metadata;
           } catch (error) {
-            if (["unicode_floor_required", "unicode_ai_floors_required", "unicode_input_too_large"].includes(error.code)) throw new Problem(error.status, error.code);
+            if (["unicode_floor_required", "unicode_ai_floors_required", "unicode_input_too_large", "input_tokenizer_unavailable"].includes(error.code)) throw new Problem(error.status, error.code);
             throw error;
           }
           response.setHeader("x-unicode-input", unicode?.reason || "disabled");
+          if (unicode?.format) response.setHeader("x-input-encoding-format", unicode.format);
           const convertPrefill = () => {
             const prefill = convertGeminiPrefill(payload, modelKey, config.geminiPrefillToUser !== false);
             payload = prefill.payload; compatibility.prefillConverted = prefill.converted;

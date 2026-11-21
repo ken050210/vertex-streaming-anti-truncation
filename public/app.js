@@ -112,6 +112,7 @@ function errorMessage(message) {
     "image_input_too_large": "转成图片后的请求超过大小上限，请缩短对话，或改用“当前轮转图”。",
     "image_input_unsupported_characters": "文本含图片字体无法显示的字符（如部分表情或控制字符），请删除这些字符或关闭图片输入。",
     "image_input_conflict": "Unicode 输入转码与图片输入不能同时开启。",
+    "input_tokenizer_unavailable": "Gemma 分词失败，请重试或手选一种转码格式。",
     "unicode_input_too_large": "Unicode 转码后请求超过大小上限，请缩短内容或关闭 Unicode 输入转码。",
     "unicode_ai_floors_required": "最近两层转码需要 ai_floors。请更新楼层传递脚本，并在酒馆自定义请求体中填入 router_unicode_input: recent。",
     "unicode_floor_required": "已开启 Unicode 输入转码，但请求没有附带 router_unicode_input.user_floor（最新用户楼层原文）。请让客户端附带该字段，或关闭 Unicode 输入转码。",
@@ -126,7 +127,7 @@ function errorMessage(message) {
   };
   const envPrefix = "Environment settings were ignored: ";
   if (message?.startsWith(envPrefix)) return "已忽略环境变量中的设置：" + errorMessage(message.slice(envPrefix.length)) + "请在连接配置中填写并保存；保存后控制台改用保存的配置。";
-  if (message === "Invalid UNICODE_INPUT") return "UNICODE_INPUT 可选 false、true、recent 或 all。";
+  if (message === "Invalid UNICODE_INPUT") return "请检查 UNICODE_INPUT 的转码方式和范围。";
   if (message === "Invalid STOP_USAGE_WAIT") return "STOP_USAGE_WAIT 可选 immediate、250ms 或 natural。";
   const toggle = /^Invalid (HIDE_UNAVAILABLE_MODELS|GEMINI_PREFILL_TO_USER|GEMINI_LONG_DECODE|GEMINI_PROMPT_RETRY_ENABLED)$/.exec(message || "");
   if (toggle) return `环境变量 ${toggle[1]} 只能是 true 或 false。`;
@@ -230,7 +231,9 @@ function draft() {
     accountRotationEnabled: $("account-rotation").checked, accounts: accountDraft(),
     accountTimeoutMs: Number($("account-timeout").value) * 1000, accountFailureThreshold: Number($("account-failures").value), accountCooldownMs: Number($("account-cooldown").value) * 1000,
     rateLimitRetryMax: Number($("rate-limit-retry-max").value), rateLimitRetryIntervalSeconds: Number($("rate-limit-retry-interval").value),
-    unicodeInput: ({ off: false, current: true, recent: "recent", all: "all" })[$("unicode-input").value],
+    unicodeInput: $("unicode-input").value === "off" ? false : $("input-format").value === "unicode"
+      ? ($("unicode-input").value === "current" || $("unicode-input").value)
+      : $("input-format").value + ($("unicode-input").value === "current" ? "" : "-" + $("unicode-input").value),
     stopUsageWait: $("stop-usage-wait").value,
     imageInput: $("image-input").value, hideUnavailableModels: $("hide-unavailable").checked, geminiPrefillToUser: $("prefill-to-user").checked,
     geminiLongDecode: $("long-decode").checked, tucaoStop: $("tucao-stop").checked, stopTag: $("stop-tag").value.trim(), stopExemptTag: $("stop-exempt-tag").value.trim(), stopCount: Number($("stop-count").value), geminiPromptRetryEnabled: $("prompt-retry-enabled").checked, geminiPromptRetryText: $("prompt-retry-text").value,
@@ -363,7 +366,9 @@ function fillConfig(c = state.config.settings) {
   $("account-cooldown").value = (c.accountCooldownMs ?? 60000) / 1000;
   $("account-list").replaceChildren(); $("add-account").disabled = false;
   for (const account of c.accounts || []) addAccount(account);
-  $("unicode-input").value = c.unicodeInput === true ? "current" : c.unicodeInput || "off";
+  const encoded = /^(optimized|alternate|table|gbk)(?:-(recent|all))?$/.exec(c.unicodeInput);
+  $("input-format").value = encoded?.[1] ?? "unicode";
+  $("unicode-input").value = encoded ? encoded[2] || "current" : c.unicodeInput === true ? "current" : c.unicodeInput || "off";
   $("stop-usage-wait").value = c.stopUsageWait ?? "immediate";
   $("image-input").value = c.imageInput || "off";
   $("hide-unavailable").checked = c.hideUnavailableModels !== false;
@@ -512,7 +517,7 @@ function inputBadge(e) {
   const image = e.imageInput, unicode = e.unicodeInput;
   return (image ? "<small>" + (image.reason === "encoded" ? `图片已转码 ${esc(image.pages)} 页 · ${esc(image.messages)} 条消息`
       : "图片转码：" + (image.reason === "no-text" ? "没有可转换的会话文字" : "未知")) + "</small>" : "") +
-    (unicode ? "<small>" + (unicode.reason === "encoded" ? `Unicode 已转码 ${esc(unicode.occurrences)} 处 · ${esc(unicode.matchedMessages)} 条消息 · ${esc(unicode.encodedCharacters)} 字符`
+    (unicode ? "<small>" + (unicode.reason === "encoded" ? `${esc(({ alternate: "隔字 Unicode", table: "高频字表", gbk: "GBK" })[unicode.mode] || "Unicode")} 已转码 ${esc(unicode.occurrences)} 处 · ${esc(unicode.matchedMessages)} 条消息 · ${esc(unicode.encodedCharacters)} 字符`
       : "Unicode 跳过：" + (unicodeReasons[unicode.reason] || "未知")) + "</small>" : "");
 }
 // Token counts and the gateway's estimate from Google's list prices; the bill is authoritative.

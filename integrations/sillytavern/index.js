@@ -1,6 +1,7 @@
 import { PLUGIN_ID, PLUGIN_PATH, PLUGIN_VERSION, MIN_SERVER_VERSION, MODES, compareVersions, createFetchInterceptor, latestUserInput } from "./shared.js";
 import { normalizeStopUsageWait, DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { validateTransportToolName } from "../../src/transport-tool-name.mjs";
+import { inputEncodingMode } from "../../src/optimized-input.mjs";
 import { installMeowStreamPreview } from "./meow-stream-preview.js";
 
 // TauriTavern has no Node server to host the plugin, so the extension shapes the
@@ -19,6 +20,7 @@ const reasons = { "existing-tools": "旧版 functions 工具", "tool-choice": "�
   "tool-history": "旧版 function 工具历史", "web-search": "联网搜索", "image-generation": "图片生成", "reverse-proxy": "反向代理",
   model: "此模型不适用", "too-large": "请求超过 8 MiB", "additional-parameters": "Vertex 附加参数不是 JSON 对象，无法合并" };
 const errors = { unicode_floor_required: "找不到真实用户楼层，也没有聊天变量“我的行动”，已停止发送。请先输入消息，或关闭 Unicode 转码。",
+  input_tokenizer_unavailable: "无法获取 Gemma 分词计数。请重试，或手动选择转码格式。",
   unicode_input_too_large: "转码后的请求超过大小限制，已停止发送。请缩短输入或关闭 Unicode 转码。",
   plugin_not_ready: "服务端插件未就绪或版本太旧，本次请求已停止发送。点“检查插件连接”查看原因和更新办法。",
   paygo_image_backend_required: "PayGo 图片转码需要配套的新版抗截断服务端插件。请更新后重启酒馆。",
@@ -65,8 +67,8 @@ function updateStatus(result) {
     return showStatus((errors[result.error] || `请求失败（${code}）。请查看酒馆错误提示；未自动重试。`) + where + cause);
   }
   const unicode = result.unicode ? { encoded: result.unicode.method === "all-context" ? `已对全部上下文中的 ${result.unicode.matchedMessages} 条消息转码。` : result.unicode.method === "recent-floors" ? `已在所选楼层范围内对 ${result.unicode.matchedMessages} 条请求消息转码。` : "已对当前用户输入的匹配文本转码。", "floor-not-found": "请求中没有找到所选楼层的原文，按原文发送。", "no-encodable-text": "所选范围没有需要转码的字符。" }[result.unicode.reason] || "" : "";
-  const format = { alternate: "隔字 Unicode", table: "高频字表" }[result.unicode?.format];
-  const basis = { gemma: "酒馆 Gemma 分词估算", utf8: "分词器不可用，按 UTF-8 长度估算", "body-limit": "另一种格式超过请求大小限制" }[result.unicode?.selection];
+  const format = { alternate: "隔字 Unicode", table: "高频字表", gbk: "GBK 十六进制" }[result.unicode?.format];
+  const basis = { gemma: "酒馆 Gemma 分词估算", manual: "手动选择", "body-limit": "仅一种格式适用" }[result.unicode?.selection];
   const optimized = format ? format + "（" + basis + "）。" : "";
   const noText = result.image?.mode === "current-turn"
     ? "图片·当前轮：最后一条 AI 消息之后没有可转换的文本（如点击“继续”或以 AI 消息结尾的预填充），本次按原文发送。"
@@ -110,12 +112,13 @@ function mountInputEncoding(panel, saved) {
   const summary = panel.querySelector("#vertex_encoding_summary");
   if (!direct) method.add(new Option("文字转图", "image"));
   const unicode = saved.unicodeInput;
-  if (["optimized", "optimized-all", "optimized-recent"].includes(unicode)) method.value = "optimized";
+  const encoded = inputEncodingMode(unicode);
+  if (encoded) method.value = encoded[1];
   else if (unicode === true || unicode === "all" || unicode === "recent") method.value = "unicode";
   else if (!direct && ["current-turn", "all"].includes(saved.imageInput)) method.value = "image";
-  scope.value = (method.value === "image" ? saved.imageInput === "all" : unicode === "all" || unicode === "optimized-all") ? "all" : "current";
+  scope.value = (method.value === "image" ? saved.imageInput === "all" : unicode === "all" || encoded?.[2] === "all") ? "all" : "current";
 
-  if (["recent", "optimized-recent"].includes(unicode)) scope.value = "recent";
+  if (unicode === "recent" || encoded?.[2] === "recent") scope.value = "recent";
 
   function render() {
     const image = method.value === "image";
@@ -130,7 +133,7 @@ function mountInputEncoding(panel, saved) {
     const recent = scope.value === "recent";
     const all = scope.value === "all";
     const unicodeInput = method.value === "unicode" ? (recent ? "recent" : all ? "all" : true)
-      : method.value === "optimized" ? (recent ? "optimized-recent" : all ? "optimized-all" : "optimized") : false;
+      : inputEncodingMode(method.value) ? method.value + (recent ? "-recent" : all ? "-all" : "") : false;
     const imageInput = method.value === "image" ? (all ? "all" : "current-turn") : "off";
     saveSettings({ unicodeInput, imageInput });
     render();
@@ -218,7 +221,7 @@ function mount() {
       <summary>输入转码 <span id="vertex_encoding_summary"></span></summary>
       <div class="vertex-fields">
         <label>转码方式<select id="vertex_input_encoding" class="text_pole">
-          <option value="off">关闭</option><option value="unicode">Unicode</option><option value="optimized">优化转码（实验）</option>
+          <option value="off">关闭</option><option value="unicode">Unicode</option><option value="optimized">自动选择（基于token）</option><option value="alternate">隔字 Unicode</option><option value="table">高频字表</option><option value="gbk">GBK 十六进制</option>
         </select></label>
         <label>转码范围<select id="vertex_encoding_scope" class="text_pole">
           <option value="current">当前输入</option><option value="all">全部上下文</option>

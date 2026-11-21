@@ -1,3 +1,4 @@
+import { inputEncodingMode } from "./optimized-input.mjs";
 import { readFile } from "node:fs/promises";
 import { createPrivateKey } from "node:crypto";
 import { parseServiceAccount, vertexAccessToken } from "./vertex-auth.mjs";
@@ -95,7 +96,7 @@ export async function settingsFromEnv(env = process.env) {
     stopUsageWait: env.STOP_USAGE_WAIT || "immediate",
     stopTag: env.STOP_TAG ?? DEFAULT_STOP_TAG,
     stopCount: integer(env.STOP_COUNT, DEFAULT_STOP_COUNT, 1, Number.MAX_SAFE_INTEGER, "STOP_COUNT"),
-    unicodeInput: ["all", "recent"].includes(env.UNICODE_INPUT) ? env.UNICODE_INPUT : toggle("UNICODE_INPUT", false), imageInput: env.IMAGE_INPUT || "off",
+    unicodeInput: (["all", "recent"].includes(env.UNICODE_INPUT) || inputEncodingMode(env.UNICODE_INPUT)) ? env.UNICODE_INPUT : toggle("UNICODE_INPUT", false), imageInput: env.IMAGE_INPUT || "off",
     hideUnavailableModels: toggle("HIDE_UNAVAILABLE_MODELS", true),
     geminiPrefillToUser: toggle("GEMINI_PREFILL_TO_USER", true), geminiLongDecode: toggle("GEMINI_LONG_DECODE", false),
     geminiPromptRetryEnabled: toggle("GEMINI_PROMPT_RETRY_ENABLED", false), geminiPromptRetryText,
@@ -184,7 +185,7 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
   if (typeof s.antiTruncation !== "boolean") throw new Error("Invalid anti-truncation setting");
   validateTagStopRule({ tag: s.stopTag, count: s.stopCount, exemptTag: s.stopExemptTag });
   if (!["immediate", "250ms", "natural"].includes(s.stopUsageWait)) throw new Error("Invalid STOP_USAGE_WAIT");
-  if (![false, true, "recent", "all"].includes(s.unicodeInput)) throw new Error("Invalid Unicode input toggle or scope");
+  if (![false, true, "recent", "all"].includes(s.unicodeInput) && !inputEncodingMode(s.unicodeInput)) throw new Error("Invalid Unicode input toggle or scope");
   for (const name of ["hideUnavailableModels", "geminiPrefillToUser", "geminiLongDecode", "geminiPromptRetryEnabled", "accountRotationEnabled", "tucaoStop", "meowCompat"]) {
     if (typeof s[name] !== "boolean") throw new Error("Invalid compatibility toggle");
   }

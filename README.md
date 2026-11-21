@@ -14,7 +14,7 @@
 
 酒馆预设已有正文工具时，可在「传输与截停」填写其名称，例如 `game_content`；Meowssiah 2.1.0 使用 `soliumbra_reply`。留空使用内置工具。使用 Git 安装时，分别更新前后端，重启酒馆后刷新页面。SillyTavern 服务端需要 Node.js 22.9 或更高版本。一键安装包按版本发布。[下载安装包](https://github.com/ken050210/vertex-streaming-anti-truncation/releases) · [Git 安装与更新](docs/SILLYTAVERN.md#更新与已有手动安装)
 
-在 Vertex 面板的「输入转码」里，Unicode 可选当前输入或全部上下文，文字转图支持 ❤️、肤色、旗帜和常见组合 emoji。遇到 Google 拦截输入，酒馆会显示 Google 提供的原因。与 Vertex PayGo 同用时，仍在 PayGo 里选择档位。[输入转码](docs/SILLYTAVERN.md#输入转码) · [PayGo 设置](docs/SILLYTAVERN.md#与-vertex-paygo-同用)
+在 Vertex 面板的「输入转码」里，可手选隔字 Unicode、高频字表、GBK，或选「自动选择（基于token）」，文字转图支持 ❤️、肤色、旗帜和常见组合 emoji。遇到 Google 拦截输入，酒馆会显示 Google 提供的原因。与 Vertex PayGo 同用时，仍在 PayGo 里选择档位。[输入转码](docs/SILLYTAVERN.md#输入转码) · [PayGo 设置](docs/SILLYTAVERN.md#与-vertex-paygo-同用)
 
 **TT 酒馆** 在「扩展程序 → 安装扩展」填入 `https://github.com/ken050210/vertex-streaming-anti-truncation`，分支留空。扩展在 WebView 里还原正文。装好后到「API 连接 → Google Vertex AI」选择非流式或流式抗截断，抗截断传输默认关闭。想让文字逐段出现，还要打开酒馆自己的流式开关。手机上用 Termux 跑 SillyTavern 的用户，在 Termux 里安装前后端。[手机安装步骤](docs/SILLYTAVERN.md#手机上怎么装)
 

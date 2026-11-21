@@ -7,7 +7,7 @@ const counter = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
 
 export function unicodeInputLogFields(value) {
   if (!value) return {};
-  return { unicodeInput: { mode: "compact", reason: reasons.has(value.reason) ? value.reason : "unknown",
+  return { unicodeInput: { mode: ["alternate", "table", "gbk"].includes(value.format) ? value.format : "compact", reason: reasons.has(value.reason) ? value.reason : "unknown",
     method: methods.has(value.method) ? value.method : "chat-floor-match",
     encodedCharacters: counter(value.encodedCharacters), matchedMessages: counter(value.matchedMessages),
     occurrences: counter(value.occurrences) } };
