@@ -63,7 +63,7 @@ export function createSettingsStore({ directory = process.env.GATEWAY_STATE_DIR 
       const data = JSON.parse(raw);
       if (data.version !== 1 || !data.settings || Object.keys(data.settings).some(k => !settingNames.has(k))) throw new Error();
       const settings = { ...DEFAULT_SETTINGS, ...data.settings };
-      buildConfig(settings, { requireAscii: false });
+      buildConfig(settings, { saved: true });
       return { settings, revision: revisionOf(raw), saved: true };
     } catch { throw new SettingsError("Saved configuration is invalid; the existing file was preserved", 500); }
   }

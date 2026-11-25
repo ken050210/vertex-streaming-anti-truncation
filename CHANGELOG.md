@@ -2,6 +2,11 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.25.0 / SillyTavern 0.19.0
+
+- Standard Vertex connections can select a primary location and an ordered list of fallback locations for HTTP 429 responses. Regional failover is off by default. Each new request starts in the primary location.
+- The gateway keeps a separate list per account and shares its existing retry budget across attempts. The SillyTavern plugin supports up to two fallback locations. Both honor `Retry-After` and keep continuation tokens in the region that issued them.
+
 ## Gateway 0.24.0 / SillyTavern 0.18.0
 
 The plugin and gateway now compare alternating Unicode, a shared character table and GBK hex using local Gemma token counts. Each candidate includes its reading guide, delimiters and any table. All three formats can also be selected manually.

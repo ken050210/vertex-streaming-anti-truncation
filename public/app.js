@@ -1,4 +1,4 @@
-"use strict";
+import { addRegionSuggestions, createRegionEditor } from "./region-editor.js";
 const $ = id => document.getElementById(id);
 const authNames = { "service-account": "完整模式 · 服务账号", express: "快速模式 · API Key", "access-token": "临时 OAuth 令牌", custom: "自定义上游 · OpenAI 兼容" };
 const tierNames = { standard: "Standard", flex: "Flex", priority: "Priority" };
@@ -12,6 +12,11 @@ const consoleDown = "无法连接本地控制台，请确认控制台进程仍�
 const replyInterrupted = "回复中途中断（网关已断开连接），请按请求 ID 在请求日志查看错误码。";
 const state = { csrf: null, config: null, status: null, events: [], dirty: false, page: "overview", probe: null, timer: null,
   models: [], catalog: null, selected: new Set(), forcedGlobal: false, userLocation: "global", pendingDraft: null, refreshError: null, rendered: {} };
+const regionOptions = { limit: 50, buttonClass: "btn small-button", onChange: () => updateDraft(),
+  help: "按顺序尝试此模型支持的备用区域，沿用 429 重试次数和间隔。用完备用区域后，在最后一个区域重试。" };
+const primaryRegions = createRegionEditor($("primary-regions"), regionOptions);
+const accountRegions = new WeakMap();
+addRegionSuggestions($("locations"));
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const upstreamHost = url => { try { return new URL(url).host; } catch { return url; } };
 let toastTimer;
@@ -29,6 +34,8 @@ function errorMessage(message) {
     "Invalid local access key": "本地访问密钥不正确。", "Please sign in": "登录已过期，请重新登录。",
     "Invalid VERTEX_PROJECT_ID": "请填写有效的 Google Cloud 项目 ID。", "Invalid VERTEX_API_KEY": "请输入快速模式 API Key。",
     "Invalid VERTEX_ACCESS_TOKEN": "请输入有效的 OAuth Access Token。", "Invalid PORT": "端口必须在 1–65535 之间。",
+    "Invalid VERTEX_FALLBACK_LOCATIONS": "备用区域须为有效的地区代码，最多 50 个，且不能重复。",
+    "unsupported_primary_location": "此模型不支持当前首选区域。请在连接配置中更换地区。",
     "Service account must contain a valid RSA private key": "服务账号中没有有效的 RSA 私钥，请导入完整 JSON。",
     "vertex service account secret is not valid JSON": "服务账号 JSON 格式无效，请检查是否复制完整。",
     "Only Google's OAuth token endpoint is allowed": "服务账号的 token_uri 必须是 Google 官方 OAuth 地址。",
@@ -79,7 +86,7 @@ function errorMessage(message) {
     "Model catalog response is too large": catalogFailed,
     "Invalid model catalog pagination": catalogFailed,
     "Model catalog exceeded the page limit; no partial list was applied": catalogFailed,
-    "Invalid VERTEX_LOCATION": "地区格式无效：须以小写字母开头，只含小写字母、数字和短横线，例如 us-central1。",
+    "Invalid VERTEX_LOCATION": "请填写 global、us、eu 或具体区域代码，例如 asia-southeast1。",
     "Invalid UPSTREAM_TIMEOUT_MS": "上游超时须为 1–1800 秒之间的整数（环境变量 UPSTREAM_TIMEOUT_MS 以毫秒计，为 1000–1800000）。",
     "Prompt retry error matches must list 1-32 texts of at most 500 characters": "触发重试的上游错误最多 32 行，每行不超过 500 个字符。",
     "vertex service account secret must contain type, client_email, private_key and an HTTPS token_uri": "请粘贴 type 为 service_account 的完整服务账号 JSON；gcloud 登录生成的用户凭据不能用。",
@@ -220,7 +227,7 @@ function draft() {
   const credential = (id, mode) => authMode === mode ? $(id).value.trim() : clear.includes(credentialFields[mode][0]) ? null : "";
   return { authMode,
     serviceTier: document.querySelector('[name="serviceTier"]:checked').value,
-    projectId: $("project-id").value.trim(), location: $("location").value.trim(),
+    projectId: $("project-id").value.trim(), location: $("location").value.trim(), ...primaryRegions.value,
     gatewayKeyMode: $("gateway-key-mode").value,
     gatewayKey: $("gateway-key-mode").value === "none" ? null : $("gateway-key").value.trim(), serviceAccountJson: credential("service-account", "service-account"),
     apiKey: credential("api-key", "express"), accessToken: credential("access-token", "access-token"),
@@ -240,8 +247,8 @@ function draft() {
     geminiPromptRetryMatches: retryMatches() };
 }
 function accountDraft() {
-  return [...$("account-list").children].map(row => Object.fromEntries([["id", row.dataset.id],
-    ...[...row.querySelectorAll("[data-field]")].map(input => [input.dataset.field, input.value.trim()])]));
+  return [...$("account-list").children].map(row => ({ id: row.dataset.id, ...accountRegions.get(row).value,
+    ...Object.fromEntries([...row.querySelectorAll("[data-field]")].map(input => [input.dataset.field, input.value.trim()])) }));
 }
 function addAccount(account) {
   const row = document.createElement("fieldset");
@@ -250,12 +257,16 @@ function addAccount(account) {
     <label class="field">账号名称<input data-field="name" maxlength="80" required></label>
     <label class="field">鉴权方式<select data-field="authMode">${Object.entries(authNames).map(([value, name]) => `<option value="${value}">${name}</option>`).join("")}</select></label>
     <label class="field" data-vertex>项目 ID<input data-field="projectId" maxlength="128" spellcheck="false"></label>
-    <label class="field" data-vertex>地区<input data-field="location" spellcheck="false"></label>
+    <label class="field" data-vertex>首选区域<input data-field="location" list="locations" spellcheck="false"></label>
     <label class="field" data-custom>上游地址<input data-field="customBaseUrl" type="url" placeholder="https://relay.example.com/v1" spellcheck="false"></label>
-    </div><label class="field"><span data-credential-label>凭据</span><textarea data-field="credential" rows="3" spellcheck="false" autocomplete="off"></textarea></label>
-    <button class="btn small-button" type="button">移除账号</button>`;
+    </div><div data-regions data-vertex></div><label class="field"><span data-credential-label>凭据</span><textarea data-field="credential" rows="3" spellcheck="false" autocomplete="off"></textarea></label>
+    <button class="btn small-button remove-account" type="button">移除账号</button>`;
   for (const input of row.querySelectorAll("[data-field]")) input.value = account[input.dataset.field] || "";
+  row.querySelector('[data-field="location"]').value = account.location ?? "global";
   const mode = row.querySelector('[data-field="authMode"]'), secret = row.querySelector('[data-field="credential"]');
+  const regions = createRegionEditor(row.querySelector("[data-regions]"), regionOptions);
+  regions.setValue(account);
+  accountRegions.set(row, regions);
   secret.placeholder = account.credentialSet ? "已保存 · 留空保留，输入则替换" : "输入此账号的凭据";
   function showFields() {
     row.querySelectorAll("[data-vertex]").forEach(el => { el.hidden = mode.value === "custom"; });
@@ -264,7 +275,7 @@ function addAccount(account) {
     row.querySelector("[data-credential-label]").textContent = credentialFields[mode.value][1];
   }
   mode.addEventListener("change", () => { secret.value = ""; secret.placeholder = "鉴权方式已更改，请重新输入凭据"; showFields(); });
-  row.querySelector("button").addEventListener("click", () => { row.remove(); $("add-account").disabled = false; updateDraft(); });
+  row.querySelector(".remove-account").addEventListener("click", () => { row.remove(); $("add-account").disabled = false; updateDraft(); });
   $("account-list").append(row); showFields();
   $("add-account").disabled = $("account-list").children.length >= 19;
 }
@@ -305,6 +316,17 @@ function updateDraft(dirty = true) {
   $("add-neon").hidden = custom;
   // Hidden fields must not block saving through their own browser validation.
   $("location").disabled = forcedGlobal || custom;
+  $("primary-regions").hidden = custom;
+  const regionHelp = locked => locked ? "此鉴权方式或服务等级使用 global。" : !d.rateLimitRetryMax ? "429 最大重试次数为 0；调高次数即可启用。" : "";
+  primaryRegions.setContext($("location").value.trim(), undefined, regionHelp(forcedGlobal));
+  for (const row of $("account-list").children) {
+    const field = row.querySelector('[data-field="location"]');
+    const locked = row.querySelector('[data-field="authMode"]').value === "express" || d.serviceTier !== "standard";
+    if (locked && !field.disabled) { field.dataset.previous = field.value; field.value = "global"; }
+    if (!locked && field.disabled) field.value = field.dataset.previous || "global";
+    field.disabled = locked;
+    accountRegions.get(row).setContext(field.value.trim(), undefined, regionHelp(locked));
+  }
   $("project-id").required = !["express", "custom"].includes(d.authMode);
   $("project-optional").hidden = d.authMode !== "express";
   $("project-help").textContent = d.authMode === "express" ? "填写 API Key 所属的项目 ID 或项目编号，以明确使用 global 地区。Gemini 4 Argon、Carbon 和 Neon 必填。" : "填写目标 Google Cloud 项目 ID，可与服务账号所属项目不同。";
@@ -362,6 +384,7 @@ function fillConfig(c = state.config.settings) {
   $("account-timeout").value = (c.accountTimeoutMs ?? 60000) / 1000;
   $("rate-limit-retry-max").value = c.rateLimitRetryMax;
   $("rate-limit-retry-interval").value = c.rateLimitRetryIntervalSeconds;
+  primaryRegions.setValue(c);
   $("account-failures").value = c.accountFailureThreshold ?? 2;
   $("account-cooldown").value = (c.accountCooldownMs ?? 60000) / 1000;
   $("account-list").replaceChildren(); $("add-account").disabled = false;
@@ -536,7 +559,7 @@ function eventTable(events) {
     // Pass-through requests keep the plain stream label; every audited transport, fallback and skip reason has its own.
     const transport = transportNames[a.transport] || (!a.transport || a.transport === "disabled" ? (e.stream ? "SSE 流式" : "普通响应") : a.transport);
     const success = e.status >= 200 && e.status < 300;
-    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small></td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code" title="${esc(errorMessage(e.code))}">${esc(e.code)}</small>` : ""}${integrityBadge(e.responseIntegrity)}${e.upstreamError ? `<small>上游：${esc([e.upstreamError.status, e.upstreamError.reason].filter(Boolean).join(" · "))}</small>` : ""}${compatibilityBadge(e.geminiCompatibility)}${inputBadge(e)}${accountBadge(e)}</td><td><span title="${esc(a.transport || "")}">${esc(transport)}</span><small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td>${usageCell(e)}<td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
+    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small></td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code" title="${esc(errorMessage(e.code))}">${esc(e.code)}</small>` : ""}${integrityBadge(e.responseIntegrity)}${e.upstreamError ? `<small>上游：${esc([e.upstreamError.status, e.upstreamError.reason].filter(Boolean).join(" · "))}</small>` : ""}${compatibilityBadge(e.geminiCompatibility)}${inputBadge(e)}${accountBadge(e)}${e.regionAttempts?.length ? "<small>区域：" + e.regionAttempts.map(a => esc(a.location) + " (" + esc(a.status ?? "无响应") + ")").join(" → ") + "</small>" : ""}</td><td><span title="${esc(a.transport || "")}">${esc(transport)}</span><small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td>${usageCell(e)}<td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
   }).join("") + "</tbody></table></div>";
 }
 function accountBadge(event) {

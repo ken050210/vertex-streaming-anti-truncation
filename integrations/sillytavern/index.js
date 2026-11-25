@@ -3,6 +3,8 @@ import { normalizeStopUsageWait, DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT, validateT
 import { validateTransportToolName } from "../../src/transport-tool-name.mjs";
 import { inputEncodingMode } from "../../src/optimized-input.mjs";
 import { installMeowStreamPreview } from "./meow-stream-preview.js";
+import { addRegionSuggestions, createRegionEditor } from "../../public/region-editor.js";
+import { supportedVertexLocations } from "../../src/vertex-locations.mjs";
 
 // TauriTavern has no Node server to host the plugin, so the extension shapes the
 // request and restores the reply itself. Rendering text as images needs the server.
@@ -28,6 +30,7 @@ const errors = { unicode_floor_required: "找不到真实用户楼层，也没�
   natural_stop_usage_not_supported: "当前服务端插件不支持等待 Google 自然结束。请更新服务端并重启酒馆，或选择其他截停等待方式。",
   tag_stop_not_supported: "服务端插件不支持自定义标签截停。请更新服务端插件并重启酒馆，或关闭此开关。",
   meow_compat_not_supported: "服务端不支持小猫兼容模式。请更新服务端插件并重启酒馆。",
+  region_routing_not_supported: "当前服务端不支持所选区域路由。请更新服务端插件并重启酒馆。",
   transport_tool_name_not_supported: "服务端插件不支持复用预设正文工具。请更新服务端并重启酒馆。",
   invalid_tag_stop: "截停标签名须为 1–64 位字母、数字、下划线、点、冒号或连字符，以字母或下划线开头；次数须为正整数。",
   image_input_requires_supported_request: "图片输入不支持此请求，已停止发送，未改用明文。请去掉不支持的内容或换用支持的模型，或关闭图片输入。",
@@ -59,12 +62,13 @@ function showStatus(text = "") {
   status.hidden = !text;
 }
 function updateStatus(result) {
+  const regions = result.regions ? "区域 · " + result.regions.split(",").map(pair => pair.replace("=", " HTTP ")).join(" → ") : "";
   if (result.error) {
-    if (result.message && result.message !== result.error) return showStatus(result.message);
+    if (result.message && result.message !== result.error) return showStatus([result.message, regions].filter(Boolean).join(" "));
     const code = result.status ? `${result.error}，HTTP ${result.status}` : result.error;
     const cause = result.bypass ? `原因：${reasons[result.bypass] ?? result.bypass}。` : "";
     const where = result.character && result.param ? ` ${result.character}，位置 ${result.param}。` : "";
-    return showStatus((errors[result.error] || `请求失败（${code}）。请查看酒馆错误提示；未自动重试。`) + where + cause);
+    return showStatus([(errors[result.error] || `请求失败（${code}）。请查看酒馆错误提示。`) + where + cause, regions].filter(Boolean).join(" "));
   }
   const unicode = result.unicode ? { encoded: result.unicode.method === "all-context" ? `已对全部上下文中的 ${result.unicode.matchedMessages} 条消息转码。` : result.unicode.method === "recent-floors" ? `已在所选楼层范围内对 ${result.unicode.matchedMessages} 条请求消息转码。` : "已对当前用户输入的匹配文本转码。", "floor-not-found": "请求中没有找到所选楼层的原文，按原文发送。", "no-encodable-text": "所选范围没有需要转码的字符。" }[result.unicode.reason] || "" : "";
   const format = { alternate: "隔字 Unicode", table: "高频字表", gbk: "GBK 十六进制" }[result.unicode?.format];
@@ -83,7 +87,7 @@ function updateStatus(result) {
     ? `本次输出上限 ${tokens(limit.applied)} token（含思考）超过单次上限，写满后自动续写。`
     : `本次输出上限按单次上限 ${tokens(limit.applied)} token（含思考）发送，预设未改动；写满会停止并标记为长度截断。`;
   const builtin = result.builtinForMeow && "本次请求没有预设工具声明，已使用内置正文工具 router_emit 抗截断。";
-  showStatus([result.payGo && "本次通过 Vertex PayGo 发送。", builtin, unicode, optimized, image, delivery, bypass, continuation, output].filter(Boolean).join(" "));
+  showStatus([result.payGo && "本次通过 Vertex PayGo 发送。", builtin, unicode, optimized, image, delivery, bypass, continuation, output, regions].filter(Boolean).join(" "));
 }
 
 async function checkBackend(silent = false) {
@@ -217,6 +221,7 @@ function mount() {
   panel.innerHTML = `
     <label for="vertex_anti_truncation_mode">抗截断传输</label>
     <select id="vertex_anti_truncation_mode" class="text_pole"></select>
+    <div id="vertex_region_options"></div>
     <details>
       <summary>输入转码 <span id="vertex_encoding_summary"></span></summary>
       <div class="vertex-fields">
@@ -262,6 +267,30 @@ function mount() {
   status = connection.querySelector("[role=status]");
   mountInputEncoding(panel, saved);
   mountTransportOptions(panel, select, saved, payGoInstalled);
+  const regionPanel = panel.querySelector("#vertex_region_options");
+  regionPanel.hidden = Boolean(direct || payGoInstalled);
+  if (!regionPanel.hidden) {
+    const field = id => document.getElementById(id);
+    addRegionSuggestions(field("vertexai_region_suggestions"));
+    const editor = createRegionEditor(regionPanel, { limit: 2, buttonClass: "menu_button",
+      help: "沿用酒馆的首选区域。插件直连遇到 HTTP 429 时按顺序换区，每个备用区域最多尝试一次。",
+      onChange: () => saveSettings(editor.value) });
+    editor.setValue(saved);
+    const render = () => {
+      const model = field("model_vertexai_select")?.value ?? "";
+      const region = field("vertexai_region")?.value.trim() || "us-central1";
+      const reason = field("vertexai_auth_mode")?.value !== "full" || (field("vertexai_service_tier")?.value || "standard") !== "standard"
+        ? "跨区域重试适用于完整服务账号和 Standard。"
+        : select.value === "off" && !["all", "current-turn"].includes(settings().imageInput) ? "启用抗截断传输或图片输入后，由插件直连 Vertex。" : "";
+      editor.setContext(region, supportedVertexLocations(model), reason);
+    };
+    for (const id of ["vertexai_region", "vertexai_auth_mode", "vertexai_service_tier", "model_vertexai_select"]) {
+      field(id)?.addEventListener("input", render); field(id)?.addEventListener("change", render);
+    }
+    panel.addEventListener("change", render);
+    if (events.OAI_PRESET_CHANGED_AFTER) context.eventSource.on(events.OAI_PRESET_CHANGED_AFTER, render);
+    render();
+  }
   if (direct) {
     connection.append(Object.assign(document.createElement("small"), { textContent: "TauriTavern 扩展已加载。" }));
   } else {
@@ -317,6 +346,8 @@ function installTransport(compat) {
       payGoInstalled,
       getRequestHeaders: () => SillyTavern.getContext().getRequestHeaders(),
       getImageInput: () => direct ? "off" : settings().imageInput || "off",
+      getRegions: model => ({ regionFallbackEnabled: settings().regionFallbackEnabled === true, fallbackLocations: settings().fallbackLocations ?? [],
+        preferred: document.getElementById("model_vertexai_select")?.value === model ? document.getElementById("vertexai_region")?.value.trim() : undefined }),
       getUnicodeInput: () => settings().unicodeInput,
       getMeowCompat: () => compat,
       getTransportToolName: () => settings().transportToolName ?? "",

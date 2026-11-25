@@ -57,6 +57,25 @@ test("config rejects ambiguous credentials, host injection and invalid limits wi
   }
 });
 
+test("region lists are per connection, disabled by default and limited to safe official location codes", async () => {
+  const paired = await loadConfig({ ...env, VERTEX_LOCATION: "eu", VERTEX_REGION_FALLBACK: "true", VERTEX_FALLBACK_LOCATIONS: "us, global" });
+  assert.equal(paired.regionFallbackEnabled, true);
+  assert.deepEqual(paired.fallbackLocations, ["us","global"]);
+  assert.equal((await loadConfig(env)).regionFallbackEnabled, false);
+  const old = { ...await settingsFromEnv(env), location: "asia" };
+  assert.equal(buildConfig(old, { saved: true }).location, "asia");
+  assert.throws(() => buildConfig(old), /Invalid VERTEX_LOCATION/);
+  for (const value of ["asia", "http://localhost", "global,global", "eu.rep.googleapis.com"]) {
+    await assert.rejects(loadConfig({ ...env, VERTEX_FALLBACK_LOCATIONS: value }), /FALLBACK_LOCATIONS/);
+  }
+  const cfg = buildConfig({ gatewayKey: env.GATEWAY_API_KEY, authMode: "access-token", accessToken: env.VERTEX_ACCESS_TOKEN,
+    projectId: env.VERTEX_PROJECT_ID, regionFallbackEnabled: true, fallbackLocations: ["us"],
+    accounts: [{ id: "other", name: "Other", authMode: "access-token", location: "eu", projectId: "another-project",
+      regionFallbackEnabled: true, fallbackLocations: ["global"], credential: env.VERTEX_ACCESS_TOKEN }] });
+  assert.deepEqual(cfg.accountRotation.accounts[0].fallbackLocations, ["global"]);
+  assert.equal((await loadConfig({ ...env, VERTEX_REGION_FALLBACK: "true", VERTEX_SERVICE_TIER: "priority" })).regionFallbackEnabled, false);
+});
+
 test("service-account configuration accepts only Google's token exchange endpoint", async t => {
   const dir = await mkdtemp(join(tmpdir(), "vertex-stream-config-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

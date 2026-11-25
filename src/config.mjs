@@ -6,10 +6,12 @@ import { modelProfiles, MODEL_ID, UPSTREAM_MODEL } from "./model-profiles.mjs";
 import { MAX_RETRY_TEXT_BYTES } from "./gemini-compat.mjs";
 import { DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT, validateTagStopRule } from "./tag-stop-rule.mjs";
 import { validateTransportToolName } from "./transport-tool-name.mjs";
+import { validVertexLocation, vertexHost } from "./vertex-locations.mjs";
 
 export { MODEL_ID, UPSTREAM_MODEL };
 export const DEFAULT_SETTINGS = Object.freeze({
   projectId: "", location: "global", authMode: "service-account", serviceTier: "standard",
+  regionFallbackEnabled: false, fallbackLocations: [],
   // Keep the persisted switch name so existing explicit opt-outs survive upgrades.
   port: 4781, timeoutMs: 600000, antiTruncation: true, transportToolName: "", meowCompat: false, tucaoStop: true, stopTag: DEFAULT_STOP_TAG, stopCount: DEFAULT_STOP_COUNT, stopExemptTag: "", stopUsageWait: "immediate", models: null,
   hideUnavailableModels: true, geminiPrefillToUser: true, geminiLongDecode: false, unicodeInput: false, imageInput: "off",
@@ -19,10 +21,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   accountRotationEnabled: false, accountTimeoutMs: 60000, accountFailureThreshold: 2, accountCooldownMs: 60000, accounts: [],
 });
 export const SECRET_FIELDS = ["gatewayKey", "serviceAccountJson", "apiKey", "accessToken", "customApiKey"];
-export const ACCOUNT_FIELDS = ["id", "name", "authMode", "projectId", "location", "customBaseUrl", "credential"];
+export const ACCOUNT_FIELDS = ["id", "name", "authMode", "projectId", "location", "regionFallbackEnabled", "fallbackLocations", "customBaseUrl", "credential"];
 export const ACCOUNT_CREDENTIALS = { "service-account": "serviceAccountJson", express: "apiKey", "access-token": "accessToken", custom: "customApiKey" };
 
-function accountConnections(s, requireAscii) {
+function accountConnections(s, options) {
   if (!Array.isArray(s.accounts) || s.accounts.length > 19) throw new Error("Accounts must be a list of at most 19 additional accounts");
   const ids = new Set(["primary"]);
   return s.accounts.map(account => {
@@ -36,9 +38,10 @@ function accountConnections(s, requireAscii) {
     if (typeof account.credential !== "string" || account.credential.length > 128 * 1024) throw new Error("Invalid account credential");
     return { id: account.id, name: account.name, ...buildConnectionConfig({
       authMode: account.authMode, projectId: account.projectId ?? "", location: account.location ?? "global",
+      regionFallbackEnabled: account.regionFallbackEnabled ?? false, fallbackLocations: account.fallbackLocations ?? [],
       customBaseUrl: account.customBaseUrl ?? "", serviceTier: s.serviceTier,
       [ACCOUNT_CREDENTIALS[account.authMode]]: account.credential,
-    }, { requireAscii }) };
+    }, options) };
   });
 }
 
@@ -80,6 +83,8 @@ export async function settingsFromEnv(env = process.env) {
   const retryMatches = (env.GEMINI_PROMPT_RETRY_MATCHES || "").split("|").map(text => text.trim()).filter(Boolean);
   return {
     ...DEFAULT_SETTINGS, projectId: env.VERTEX_PROJECT_ID || "", location: env.VERTEX_LOCATION || "global",
+    regionFallbackEnabled: toggle("VERTEX_REGION_FALLBACK", false),
+    fallbackLocations: (env.VERTEX_FALLBACK_LOCATIONS || "").split(",").map(s => s.trim()).filter(Boolean),
     gatewayKeyMode: env.GATEWAY_KEY_MODE || "strict",
     gatewayKey: env.GATEWAY_KEY_MODE === "none" ? "" : env.GATEWAY_API_KEY || "", serviceAccountJson,
     accessToken: env.VERTEX_ACCESS_TOKEN || "", apiKey: env.VERTEX_API_KEY || "",
@@ -128,19 +133,24 @@ function customConnection(s, requireAscii) {
 }
 
 export function vertexBaseUrl(authMode, projectId, location) {
-  const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+  const host = vertexHost(location);
   const projectPath = projectId ? `/projects/${projectId}/locations/${location}` : "";
   return `https://${host}/v1${projectPath}` + (authMode === "express" ? "" : "/endpoints/openapi");
 }
 
-export function buildConnectionConfig(settings, { requireAscii = true, fetchImpl } = {}) {
+export function buildConnectionConfig(settings, { saved = false, requireAscii = !saved, fetchImpl, maxFallbackLocations = 50 } = {}) {
   const s = { ...DEFAULT_SETTINGS, ...settings };
   if (!["service-account", "express", "access-token", "custom"].includes(s.authMode)) throw new Error("Invalid authentication mode");
+  if (typeof s.regionFallbackEnabled !== "boolean" || !Array.isArray(s.fallbackLocations) ||
+      s.fallbackLocations.length > maxFallbackLocations || !s.fallbackLocations.every(validVertexLocation) ||
+      new Set(s.fallbackLocations).size !== s.fallbackLocations.length) throw new Error("Invalid VERTEX_FALLBACK_LOCATIONS");
   if (s.authMode === "custom") return customConnection(s, requireAscii);
   if (!["standard", "flex", "priority"].includes(s.serviceTier)) throw new Error("Invalid service tier");
   if (typeof s.projectId !== "string" || (s.projectId && !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,127}$/.test(s.projectId))) throw new Error("Invalid VERTEX_PROJECT_ID");
   if (s.authMode !== "express" && !s.projectId) throw new Error("Invalid VERTEX_PROJECT_ID");
-  if (typeof s.location !== "string" || !/^[a-z][a-z0-9-]{0,62}$/.test(s.location)) throw new Error("Invalid VERTEX_LOCATION");
+  // Older consoles accepted bare names such as "asia". Let users open and correct such a file.
+  const legacyLocation = saved && typeof s.location === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(s.location);
+  if (!validVertexLocation(s.location) && !legacyLocation) throw new Error("Invalid VERTEX_LOCATION");
   if ((s.serviceTier !== "standard" || s.authMode === "express") && s.location !== "global") throw new Error("Express, Flex and Priority require the global location");
   let accessToken;
   if (s.authMode === "service-account") {
@@ -163,13 +173,15 @@ export function buildConnectionConfig(settings, { requireAscii = true, fetchImpl
   return {
     accessToken, authMode: s.authMode, serviceTier: s.serviceTier,
     projectId: s.projectId, location: s.location, baseUrl, tierHeaders,
+    regionFallbackEnabled: s.regionFallbackEnabled && s.authMode !== "express" && s.serviceTier === "standard",
+    fallbackLocations: s.fallbackLocations,
     // Priority works on the OpenAI-compatible endpoint (verified 2026-09-25, traffic type
     // ON_DEMAND_PRIORITY); Flex and Express do not, so only they require native requests.
     nativeOnly: s.authMode === "express" || s.serviceTier === "flex",
   };
 }
 
-export function buildConfig(settings, { requireAscii = true } = {}) {
+export function buildConfig(settings, { saved = false, requireAscii = !saved } = {}) {
   const s = { ...DEFAULT_SETTINGS, ...settings };
   if (!["strict", "weak", "none"].includes(s.gatewayKeyMode)) throw new Error("Invalid GATEWAY_KEY_MODE");
   const key = s.gatewayKeyMode === "none" ? "" : s.gatewayKey;
@@ -199,10 +211,10 @@ export function buildConfig(settings, { requireAscii = true } = {}) {
     throw new Error("Prompt retry error matches must list 1-32 texts of at most 500 characters");
   }
   const models = modelProfiles(s.models, s.antiTruncation, { custom: s.authMode === "custom" });
-  const accounts = accountConnections(s, requireAscii);
+  const accounts = accountConnections(s, { saved, requireAscii });
   if (s.accountRotationEnabled && !accounts.length) throw new Error("Add at least one additional account before enabling rotation");
   return {
-    ...buildConnectionConfig(s, { requireAscii }), gatewayKeyMode: s.gatewayKeyMode, gatewayKey: key, models,
+    ...buildConnectionConfig(s, { saved, requireAscii }), gatewayKeyMode: s.gatewayKeyMode, gatewayKey: key, models,
     accountRotation: { enabled: s.accountRotationEnabled, accounts,
       timeoutMs: integer(s.accountTimeoutMs, 60000, 1000, 1800000, "ACCOUNT_TIMEOUT_MS"),
       failureThreshold: integer(s.accountFailureThreshold, 2, 1, 100, "ACCOUNT_FAILURE_THRESHOLD"),

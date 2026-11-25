@@ -94,7 +94,7 @@ Replace `http://127.0.0.1:7890` with your proxy. `UPSTREAM_TIMEOUT_MS` also appl
 
 ## Model library and variants
 
-Direct Vertex requests for `gemini-4-carbon` and `gemini-4-neon` always use `global`. The default model list includes normal, buffered and streaming anti-truncation profiles. With an existing model list, check the variants you want, click **添加 Gemini 4 Carbon（global）** or **添加 Gemini 4 Neon（global）**, save, then refresh the model list in your client.
+Direct Standard connections can select `global`, `us` or `eu` for Carbon and Neon. Existing connections configured for a city region continue to use `global` for those two models with regional fallback off. Use the Carbon or Neon button to add selected variants to an existing model list.
 
 Enter credentials under **连接配置**, then open **模型与版本** and click **拉取 Model List**. Discovery uses the current connection form plus saved credentials, without starting inference or saving the draft. Search and select multiple models, check the variants to add, then click **保存全部配置** to save both connection and model drafts. Refresh the model list in your client afterwards.
 
@@ -140,6 +140,12 @@ Without tool-calling support upstream, anti-truncation cannot work: the upstream
 For `bad-woman/vertex2openai`, its Express streaming path also needs to enable and convert Google's argument fragments. A [patch and validation guide for a pinned upstream revision](../patches/vertex2openai/README.md) is included. Apply it to vertex2openai; updating this gateway alone does not enable argument streaming inside the relay.
 
 ## HTTP 429 retries (standalone gateway)
+
+Under Connection settings, choose a primary location and open **429 区域切换** to enable and order fallback locations for that account. Standard service-account and OAuth connections support this option. It defaults off. For example, a primary of `us` and fallbacks of `eu`, `global` visit those locations in order after HTTP 429. Further retries use the final location. Each new request starts at the selected account's primary. A longer upstream `Retry-After` takes precedence over the configured interval.
+
+With fallback enabled, known models require a supported primary and skip unsupported backups. For unlisted models, Google determines availability. Argon also supports Singapore and London. Continuation tokens and explicit caches keep their region. The request log records locations and HTTP statuses. `X-Vertex-Location` identifies the attempted endpoint location. [Google's model location table](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations)
+
+For the CLI use `VERTEX_REGION_FALLBACK=true` and a comma-separated `VERTEX_FALLBACK_LOCATIONS=eu,global`. Additional accounts accept `regionFallbackEnabled` and a `fallbackLocations` array.
 
 When a generation request receives HTTP 429, the gateway waits 5 seconds and resends the same request on the same account. By default it retries up to 10 times, for at most 11 submissions on a single account. This applies to streaming and non-streaming requests.
 

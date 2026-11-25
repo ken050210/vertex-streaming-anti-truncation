@@ -1,10 +1,12 @@
 import { once } from "node:events";
 import { Readable } from "node:stream";
-import { buildConnectionConfig } from "../../src/config.mjs";
+import { buildConnectionConfig, vertexBaseUrl } from "../../src/config.mjs";
+import { legacyVertexLocation, requestLocations } from "../../src/vertex-locations.mjs";
+import { createRegionSender } from "../../src/region-retry.mjs";
 import { prepareImageInput } from "../../src/image-input.mjs";
 import { buildNativeUrl } from "../../src/vertex-native.mjs";
 import { parseServiceAccount } from "../../src/vertex-auth.mjs";
-import { isGemini4Carbon, outputLimitHeaders, validateGemini4Connection } from "../../src/gemini4.mjs";
+import { outputLimitHeaders, validateGemini4Connection } from "../../src/gemini4.mjs";
 import { fetchLongDecode, longDecodeUrl } from "../../src/vertex-long-decode.mjs";
 import { prepareSillyTavernRequest, restoreSillyTavernResponse, requestError } from "../../src/sillytavern.mjs";
 import { googleErrorDetail, sseData, upstreamMessage } from "../../src/wire.mjs";
@@ -50,8 +52,13 @@ export function connectionForRequest(request, { readSecret, SECRET_KEYS }, fetch
   const body = request.body;
   const auth = body.vertexai_auth_mode ?? "express";
   if (!["express", "full"].includes(auth) || body.reverse_proxy) throw requestError("unsupported_authentication_mode");
-  const settings = { authMode: auth === "full" ? "service-account" : "express", location: isGemini4Carbon(body.model) ? "global" : body.vertexai_region || "us-central1",
-    serviceTier: body.vertexai_service_tier || "standard", projectId: body.vertexai_express_project_id || "" };
+  const serviceTier = body.vertexai_service_tier || "standard";
+  const fallback = auth === "full" && serviceTier === "standard" && body.vertex_fallback_locations != null;
+  const preferred = body.vertexai_region || "us-central1";
+  const settings = { authMode: auth === "full" ? "service-account" : "express",
+    location: fallback ? preferred : legacyVertexLocation(preferred, body.model),
+    regionFallbackEnabled: fallback, fallbackLocations: body.vertex_fallback_locations ?? [],
+    serviceTier, projectId: body.vertexai_express_project_id || "" };
   if (auth === "full") {
     settings.serviceAccountJson = readSecret(request.user.directories, SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT, body.secret_id);
     settings.projectId = parseServiceAccount(settings.serviceAccountJson).project_id;
@@ -59,7 +66,7 @@ export function connectionForRequest(request, { readSecret, SECRET_KEYS }, fetch
     settings.apiKey = readSecret(request.user.directories, SECRET_KEYS.VERTEXAI, body.secret_id);
   }
   // Reuse the gateway's validated official Google destinations and token cache.
-  const config = buildConnectionConfig(settings, { fetchImpl });
+  const config = buildConnectionConfig(settings, { fetchImpl, maxFallbackLocations: 2 });
   validateGemini4Connection(config, body.model);
   return config;
 }
@@ -74,6 +81,13 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
     response.once("close", close);
     let stage = "request";
     let credential;
+    const attempts = [];
+    const writeRegionHeaders = () => {
+      if (attempts.length && !response.headersSent) {
+        response.setHeader("x-vertex-location", attempts.at(-1).location);
+        response.setHeader("x-vertex-region-attempts", attempts.map(a => a.location + "=" + (a.status ?? "no-response")).join(","));
+      }
+    };
     const imageMode = request.body?.vertex_image_input ?? "off";
     try {
       // Validate normal plugin eligibility before spending CPU rasterizing.
@@ -87,6 +101,7 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       }
       stage = "configuration";
       const config = connectionForRequest(request, adapters, fetchImpl);
+      const locations = requestLocations(config, prepared.model);
       stage = "authentication";
       credential = await waitWithSignal(() => config.accessToken(), signal);
       signal.throwIfAborted();
@@ -94,11 +109,27 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
         ...(config.authMode === "express" ? { "x-goog-api-key": credential } : { authorization: `Bearer ${credential}` }) };
       stage = "upstream";
       const longDecode = prepared.outputLimit?.longDecode === true;
-      const url = buildNativeUrl(config.baseUrl, prepared.model, prepared.upstreamStream);
-      const post = body => fetchImpl(longDecode ? longDecodeUrl(url) : url, {
-        method: "POST", headers, body: JSON.stringify(body), signal, redirect: "error",
-      });
+      const sendRegion = createRegionSender({ locations, budget: { remaining: locations.length - 1 }, intervalMs: 1000, signal,
+        retryLast: false, canRetry: () => !response.headersSent,
+        onAttempt(attempt) {
+          if (!config.projectId || response.headersSent) return;
+          // Repeated continuation segments share a region. Keep its latest status in the bounded header.
+          if (attempts.at(-1)?.location === attempt.location) attempts.pop();
+          attempts.push(attempt);
+        } });
+      const post = body => {
+        const serialized = JSON.stringify(body);
+        return sendRegion(location => {
+          const base = location === config.location ? config.baseUrl : vertexBaseUrl(config.authMode, config.projectId, location);
+          const url = buildNativeUrl(base, prepared.model, prepared.upstreamStream);
+          return fetchImpl(longDecode ? longDecodeUrl(url) : url, {
+            method: "POST", headers, body: serialized, signal, redirect: "error",
+          });
+        }, Boolean(body.continuationToken || body.cachedContent));
+      };
       const upstream = await (longDecode ? fetchLongDecode(post, prepared.body, prepared.upstreamStream) : post(prepared.body));
+      writeRegionHeaders();
+      if (upstream.status === 429 && upstream.headers.has("retry-after")) response.setHeader("retry-after", upstream.headers.get("retry-after"));
       stage = "restoration";
       const restored = await restoreSillyTavernResponse(upstream, prepared, credential, upstream.ok ? await loadUsageEstimator() : undefined);
       // ST's global compression() would hold SSE chunks until the reply ends; no-transform opts out.
@@ -116,6 +147,7 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       response.end();
     } catch (error) {
       if (client.signal.aborted || response.destroyed) return;
+      writeRegionHeaders();
       const upstreamError = deadline.aborted ? null : error.upstreamError ?? googleErrorDetail(error.upstreamBody, credential);
       const status = deadline.aborted ? 504 : error.status ?? upstreamError?.code ?? (stage === "configuration" ? 400 : stage === "image" ? 503 : 502);
       const code = deadline.aborted ? "vertex_timeout" : error.protocolFailure || error.status ? error.code
@@ -128,7 +160,7 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
         imageMode !== "off" && request.body?.vertex_anti_truncation === "off" ? "Vertex 图片输入请求失败。" : "Vertex 抗截断请求失败。";
       const location = imageErrorLocation(error);
       const where = location.character ? ` ${location.character}，${location.param}。` : "";
-      const message = upstreamMessage(upstreamError, code === "invalid_transport_tool_name" ? error.message : detail + where);
+      const message = upstreamMessage(upstreamError, ["invalid_transport_tool_name", "unsupported_primary_location"].includes(code) ? error.message : detail + where);
       const locationInResponse = response.headersSent ? "流式错误" : `HTTP ${status}`;
       const payload = { error: { code, ...location, message: `${message} (${code}, ${locationInResponse})`, ...(upstreamError ? { upstreamError } : {}) } };
       if (response.headersSent) { response.write(sseData(payload)); response.end(); }

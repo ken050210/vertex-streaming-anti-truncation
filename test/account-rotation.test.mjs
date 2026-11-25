@@ -118,6 +118,29 @@ test("success clears failure count and cooldown expires without probes", () => {
   assert.equal(pool.take(new Set()).connection.id, "primary");
 });
 
+test("switching Vertex accounts starts at the new primary without replenishing the region retry budget", async t => {
+  const cfg = buildConfig({ authMode: "access-token", gatewayKey: "synthetic-rotation-gateway-key", projectId: "first", accessToken: "synthetic-first",
+    location: "eu", regionFallbackEnabled: true, fallbackLocations: ["us"], rateLimitRetryMax: 1, rateLimitRetryIntervalSeconds: 0,
+    models: [{ id: "fixture", upstreamModel: "gemini-4-neon", mode: "normal" }], accountRotationEnabled: true, accountFailureThreshold: 1,
+    accounts: [{ id: "second", name: "Second", authMode: "access-token", projectId: "next", location: "global",
+      regionFallbackEnabled: true, fallbackLocations: ["eu"], credential: "synthetic-second" }] });
+  const f = await fixture(t, async () => new Response(null, { status: 429 }), cfg);
+  assert.equal((await f.request()).status, 429);
+  assert.deepEqual(f.events[0].regionAttempts.map(a => [a.accountId, a.location, a.status]),
+    [["primary","eu",429],["primary","us",429],["second","global",429]]);
+  assert.equal(f.events[0].rateLimitRetries, 1);
+});
+
+test("a provider Retry-After longer than the request deadline prevents a cross-region submission", { timeout: 5000 }, async t => {
+  const cfg = buildConfig({ authMode: "access-token", gatewayKey: "synthetic-rotation-gateway-key", projectId: "first", accessToken: "synthetic-first",
+    location: "eu", regionFallbackEnabled: true, fallbackLocations: ["us"], rateLimitRetryMax: 1, rateLimitRetryIntervalSeconds: 0,
+    models: [{ id: "fixture", upstreamModel: "gemini-4-neon", mode: "normal" }] });
+  const f = await fixture(t, async () => new Response(null, { status: 429, headers: { "retry-after": new Date(Date.now()+60000).toUTCString() } }),
+    { ...cfg, timeoutMs: 250 });
+  assert.equal((await f.request()).status, 504);
+  assert.equal(f.calls.length, 1);
+});
+
 test("all failed accounts are tried at most once; subsequent requests fail without submissions", async t => {
   const f = await fixture(t, async () => Response.json({}, { status: 503 }));
   assert.equal((await f.request()).status, 503);

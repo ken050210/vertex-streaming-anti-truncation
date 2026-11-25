@@ -290,6 +290,53 @@ test("Carbon and Neon use the global Vertex URL for all three profiles on a regi
   }
 });
 
+test("regional 429 fallback filters model locations, uses REP hosts and resets to primary on the next request", async t => {
+  const cfg = buildConfig({ gatewayKey: key, authMode: "access-token", accessToken: token, projectId: "example-project",
+    location: "us", regionFallbackEnabled: true, fallbackLocations: ["asia-southeast1", "eu", "global"],
+    rateLimitRetryMax: 1, rateLimitRetryIntervalSeconds: 0 });
+  let busy = true;
+  const f = await fixture(t, () => {
+    if (busy) { busy = false; return new Response(null, { status: 429 }); }
+    return Response.json({ choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] });
+  }, cfg);
+  for (const location of ["eu", "us"]) {
+    const response = await f.post({ ...payload, model: "gemini-4-neon" });
+    assert.equal(response.status, 200); assert.equal(response.headers.get("x-vertex-location"), location);
+    assert.equal((await response.json()).choices[0].message.content, "OK");
+  }
+  assert.deepEqual(f.requests.map(r => r.url), ["us","eu","us"].map(r =>
+    `https://aiplatform.${r}.rep.googleapis.com/v1/projects/example-project/locations/${r}/endpoints/openapi/chat/completions`));
+  assert.equal(f.requests[0].body, f.requests[1].body);
+  assert.deepEqual(f.events[0].regionAttempts, [{ location: "us", status: 429 }, { location: "eu", status: 200 }]);
+  assert.equal(f.events[0].rateLimitRetries, 1);
+  for (const status of [400, 403, 404, 503]) {
+    const failure = await fixture(t, () => new Response(null, { status }), cfg);
+    assert.equal((await failure.post({ ...payload, model: "gemini-4-neon" })).status, status);
+    assert.equal(failure.requests.length, 1);
+  }
+  const invalid = await fixture(t, () => assert.fail("unsupported primary must not send to global"), { ...cfg, location: "asia-southeast1" });
+  const rejected = await invalid.post({ ...payload, model: "gemini-4-neon" });
+  assert.equal(rejected.status, 400); assert.equal((await rejected.json()).error.code, "unsupported_primary_location");
+});
+
+test("long-decode tokens stay in the region that accepted the first segment, including on a later 429", async t => {
+  const model = "gemini-4-argon";
+  const cfg = buildConfig({ gatewayKey: key, authMode: "access-token", accessToken: token, projectId: "example-project",
+    models: [{ id: model, upstreamModel: model, mode: "normal" }], geminiLongDecode: true, location: "eu",
+    regionFallbackEnabled: true, fallbackLocations: ["us","global"], rateLimitRetryMax: 2, rateLimitRetryIntervalSeconds: 0 });
+  let calls = 0;
+  const f = await fixture(t, () => {
+    calls++;
+    return calls === 2 ? Response.json({ candidates: [{ content: { parts: [{ text: "A" }] }, finishReason: "CONTINUATION", continuationToken: "token-1" }] })
+      : new Response("busy", { status: 429 });
+  }, cfg);
+  const response = await f.post({ ...payload, model, max_tokens: 100000, stream: false });
+  assert.equal(response.status, 429);
+  assert.deepEqual(f.requests.map(r => new URL(r.url).hostname), ["eu","us","us","us"].map(r => `aiplatform.${r}.rep.googleapis.com`));
+  assert.deepEqual(f.requests.map(r => r.json.continuationToken), [undefined, undefined, "token-1","token-1"]);
+  assert.ok(f.requests.every(r => r.url.includes("/v1beta1/")));
+});
+
 test("native HTTP text arrives before upstream completion, with matching metadata-only acceptance logs", { timeout: 5000 }, async t => {
   let controller;
   const f = await fixture(t, request => {

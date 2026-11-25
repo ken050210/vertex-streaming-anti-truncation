@@ -7,7 +7,8 @@ const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const distribution = path.join(root, "dist");
 const output = path.join(distribution, "sillytavern");
 const name = "vertex-anti-truncation";
-const frontend = ["manifest.json", "integrations/sillytavern/index.js", "integrations/sillytavern/shared.js", "integrations/sillytavern/meow-stream-preview.js", "integrations/sillytavern/optimized-input.js", "integrations/sillytavern/paygo.js", "integrations/sillytavern/style.css",
+const frontend = ["manifest.json", "public/region-editor.js", "public/region-editor.css", "src/vertex-locations.mjs",
+  "integrations/sillytavern/index.js", "integrations/sillytavern/shared.js", "integrations/sillytavern/meow-stream-preview.js", "integrations/sillytavern/optimized-input.js", "integrations/sillytavern/paygo.js", "integrations/sillytavern/style.css",
   ...["optimized-input", "anti-truncation", "completion-integrity", "completion-stream", "gemini4", "sillytavern", "tag-stop", "tag-stop-rule",
     "tauritavern", "soliumbra", "meow-compat", "transport-tool-name", "unicode-input", "unsupported-params", "vertex-native", "vertex-partial-args", "vertex-protocol", "vertex-schema", "vertex-text-stream", "wire"].map(name => "src/" + name + ".mjs")];
 const backend = ["package.json", "package-lock.json", "assets/fonts/NotoSansCJKsc-Regular.otf", "assets/fonts/OFL.txt", "assets/fonts/NotoColorEmoji.ttf", "assets/fonts/NotoEmoji-OFL.txt", "integrations/sillytavern/server.mjs", "integrations/sillytavern/shared.js", "integrations/sillytavern/optimized-input.js", "integrations/sillytavern/google-usage-estimate.mjs",

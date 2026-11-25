@@ -108,6 +108,27 @@ test("SillyTavern intercept is scoped, preserves CSRF/cancellation, and never re
   assert.equal(req.bodyUsed, false);
 });
 
+test("only direct full Standard requests restore a selected multi-region and forward fallback settings to a capable server", async () => {
+  let feature, ready = false;
+  const calls = [];
+  const wrapped = createFetchInterceptor(async (path, init) => { calls.push([path, JSON.parse(init.body)]); return new Response(null); },
+    { origin: "http://localhost", getMode: () => "buffered", getRegions: () => ({ preferred: "eu", regionFallbackEnabled: true, fallbackLocations: ["us"] }),
+      ensureBackend: async name => { feature = name; return ready; } });
+  const send = patch => wrapped(GENERATE_PATH, { method: "POST", body: JSON.stringify({ ...body, model: "gemini-4-neon", vertexai_region: "global",
+    vertexai_auth_mode: "full", vertexai_service_tier: "standard", ...patch }) });
+  await assert.rejects(send({}), /region_routing_not_supported/);
+  assert.equal(feature, "vertex-region-routing"); assert.equal(calls.length, 0);
+  ready = true;
+  await send({});
+  assert.equal(calls[0][0], PLUGIN_PATH + "/generate");
+  assert.equal(calls[0][1].vertexai_region, "eu"); assert.deepEqual(calls[0][1].vertex_fallback_locations, ["us"]);
+  for (const override of [{ vertexai_auth_mode: "express" }, { vertexai_service_tier: "priority" }, { reverse_proxy: "https://example.invalid" }]) {
+    await send(override);
+    assert.equal(calls.at(-1)[1].vertexai_region, "global");
+    assert.equal(calls.at(-1)[1].vertex_fallback_locations, undefined);
+  }
+});
+
 test("SillyTavern preserves prompt conversion and parameters without modifying the original", () => {
   const input = request();
   const original = structuredClone(input);

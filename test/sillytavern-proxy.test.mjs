@@ -31,6 +31,28 @@ async function read(reader, until = () => false, text = "") {
   return text;
 }
 
+test("direct plugin retries only the selected model's regional candidates and preserves the final rejection", async t => {
+  const calls = [], secret = serviceAccount();
+  const post = await tavern(t, createGenerateHandler(adapters(secret), { fetchImpl: async (url, options) => {
+    if (url === "https://oauth2.googleapis.com/token") return Response.json({ access_token: "synthetic", expires_in: 3600 });
+    calls.push({ url, body: options.body });
+    return Response.json({ error: { code: 429, message: "capacity", status: "RESOURCE_EXHAUSTED" } },
+      { status: 429, headers: { "retry-after": "0" } });
+  } }));
+  const input = { model: "gemini-4-neon", vertexai_region: "eu", vertex_fallback_locations: ["asia-southeast1","us"] };
+  const response = await post(input);
+  assert.equal(response.status, 429); assert.equal(response.headers.get("retry-after"), "0");
+  assert.match((await response.json()).error.message, /capacity/);
+  assert.equal(response.headers.get("x-vertex-region-attempts"), "eu=429,us=429");
+  assert.deepEqual(calls.map(c => c.url), ["eu","us"].map(r =>
+    `https://aiplatform.${r}.rep.googleapis.com/v1/projects/example-project/locations/${r}/publishers/google/models/gemini-4-neon:streamGenerateContent?alt=sse`));
+  assert.equal(calls[0].body, calls[1].body);
+  for (const fallback of [["global","us","eu"], ["us","us"], ["https://untrusted.invalid"]]) {
+    assert.equal((await post({ ...input, vertex_fallback_locations: fallback })).status, 400);
+  }
+  assert.equal(calls.length, 2);
+});
+
 // The part of SillyTavern's node-fetch this plugin relies on: https.request with no agent of its own, so
 // the global agent picks the route, and the reply body as a Node stream. The repository cannot depend on
 // node-fetch itself, since Git installs run npm ci in the plugin folder.

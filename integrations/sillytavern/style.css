@@ -1,3 +1,4 @@
+@import url("../../public/region-editor.css");
 #vertex_anti_truncation_settings {
   display: flex;
   flex-direction: column;
@@ -15,13 +16,16 @@
   overflow-wrap: anywhere;
 }
 #vertex_anti_truncation_settings summary span { margin-inline-start: .5em; font-size: .9em; }
+#vertex_anti_truncation_settings .region-editor { margin-block: 0; }
+#vertex_anti_truncation_settings .region-editor summary { font-weight: inherit; }
 #vertex_anti_truncation_settings .vertex-fields,
+#vertex_anti_truncation_settings .region-fields,
 #vertex_anti_truncation_settings .vertex-connection {
   display: grid;
   gap: 8px;
   min-inline-size: 0;
 }
-#vertex_anti_truncation_settings details > .vertex-fields {
+#vertex_anti_truncation_settings details > :is(.vertex-fields, .region-fields) {
   margin: 6px 0 8px;
   padding-inline-start: .8em;
   border-inline-start: 1px solid var(--SmartThemeBorderColor);

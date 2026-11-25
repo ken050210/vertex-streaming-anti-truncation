@@ -5,8 +5,9 @@ import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
 import { SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason, useBuiltinForMeow } from "../../src/transport-tool-name.mjs";
 import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
+import { isMultiRegion } from "../../src/vertex-locations.mjs";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.18.0";
+export const PLUGIN_VERSION = "0.19.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -21,7 +22,8 @@ export const NATURAL_STOP_USAGE_FEATURE = "tag-stop-natural-usage";
 export const TRANSPORT_NAME_FEATURE = "preset-transport-tool";
 const MEOW_FEATURE = "meow-compat";
 const SOLIUMBRA_FEATURE = "soliumbra-stream";
-export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, EXEMPT_TAG_FEATURE, NATURAL_STOP_USAGE_FEATURE, "image-input-convert", "tag-stop-usage", TRANSPORT_NAME_FEATURE, SOLIUMBRA_FEATURE, MEOW_FEATURE];
+const REGION_FEATURE = "vertex-region-routing";
+export const PLUGIN_FEATURES = [TOOLS_FEATURE, TUCAO_FEATURE, TAG_STOP_FEATURE, EXEMPT_TAG_FEATURE, NATURAL_STOP_USAGE_FEATURE, "image-input-convert", "tag-stop-usage", TRANSPORT_NAME_FEATURE, SOLIUMBRA_FEATURE, MEOW_FEATURE, REGION_FEATURE];
 export const MODES = ["off", "buffered", "streaming"];
 export const GENERATE_PATH = "/api/backends/chat-completions/generate";
 const PAYGO_GENERATE_PATH = "/api/plugins/vertex-paygo/native-gemini/generate";
@@ -31,10 +33,11 @@ export const BODY_LIMIT = 8 * 1024 * 1024;
 // ST displays error.message in its toast. Keep the same message in the panel,
 // including errors received after the first SSE byte, without teeing the reply.
 async function reportResponse(response, onStatus) {
+  const regions = response.headers.get("x-vertex-region-attempts");
   const report = (data, status) => {
     const detail = data?.error;
     const message = typeof detail === "string" ? detail : detail?.message ?? data?.message;
-    onStatus({ error: detail?.code ?? status ?? "upstream_stream_error", ...(status ? { status } : {}),
+    onStatus({ error: detail?.code ?? status ?? "upstream_stream_error", ...(status ? { status } : {}), ...(regions ? { regions } : {}),
       ...(typeof message === "string" && message ? { message } : {}),
       ...(detail?.character && detail.param ? { character: detail.character, param: detail.param } : {}) });
   };
@@ -119,7 +122,7 @@ export function bypassReason(body, mode, payGo = false, transportToolName = "", 
 
 // ST 1.19 exposes a settings event, but not a generation-URL override. Intercept
 // only its same-origin Vertex POST; preserve the original fetch for everything else.
-export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getTransportToolName = () => "", getMeowCompat = () => false, getTagStop = () => null, getWaitForStopUsage = () => false, getUserFloor = () => "", getRecentAiFloors = () => [], ensureBackend = async () => true, onStatus = () => {}, direct, payGoInstalled = false, getRequestHeaders = () => ({ "Content-Type": "application/json" }) }) {
+export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getRegions = () => ({}), getTransportToolName = () => "", getMeowCompat = () => false, getTagStop = () => null, getWaitForStopUsage = () => false, getUserFloor = () => "", getRecentAiFloors = () => [], ensureBackend = async () => true, onStatus = () => {}, direct, payGoInstalled = false, getRequestHeaders = () => ({ "Content-Type": "application/json" }) }) {
   return async function vertexFetch(input, init) {
     let url;
     try { url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, origin); }
@@ -177,6 +180,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const tagStop = !reason && !imageOnlyBypass && mode !== "off" ? getTagStop() : null;
     const waitForStopUsage = normalizeStopUsageWait(tagStop && getWaitForStopUsage());
     delete body.vertex_long_decode;
+    delete body.vertex_fallback_locations;
     delete body.vertex_transport_tool_name;
     delete body.vertex_meow_compat;
     delete body.vertex_wait_for_stop_usage;
@@ -217,13 +221,26 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
         throw error;
       }
     }
+    let regionFields = {}, needsRegionBackend = false;
+    if (!reason && !direct && body.vertexai_auth_mode === "full" && (body.vertexai_service_tier || "standard") === "standard") {
+      const regions = getRegions(body.model);
+      // Some Tavern versions force these models to global when composing the request.
+      // Restore an explicitly selected multi-region (or the configured primary when opting in).
+      if (body.vertexai_region === "global" && /^gemini-4-(carbon|neon|hydrogen)$/.test(body.model) && regions.preferred &&
+          (isMultiRegion(regions.preferred) || regions.regionFallbackEnabled)) regionFields.vertexai_region = regions.preferred;
+      if (regions.regionFallbackEnabled) regionFields.vertex_fallback_locations = regions.fallbackLocations;
+      needsRegionBackend = regions.regionFallbackEnabled || isMultiRegion(regionFields.vertexai_region ?? body.vertexai_region);
+    }
     let payload = reason ? null : JSON.stringify(prepared?.body ??
-      { ...body, vertex_anti_truncation: mode, ...(meowCompat ? { vertex_meow_compat: true } : {}), ...(transportToolName ? { vertex_transport_tool_name: transportToolName } : {}),
+      { ...body, ...regionFields, vertex_anti_truncation: mode, ...(meowCompat ? { vertex_meow_compat: true } : {}), ...(transportToolName ? { vertex_transport_tool_name: transportToolName } : {}),
         ...(tagStop ? { vertex_tag_stop: tagStop } : {}), ...(waitForStopUsage ? { vertex_wait_for_stop_usage: waitForStopUsage } : {}), ...(getLongDecode() === true ? { vertex_long_decode: true } : {}) });
     // The plugin rejects bodies over its limit; keep ST's own route for plain
     // anti-truncation. Image input never falls back to plaintext.
     if (payload && !imageEnabled && new TextEncoder().encode(payload).length > BODY_LIMIT) reason = "too-large";
     if (reason && !unicodeEnabled) { onStatus({ bypass: reason }); return originalFetch(input, init); }
+    if (!reason && needsRegionBackend && !await ensureBackend(REGION_FEATURE)) {
+      onStatus({ error: "region_routing_not_supported" }); throw new Error("region_routing_not_supported");
+    }
     const transportFeature = meowCompat ? MEOW_FEATURE : soliumbraSchema(transportToolName, body.tools) ? SOLIUMBRA_FEATURE : TRANSPORT_NAME_FEATURE;
     if (!reason && !direct && transportToolName && !await ensureBackend(transportFeature)) {
       const error = meowCompat ? "meow_compat_not_supported" : "transport_tool_name_not_supported";
@@ -255,9 +272,10 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const applied = Number(response.headers.get("x-gemini-output-tokens-applied"));
     const outputLimit = !reason && applied > 0 ? { requested: Number(response.headers.get("x-gemini-output-tokens-requested")), applied,
       longDecode: response.headers.get("x-gemini-long-decode") === "true" } : null;
-    if (response.ok && !reason && (imageEnabled || body.type === "continue" || outputLimit)) {
+    const regions = !direct && !reason && response.headers.get("x-vertex-region-attempts");
+    if (response.ok && !reason && (regions || imageEnabled || body.type === "continue" || outputLimit)) {
       // The plugin reports whether any text was converted; "no-text" was sent as plain text.
-      reportTransport({ mode,
+      reportTransport({ mode, ...(regions ? { regions } : {}),
         ...(imageOnlyBypass ? { bypass: imageOnlyBypass } : {}),
         ...(unicode ? { unicode } : {}),
         ...(outputLimit ? { outputLimit } : {}),

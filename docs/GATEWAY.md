@@ -96,7 +96,7 @@ NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7890 NO_PROXY=127.0.0.1,localh
 
 ## 添加多个模型及版本
 
-直连 Vertex 时，`gemini-4-carbon` 和 `gemini-4-neon` 始终使用 `global`。默认模型列表提供普通、非流式抗截断和流式抗截断三个入口。已有自定义模型列表的用户可勾选所需版本，点对应的「添加 Gemini 4 Carbon（global）」或「添加 Gemini 4 Neon（global）」并保存，然后在客户端刷新模型列表。
+Standard 直连的 Carbon、Neon 可选 `global`、`us`、`eu`。原先为其他模型填写城市区域且关闭换区的连接，调用 Carbon、Neon 时仍走 `global`。控制台的「添加 Gemini 4 Carbon」与「添加 Gemini 4 Neon」可将所选版本加入已有模型列表。
 
 1. 在“连接配置”填写凭据，再进入“模型与版本”点击 **拉取 Model List**。拉取使用当前表单与已保存的凭据，无需先启动网关。
 2. 搜索并勾选一个或多个上游模型，选择需要的版本，点击添加。目录不可用时，也可填写 `gemini-…`、`google/gemini-…` 或 `publishers/google/models/gemini-…`。
@@ -148,6 +148,12 @@ NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7890 NO_PROXY=127.0.0.1,localh
 ## HTTP 429 自动重试（独立网关）
 
 上游返回 HTTP 429 时，网关默认等待 5 秒，用同一账号重发原请求，最多重试 10 次。单账号最多提交 11 次，第一次成功即结束。流式和非流式生成都适用。
+
+在「连接配置」设置首选区域，展开「429 区域切换」，勾选开关并添加备用区域。主账号和附加账号各自保存顺序。Standard 的服务账号和 OAuth 令牌支持换区，默认关闭。例如首选 `us`，备用 `eu`、`global`，则连续收到 HTTP 429 时依次使用这三个端点，剩余额度留在最后一个区域。每次新请求从当次选中账号的首选区域开始。Google 指定更长的 `Retry-After` 时按该值等待。
+
+开启换区后，已收录模型的首选区域须受支持，不适用的备用区域自动跳过。新模型按填写顺序提交，由 Google 判定。Argon 还支持 `asia-southeast1`、`europe-west2`。各模型公布的区域见 [Google 模型区域表](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations)。分段续写令牌和显式缓存绑定当前区域。日志展示各次区域与 HTTP 状态，响应头 `X-Vertex-Location` 标明请求端点的 location。
+
+CLI 使用 `VERTEX_REGION_FALLBACK=true` 和逗号分隔的 `VERTEX_FALLBACK_LOCATIONS=eu,global`；账号 JSON 使用 `regionFallbackEnabled` 和字符串数组 `fallbackLocations`。
 
 在「连接配置 → 本地网关」调整最大重试次数（0–50）和间隔（0–120 秒），保存后对新请求生效。次数设为 0 可关闭。CLI 对应 `RATE_LIMIT_RETRY_MAX` 和 `RATE_LIMIT_RETRY_INTERVAL_SECONDS`。等待计入请求总超时和单账号超时，客户端断开会取消等待。已开始输出的回复不会重放。
 

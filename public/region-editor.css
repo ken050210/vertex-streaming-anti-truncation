@@ -1,0 +1,13 @@
+.region-editor { margin-block: .65em; }
+.region-editor summary { cursor: pointer; font-weight: 600; }
+.region-editor .region-summary { margin-inline-start: .5em; font-size: .85em; font-weight: normal; }
+.region-editor .region-fields, .region-editor .region-order { display: grid; gap: .5em; min-width: 0; }
+.region-editor .region-fields { border-inline-start: 2px solid var(--line, var(--SmartThemeBorderColor)); padding-inline-start: .8em; margin-top: .65em; }
+.region-editor .checkbox_label, .region-editor .region-add { display: flex; align-items: center; gap: .5em; }
+.region-editor .region-add { flex-wrap: wrap; }
+.region-editor .region-add select { width: auto; flex: 1; min-width: min(12em, 100%); }
+.region-editor ol { margin: 0; padding: 0; }
+.region-editor li { display: flex; align-items: center; gap: .4em; margin-bottom: .35em; }
+.region-editor li span { flex: 1; min-width: 0; font-family: var(--font-mono, monospace); overflow-wrap: anywhere; }
+.region-editor small { color: var(--ink-2, inherit); overflow-wrap: anywhere; }
+.region-editor [hidden] { display: none !important; }

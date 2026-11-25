@@ -1,4 +1,5 @@
 import { customUpstreamModel, normalizeUpstreamModel } from "./model-profiles.mjs";
+import { vertexHost } from "./vertex-locations.mjs";
 import { waitWithSignal } from "./abort.mjs";
 
 class DiscoveryError extends Error {
@@ -47,7 +48,7 @@ export async function discoverModels(config, { fetchImpl = fetch, signal } = {})
   const deadline = AbortSignal.timeout(20000);
   const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
   if (config.authMode === "custom") return discoverCustomModels(config, fetchImpl, requestSignal);
-  const host = config.location === "global" ? "aiplatform.googleapis.com" : `${config.location}-aiplatform.googleapis.com`;
+  const host = vertexHost(config.location);
   const base = `https://${host}/v1beta1/publishers/google/models`;
   let credential;
   try { credential = await waitWithSignal(() => config.accessToken(), requestSignal); }

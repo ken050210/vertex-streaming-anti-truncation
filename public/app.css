@@ -1,3 +1,4 @@
+@import url("./region-editor.css");
 :root {
   color-scheme: light; --paper:#edefea; --panel:#fff; --panel-2:#f5f7f3; --ink:#131c1b; --ink-2:#56635f; --ink-3:#64736c;
   --line:#d6dcd7; --line-2:#e6eae5; --field-line:#808a85; --knob:#fff; --signal:#0e6c70; --signal-ink:#fff; --signal-soft:#ddefef;

@@ -8,7 +8,8 @@ import { createGatewayServer, upstreamDispatcher } from "./gateway.mjs";
 import { discoverModels } from "./model-discovery.mjs";
 import { loadNetworkConfig, consoleRequestAccess } from "./network-config.mjs";
 
-const assets = new Map([["/", ["index.html", "text/html"]], ["/app.css", ["app.css", "text/css"]], ["/app.js", ["app.js", "text/javascript"]], ["/favicon.svg", ["favicon.svg", "image/svg+xml"]]]);
+const assets = new Map([["/", ["index.html", "text/html"]], ["/app.css", ["app.css", "text/css"]], ["/app.js", ["app.js", "text/javascript"]],
+  ["/region-editor.js", ["region-editor.js", "text/javascript"]], ["/region-editor.css", ["region-editor.css", "text/css"]], ["/favicon.svg", ["favicon.svg", "image/svg+xml"]]]);
 const equal = (a, b) => typeof a === "string" && typeof b === "string" && a.length > 0 && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const json = (res, status, body) => { res.writeHead(status, { "content-type": "application/json; charset=utf-8" }); res.end(JSON.stringify(body)); };
 async function readJson(req) {

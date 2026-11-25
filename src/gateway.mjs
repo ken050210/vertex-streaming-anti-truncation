@@ -7,7 +7,6 @@ import http from "node:http";
 import packageInfo from "../package.json" with { type: "json" };
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
-import { setTimeout as delay } from "node:timers/promises";
 import { prepareAntiTruncation, restoreAntiTruncationCompletion, wrapAntiTruncationStream, antiTruncationLogFields } from "./anti-truncation.mjs";
 import { buildNativeTextBody, buildNativeUrl, finalStopUsage, nativeRequestBody, supportsNativeRequest, translateUsage } from "./vertex-native.mjs";
 import { estimateCostUsd, usageTokens } from "./pricing.mjs";
@@ -16,9 +15,11 @@ import { nativeSoliumbra } from "./soliumbra.mjs";
 import { translateNativeCompletion, wrapNativeStream } from "./vertex-protocol.mjs";
 import { geminiModelKey, modelProfiles } from "./model-profiles.mjs";
 import { DEFAULT_SETTINGS, vertexBaseUrl } from "./config.mjs";
+import { requestLocations } from "./vertex-locations.mjs";
+import { createRegionSender } from "./region-retry.mjs";
 import { completionStream, aliasStream } from "./completion-stream.mjs";
 import { convertGeminiPrefill, fetchWithGeminiRecovery, compatibilityLogFields } from "./gemini-compat.mjs";
-import { capGemini4Output, isGemini4Argon, isGemini4Carbon, isGemini4Neon, outputLimitHeaders, prepareGeminiThinkingRequest, validateGemini4Connection } from "./gemini4.mjs";
+import { capGemini4Output, isGemini4Argon, outputLimitHeaders, prepareGeminiThinkingRequest, validateGemini4Connection } from "./gemini4.mjs";
 import { fetchLongDecode, longDecodeUrl } from "./vertex-long-decode.mjs";
 import { documentedUnsupported, dropParams } from "./unsupported-params.mjs";
 import { checkCompatibleRejection, googleErrorDetail, readUpstreamError, sseData, trafficType, upstreamErrorLogFields, upstreamMessage } from "./wire.mjs";
@@ -209,7 +210,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
     // One 429 budget across accounts, prompt recovery and long-decode segments.
     const retryMax = request.headers["x-gateway-retry-429"] === "off" ? 0 : snapshot.rateLimitRetryMax ?? DEFAULT_SETTINGS.rateLimitRetryMax;
     const retryDelayMs = (snapshot.rateLimitRetryIntervalSeconds ?? DEFAULT_SETTINGS.rateLimitRetryIntervalSeconds) * 1000;
-    let rateLimitRetries = 0;
+    const retryBudget = { remaining: retryMax }, regionAttempts = [];
     const pool = poolFor(snapshot), tried = new Set(), accountAttempts = [];
     try {
       let payload = await readRequest(request, config.bodyLimitBytes, signal);
@@ -223,7 +224,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       while (true) {
         const attemptStarted = Date.now();
         const attempt = new AbortController();
-        let timedOut = false, submitted = false;
+        let timedOut = false, submitted = false, continuing = false;
         const timer = pool ? setTimeout(() => { timedOut = true; attempt.abort(); }, snapshot.accountRotation.timeoutMs) : null;
         config = entry ? { ...snapshot, ...entry.connection } : snapshot;
         signal = pool ? AbortSignal.any([requestSignal, attempt.signal]) : requestSignal;
@@ -231,7 +232,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         try {
           validateGemini4Connection(config, route.upstreamModel);
           const custom = config.authMode === "custom";
-          location = !custom && (isGemini4Carbon(route.upstreamModel) || isGemini4Neon(route.upstreamModel)) ? "global" : config.location;
+          const locations = requestLocations(config, route.upstreamModel);
           // A custom upstream gets its own model name verbatim. Gemini-specific handling follows the
           // model that name refers to, and is skipped when none is recognizable.
           const modelKey = custom ? geminiModelKey(route.upstreamModel) : route.upstreamModel;
@@ -296,9 +297,6 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           audit = { transport: transport.reason, restored: transport.toolName ? null : false,
             finishReason: null, streamDone: stream ? false : null };
           response.setHeader("x-anti-truncation-transport", transport.reason);
-          const baseUrl = location === config.location ? config.baseUrl : vertexBaseUrl(config.authMode, config.projectId, location);
-          let url = native ? buildNativeUrl(baseUrl, route.upstreamModel, upstreamStream) : baseUrl + "/chat/completions";
-          if (longDecode) url = longDecodeUrl(url);
           const expectation = native ? structuredOutputExpectation(payload) : null;
           const requestBody = value => {
             const body = transport.nativeStreaming ? buildNativeTextBody(value, transport)
@@ -323,22 +321,28 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           // with a cause. A TypeError without one comes from building the request, where the only
           // variable header is the credential (for example a key with non-Latin-1 characters).
           // Errors while reading a body that has started keep their protocol handling.
-          const post = async body => {
+          const sendRegion = createRegionSender({ locations, budget: retryBudget, intervalMs: retryDelayMs, signal,
+            retryLast: true, canRetry: () => !response.headersSent,
+            onAttempt: attempt => {
+              location = attempt.location;
+              if (!location || !config.projectId) return; // Custom and projectless Express have no explicit Vertex location.
+              if (entry) attempt.accountId = entry.connection.id;
+              regionAttempts.push(attempt);
+              if (!response.headersSent) response.setHeader("x-vertex-location", location);
+            } });
+          const post = body => {
+            continuing = Boolean(body.continuationToken);
             const options = { method: "POST", redirect: "error", signal, dispatcher,
               headers: { ...authentication, ...config.tierHeaders, "content-type": "application/json", accept: upstreamStream ? "text/event-stream" : "application/json" },
               body: JSON.stringify(body) };
-            for (;;) {
-              signal.throwIfAborted();
+            return sendRegion(region => {
+              const baseUrl = region === config.location ? config.baseUrl : vertexBaseUrl(config.authMode, config.projectId, region);
+              const url = native ? buildNativeUrl(baseUrl, route.upstreamModel, upstreamStream) : baseUrl + "/chat/completions";
               if (longDecode) outputLimit.requests = (outputLimit.requests ?? 0) + 1;
-              const reply = await fetchImpl(url, options).catch(error => {
+              return fetchImpl(longDecode ? longDecodeUrl(url) : url, options).catch(error => {
                 throw error instanceof TypeError ? new Problem(502, error.cause ? "upstream_unreachable" : "credential_error") : error;
               });
-              if (reply.status !== 429 || rateLimitRetries >= retryMax || response.headersSent) return reply;
-              // Discard only intermediate responses. Preserve the last status, headers and diagnostic body.
-              reply.body?.cancel().catch(() => {});
-              await delay(retryDelayMs, undefined, { signal });
-              rateLimitRetries++;
-            }
+            }, continuing || Boolean(body.cachedContent || body.extra_body?.google?.cached_content));
           };
           let upstream = await fetchWithGeminiRecovery(value => {
             const body = value === upstreamPayload ? firstBody : requestBody(value);
@@ -351,7 +355,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
           if (!upstream.ok) {
             if (upstream.status === 401 && !pool) rejectedCredentials.add(config);
             const retryAfter = upstream.headers.get("retry-after");
-            if (retryAfter && /^\d{1,6}$/.test(retryAfter)) response.setHeader("retry-after", retryAfter);
+            if (retryAfter && (/^\d{1,10}$/.test(retryAfter) || Number.isFinite(Date.parse(retryAfter)))) response.setHeader("retry-after", retryAfter);
             const prompt = Boolean(upstream.routerPromptSubmissionError);
             const detail = await readUpstreamError(upstream, credential);
             throw Object.assign(new Problem(upstream.status, prompt ? "prompt_submission_failed" : "upstream_http_error"), { upstreamError: detail });
@@ -427,7 +431,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
               code: error.code || "upstream_protocol_error", latencyMs: Date.now() - attemptStarted });
             if (accountFailure) switchAccount = pool.fail(entry);
           }
-          const next = switchAccount && !response.headersSent && !response.destroyed ? pool.take(tried) : null;
+          const next = switchAccount && !continuing && !response.headersSent && !response.destroyed ? pool.take(tried) : null;
           if (!next) throw error;
           entry = next;
           // Headers and inspection state describe only the attempt returned to the client.
@@ -453,7 +457,7 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
       if (status !== 499 && !deadline.aborted) upstreamError = error.upstreamError ?? (error.upstreamBody ? googleErrorDetail(error.upstreamBody, credential) : null);
       integrity = { ...integrity, outcome: status === 499 ? "cancelled" :
         ["empty", "incomplete"].includes(integrity?.outcome) ? integrity.outcome : "error" };
-      const detail = code === "invalid_transport_tool_name" ? error.message : code;
+      const detail = ["invalid_transport_tool_name", "unsupported_primary_location"].includes(code) ? error.message : code;
       const payload = { error: { code, message: upstreamMessage(upstreamError, detail), type: "gateway_error", requestId,
         ...integrityLogFields(integrity), ...(error.status === 400 && error.param ? { param: error.param } : {}),
         ...(upstreamError ? { upstreamError } : {}) } };
@@ -476,7 +480,9 @@ export function createGatewayServer(configSource, { fetchImpl = fetch, logger = 
         ...upstreamErrorLogFields(upstreamError), ...(droppedParams.length ? { droppedParams } : {}), ...(outputLimit ? { outputLimit } : {}), ...(code ? { code } : {}),
         ...(tokens ? { usage: tokens, estimatedCostUsd: cost } : {}) };
       if (pool) event.accountAttempts = accountAttempts;
-      if (rateLimitRetries) event.rateLimitRetries = rateLimitRetries;
+      if (regionAttempts.length) event.regionAttempts = regionAttempts;
+      if (regionAttempts.length && config.projectId) event.location = location;
+      if (retryBudget.remaining !== retryMax) event.rateLimitRetries = retryMax - retryBudget.remaining;
       events.push(event);
       if (events.length > 200) events.shift();
       logger(event);
