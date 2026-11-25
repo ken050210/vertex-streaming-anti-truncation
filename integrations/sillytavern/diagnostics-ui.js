@@ -11,6 +11,8 @@ const timings = obj => Object.entries(obj ?? {}).map(([key, value]) => (stages[k
 const formatCodes = values => values?.map(code => (systemCodes[code] ?? "") + " " + code).join("、").trim();
 function headline(row) {
   const server = row.server;
+  if (!server && row.code === "http_error" && row.contentType === "HTML") return "收到 HTML 错误页 · HTTP " + row.httpStatus;
+  if (row.state === "cancelled") return "酒馆已取消生成";
   const cause = formatCodes(server?.network) || formatCodes(row.network) || server?.google?.reason || server?.google?.status ||
     row.google?.reason || row.google?.status || server?.code || row.code || states[server?.state ?? row.state];
   return [stages[server?.stage] ?? paths[row.route], cause, row.httpStatus >= 400 ? "HTTP " + row.httpStatus : ""].filter(Boolean).join(" · ");
@@ -81,6 +83,9 @@ export function createDiagnostics({ context, path, version, direct, entryPoints 
   let panel, list, output, include, provider, note, alerts, lookup, selectedId, ready = true;
   function keep(row) {
     rows.set(row.id, row);
+    saveHistory();
+  }
+  function saveHistory() {
     const records = [...rows.values()].sort((a, b) => b.at.localeCompare(a.at));
     const errors = records.filter(r => r.state !== "ok").slice(0, HISTORY_LIMIT);
     const lastOK = records.find(r => r.state === "ok");
@@ -122,13 +127,16 @@ export function createDiagnostics({ context, path, version, direct, entryPoints 
         const response = await fetch(path + "/diagnostics", { cache: "no-store", headers: context.getRequestHeaders(), signal: AbortSignal.timeout(2000) });
         if (!response.ok) throw Error();
         const data = await response.json();
+        let reconciled = false;
         for (const server of data.records) {
           const row = active.get(server.id) ?? rows.get(server.id);
           if (row) {
+            if (rows.has(row.id) && server.state !== "pending" && row.server?.state !== server.state) reconciled = true;
             if (server.state !== "pending" || !row.server || row.server.state === "pending") row.server = server;
           }
           else if (server.state !== "pending") rows.set(server.id, { id: server.id, at: server.at, state: server.state, route: "plugin", server });
         }
+        if (reconciled) saveHistory();
         render();
         if (data.storage && panel?.open) note.textContent = "服务端日志文件暂时无法读取，已显示可用记录。";
       } catch { if (panel?.open) note.textContent = "服务端记录暂时不可用，已显示本机记录。"; }
@@ -139,7 +147,7 @@ export function createDiagnostics({ context, path, version, direct, entryPoints 
   async function copy(row, button, extra = false) {
     if (!row) return;
     const text = () => formatDiagnostic(row) + (extra && previews.get(row.id) ? "\nGoogle 说明　" + previews.get(row.id) : "");
-    const pending = row.route === "plugin" && (!row.server || row.state === "pending") ? loadServer() : null;
+    const pending = row.route === "plugin" && (!row.server || row.server.state === "pending" || row.state === "pending") ? loadServer() : null;
     try {
       if (pending && navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
         await navigator.clipboard.write([new ClipboardItem({ "text/plain": pending.then(() => new Blob([text()], { type: "text/plain" })) })]);
