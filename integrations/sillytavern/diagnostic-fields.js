@@ -6,6 +6,12 @@ export const HISTORY_LIMIT = 20;
 export const safeCode = value => typeof value === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(value) ? value : undefined;
 export const safeModel = value => typeof value === "string" && /^gemini-[a-z0-9][a-z0-9.-]{0,63}$/.test(value) ? value : undefined;
 export const safeVersion = value => typeof value === "string" && /^\d[\w.+-]{0,39}$/.test(value) ? value : undefined;
+const pluginUrl = new URL("../../", import.meta.url).href;
+export function pluginFrames(error) {
+  return String(error?.stack ?? "").split("\n").filter(line => (/^\s*at |@(?:https?|file):/.test(line)) && line.includes(pluginUrl))
+    .map(line => line.split(pluginUrl).at(-1).match(/^((?:src|integrations\/sillytavern)\/[\w-]+\.(?:mjs|js))(?::|[?#][^ ]*?:)(\d+:\d+)\)?$/))
+    .filter(Boolean).slice(0, 4).map(match => match[1] + ":" + match[2]);
+}
 export function deviceEnvironment(ua) {
   const browser = ua.match(/(?:EdgA?|Firefox|FxiOS|CriOS)\/[\d.]+/)?.[0] ??
     ua.match(/Chrome\/[\d.]+/)?.[0] ?? ua.match(/Version\/[\d.]+(?=.*Safari)/)?.[0]?.replace("Version", "Safari");

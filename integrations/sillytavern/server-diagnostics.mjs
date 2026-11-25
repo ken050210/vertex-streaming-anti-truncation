@@ -2,7 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import https from "node:https";
-import { DIAGNOSTIC_HEADER, HISTORY_LIMIT, networkCodes, readClientHeader, requestFields, safeCode } from "./diagnostic-fields.js";
+import { DIAGNOSTIC_HEADER, HISTORY_LIMIT, networkCodes, pluginFrames, readClientHeader, requestFields, safeCode } from "./diagnostic-fields.js";
 import { enumToken } from "../../src/wire.mjs";
 
 const filename = "vertex-anti-truncation-errors.json";
@@ -10,7 +10,6 @@ const writes = new Map();
 const live = new Map();
 const recent = new Map();
 const uuid = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i;
-const pluginUrl = new URL("../../", import.meta.url).href;
 const configReasons = new Set(["Invalid VERTEX_FALLBACK_LOCATIONS", "Invalid service tier", "Invalid VERTEX_PROJECT_ID", "Invalid VERTEX_LOCATION",
   "Invalid VERTEX_API_KEY", "Express, Flex and Priority require the global location", "Service account must contain a valid RSA private key",
   "vertex service account secret is not valid JSON", "vertex service account secret must contain type, client_email, private_key and an HTTPS token_uri",
@@ -71,8 +70,7 @@ export function startDiagnostic(request, version, stage = "request") {
       if (error) {
         record.network = networkCodes(error);
         record.exception = ["TypeError", "Error", "FetchError", "AbortError", "TimeoutError", "SyntaxError", "AggregateError"].includes(error.name) ? error.name : "Error";
-        record.frames = String(error.stack ?? "").split("\n").filter(line => /^\s*at /.test(line) && line.includes(pluginUrl))
-          .map(line => line.split(pluginUrl).at(-1).match(/^((?:src|integrations\/sillytavern)\/[\w-]+\.(?:mjs|js):\d+:\d+)\)?$/)?.[1]).filter(Boolean).slice(0, 4);
+        record.frames = pluginFrames(error);
         if (configReasons.has(error.message)) record.configReason = error.message;
         if (error.oauthStatus) record.oauthStatus = error.oauthStatus;
         if (error.oauthTimeoutMs) record.oauthTimeoutMs = error.oauthTimeoutMs;

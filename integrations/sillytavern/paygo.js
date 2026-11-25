@@ -41,6 +41,7 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
   if (new TextEncoder().encode(payload).byteLength > BODY_LIMIT) throw new Error("request_too_large");
   signal?.throwIfAborted();
   const reply = await originalFetch(input, { ...init, body: payload });
+  if (trace) Object.assign(trace.record, { hostStatus: reply.status, hostHeadersMs: trace.elapsed() });
   if (!reply.ok) return reply;
   const live = mode === "streaming" && body.stream === true;
   const transport = body.stream && (live || mode === "off") ? "paygo-streaming" : "buffered";

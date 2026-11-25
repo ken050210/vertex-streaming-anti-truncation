@@ -291,7 +291,10 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
         response = await originalFetch(reason || direct ? input : `${PLUGIN_PATH}/generate`, { ...init, body: payload });
       }
     } catch (error) { onStatus({ error: "network" }); throw error; }
-    if (direct && !reason) response = await direct.restore(response, prepared, init?.signal ?? (input instanceof Request ? input.signal : undefined));
+    if (direct && !reason) {
+      if (trace) Object.assign(trace.record, { hostStatus: response.status, hostHeadersMs: trace.elapsed() });
+      response = await direct.restore(response, prepared, init?.signal ?? (input instanceof Request ? input.signal : undefined));
+    }
     const applied = Number(response.headers.get("x-gemini-output-tokens-applied"));
     const outputLimit = !reason && applied > 0 ? { requested: Number(response.headers.get("x-gemini-output-tokens-requested")), applied,
       longDecode: response.headers.get("x-gemini-long-decode") === "true" } : null;

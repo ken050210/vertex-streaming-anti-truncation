@@ -5,12 +5,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { readDiagnostics, startDiagnostic } from "../integrations/sillytavern/server-diagnostics.mjs";
-import { DIAGNOSTIC_HEADER } from "../integrations/sillytavern/diagnostic-fields.js";
+import { CLIENT_HEADER, DIAGNOSTIC_HEADER } from "../integrations/sillytavern/diagnostic-fields.js";
 import { formatDiagnostic } from "../integrations/sillytavern/diagnostics-ui.js";
 import { observeDelivery } from "../integrations/sillytavern/diagnostic-stream.js";
+import { createFetchInterceptor, GENERATE_PATH } from "../integrations/sillytavern/shared.js";
+import { prepareTauriTavernRequest, restoreTauriTavernResponse } from "../src/tauritavern.mjs";
 import { sseData } from "../src/wire.mjs";
 
-const request = root => ({ user: { directories: { root } }, headers: { [DIAGNOSTIC_HEADER]: randomUUID() },
+const request = root => ({ user: { directories: { root } }, headers: { [DIAGNOSTIC_HEADER]: randomUUID(),
+  [CLIENT_HEADER]: "0.20.0 1234abcd 1.19.0  off", "user-agent": "Agent/secret-agent-name (Android 14) Chrome/120.0.0.1" },
   body: { messages: [{ role: "user", content: "private chat marker" }], model: "gemini-3.7-flash", proxy_password: "private ticket" } });
 const response = { headersSent: false, setHeader() {}, json: value => value, sendStatus: value => value };
 test("concurrent failures survive reload in the right account; disk failures retain a searchable safe report", async t => {
@@ -27,7 +30,8 @@ test("concurrent failures survive reload in the right account; disk failures ret
   assert.equal(persisted.length, 20);
   assert.equal(new Set(persisted.map(r => r.id)).size, 20);
   assert.ok(persisted.every(r => r.network[0] === "ECONNRESET" && r.google.status === "UNAVAILABLE"));
-  assert.doesNotMatch(JSON.stringify(persisted), /private |user:pass|http:|proxy_password/);
+  assert.ok(persisted.every(r => r.client.tavern === "1.19.0" && r.client.os === "Android 14"));
+  assert.doesNotMatch(JSON.stringify(persisted), /private |user:pass|http:|proxy_password|secret-agent-name/);
   assert.deepEqual((await readDiagnostics(other, response)).records, []);
   assert.equal(await readDiagnostics({}, response), 401);
   const restarted = await import("../integrations/sillytavern/server-diagnostics.mjs?restart");
@@ -70,6 +74,11 @@ test("a bare EOF after visible output is distinguishable from STOP and from user
   await observeDelivery(new Response(upstream), trace, () => {}).body.cancel();
   assert.equal(trace.record.state, "cancelled");
   assert.equal(cancelled, true);
+  const ended = browserTrace();
+  const complete = observeDelivery(new Response(sseData("[DONE]"), {headers:{"content-type":"text/event-stream"}}), ended, () => {}).body.getReader();
+  await complete.read();
+  await complete.cancel();
+  assert.equal(ended.record.state, "ok");
 });
 test("an HTML gateway rejection and a socket read failure preserve their distinct browser evidence", async () => {
   const html = browserTrace();
@@ -80,4 +89,22 @@ test("an HTML gateway rejection and a socket read failure preserve their distinc
   const upstream = new ReadableStream({ pull(controller) { controller.error(new TypeError("socket error")); } });
   await assert.rejects(observeDelivery(new Response(upstream), broken, () => {}).text(), /socket error/);
   assert.equal(broken.record.code, "response_read_failed");
+});
+
+test("Tauri and PayGo report the host HTTP failure and keep plugin diagnostic headers out of their requests", async () => {
+  for (const route of ["tauri", "paygo"]) {
+    const trace = browserTrace();
+    const fetch = createFetchInterceptor(async (_url, init) => {
+      const headers = new Headers(init.headers);
+      assert.equal(headers.has(CLIENT_HEADER), false);
+      assert.equal(headers.has(DIAGNOSTIC_HEADER), false);
+      return Response.json({ error: { status: "PERMISSION_DENIED", message: "private host message" } }, {status:403});
+    }, { origin:"http://localhost", getMode:() => "streaming", startReport:() => trace,
+      direct:route === "tauri" ? {prepare:prepareTauriTavernRequest,restore:restoreTauriTavernResponse} : null, payGoInstalled:route === "paygo" });
+    const reply = await fetch(GENERATE_PATH,{method:"POST",body:JSON.stringify({ ...request().body, chat_completion_source:"vertexai", stream:true })});
+    assert.equal((await reply.json()).error.status, "PERMISSION_DENIED");
+    assert.equal(trace.record.route, route); assert.equal(trace.record.hostStatus, 403);
+    assert.equal(trace.record.google.status, "PERMISSION_DENIED");
+    assert.doesNotMatch(formatDiagnostic(trace.record), /private host message/);
+  }
 });

@@ -72,12 +72,17 @@ export function observeDelivery(response, trace, report) {
         } else if (json !== null) {
           // Large completions still stream through unchanged. Only a small unary
           // envelope is inspected for finish metadata, and never persisted.
-          json = row.bytesReceived <= 512 * 1024 ? json + decoder.decode(value, { stream: true }) : null;
+          if (row.bytesReceived <= 512 * 1024) json += decoder.decode(value, { stream: true });
+          else { json = null; row.observerLimit = true; }
         }
         controller.enqueue(value);
       } catch (error) { trace.thrown(error, "response_read_failed"); controller.error(error); }
     },
-    cancel(reason) { trace.finish("cancelled", "reader_cancelled"); return reader.cancel(reason); },
+    cancel(reason) {
+      if (row.doneMarker) trace.finish("ok");
+      else trace.finish("cancelled", "reader_cancelled");
+      return reader.cancel(reason);
+    },
   }, { highWaterMark: 0 });
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }

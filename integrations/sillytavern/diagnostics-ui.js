@@ -1,4 +1,4 @@
-import { deviceEnvironment, HISTORY_LIMIT, networkCodes, requestFields, safeCode, safeVersion, systemCodes } from "./diagnostic-fields.js";
+import { deviceEnvironment, HISTORY_LIMIT, networkCodes, pluginFrames, requestFields, safeCode, safeVersion, systemCodes } from "./diagnostic-fields.js";
 import { validVertexLocation } from "../../src/vertex-locations.mjs";
 
 const stages = { request: "校验请求", image: "图片转换", configuration: "读取连接配置", authentication: "获取 Google 凭据",
@@ -34,6 +34,7 @@ export function formatDiagnostic(row) {
       ["转码", row.encoding ?? s?.client?.encoding], ["转图", row.imageMode ?? s?.imageMode], ["正文工具", s?.textTool ?? row.textTool], ["分段续写", s?.outputLimit?.longDecode ?? row.longDecode],
       ["标签截停次数", s?.tagStop ? s.stopCount : row.stopCount], ["截停等待", s?.waitForUsage ?? row.waitForUsage]])],
     ["浏览器", fields([["状态", states[row.state]], ["HTTP", row.httpStatus], ["内容类型", row.contentType],
+      ["宿主后端 HTTP", row.hostStatus], ["宿主响应头毫秒", row.hostHeadersMs],
       ["耗时毫秒", row.elapsedMs ?? (row.state === "pending" ? Math.max(0, Date.now() - Date.parse(row.at)) : undefined)],
       ["响应头毫秒", row.headersMs], ["首段正文毫秒", row.firstTextMs], ["最近数据毫秒", row.lastDataMs],
       ["收到字节", row.bytesReceived], ["结束标记", row.doneMarker], ["结束原因", row.finishReason], ["标签截停", row.tagStopped],
@@ -147,7 +148,7 @@ export function createDiagnostics({ context, path, version, direct, entryPoints 
     } catch {
       // Keep the fallback in the visible chat bar even if the connections drawer is closed.
       let area = button.parentElement.querySelector("textarea");
-      if (!area) { area = document.createElement("textarea"); area.readOnly = true; area.rows = 5; button.parentElement.append(area); }
+      if (!area) { area = document.createElement("textarea"); area.readOnly = true; area.rows = 5; area.setAttribute("aria-label", "手动复制错误报告"); button.parentElement.append(area); }
       area.hidden = false; area.value = text(); area.focus(); area.select(); button.textContent = "手动复制";
     }
   }
@@ -177,7 +178,11 @@ export function createDiagnostics({ context, path, version, direct, entryPoints 
     active.set(id, row);
     render();
     const elapsed = () => Math.round(performance.now() - began);
-    const abort = () => finish("cancelled", "request_aborted");
+    const abort = () => {
+      if (row.doneMarker) return finish("ok");
+      if (signal.reason?.name === "TimeoutError") return finish("error", "browser_timeout");
+      finish("cancelled", signal.reason === "Clicked stop button" ? "tavern_stop" : "request_aborted");
+    };
     function finish(state, code) {
       if (row.state !== "pending") return;
       signal?.removeEventListener("abort", abort);
@@ -189,8 +194,7 @@ export function createDiagnostics({ context, path, version, direct, entryPoints 
     return { record: row, elapsed, finish, preview(text) { previews.set(id, text); },
       thrown(error, fallback) {
         row.network = networkCodes(error);
-        row.frames = [...String(error.stack ?? "").matchAll(/\/(integrations\/sillytavern|src)\/([\w-]+\.(?:js|mjs):\d+:\d+)/g)]
-          .slice(0, 4).map(m => m[1] + "/" + m[2]);
+        row.frames = pluginFrames(error);
         const code = safeCode(error.code) ?? (/^(?:plugin_not_ready|input_encoding_conflict|(?:paygo|image_input|region_routing|tag_stop|transport_tool_name|meow_compat|natural_stop_usage)_[a-z_]+)$/.test(error.message) ? safeCode(error.message) : undefined);
         finish(signal?.aborted ? "cancelled" : "error", code ?? fallback);
       } };
