@@ -6,21 +6,24 @@ import { receiptFields } from "../../src/sillytavern.mjs";
 import { restoreBrowserStream } from "../../src/tauritavern.mjs";
 import { BODY_LIMIT, PLUGIN_PATH } from "./shared.js";
 import { googleErrorDetail, upstreamMessage } from "../../src/wire.mjs";
+import { CLIENT_HEADER, clientHeader, DIAGNOSTIC_HEADER } from "./diagnostic-fields.js";
 
 // PayGo owns the request URL, single-use ticket, stream flag, service tier and
 // usage observer. Shape only the submitted messages/tools and consume its reply.
 export async function sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, waitForStopUsage, longDecode,
-  unicode, transportToolName, meowCompat, ensureBackend, getRequestHeaders, onStatus }) {
+  unicode, transportToolName, meowCompat, ensureBackend, getRequestHeaders, onStatus, trace }) {
   const signal = init?.signal ?? input?.signal;
   let image;
   if (imageMode !== "off") {
     if (!await ensureBackend("image-input-convert")) throw new Error("paygo_image_backend_required");
+    const headers = { ...getRequestHeaders(), ...(trace ? { [DIAGNOSTIC_HEADER]: trace.record.id, [CLIENT_HEADER]: clientHeader(trace.record) } : {}) };
     const converted = await originalFetch(PLUGIN_PATH + "/image-input", {
-      method: "POST", headers: getRequestHeaders(), signal, cache: "no-store",
+      method: "POST", headers, signal, cache: "no-store",
       body: JSON.stringify({ messages: body.messages, mode: imageMode })
     });
     if (!converted.ok) {
       const detail = (await converted.json().catch(() => null))?.error;
+      if (trace && detail?.diagnostic?.id === trace.record.id) trace.record.server = detail.diagnostic;
       throw Object.assign(new Error(detail?.message || detail?.code || "image_render_failed"), {
         code: detail?.code || "image_render_failed", character: detail?.character, param: detail?.param
       });

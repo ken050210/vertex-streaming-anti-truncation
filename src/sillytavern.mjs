@@ -23,7 +23,8 @@ export function prepareSillyTavernRequest(request, adapters) {
   if (!body || !Array.isArray(body.messages) || !body.messages.length || body.messages.some(message =>
     !message || !["system", "developer", "user", "assistant", "tool"].includes(message.role)) ||
     (body.stream != null && typeof body.stream !== "boolean")) throw requestError("invalid_request");
-  if (Buffer.byteLength(JSON.stringify(body)) > BODY_LIMIT) throw Object.assign(requestError("request_too_large"), { status: 413 });
+  const inputBytes = Buffer.byteLength(JSON.stringify(body));
+  if (inputBytes > BODY_LIMIT) throw Object.assign(requestError("request_too_large"), { status: 413 });
   const mode = body.vertex_anti_truncation;
   const imageEnabled = ["current-turn", "all"].includes(body.vertex_image_input);
   if (body.vertex_image_input != null && !["off", "current-turn", "all"].includes(body.vertex_image_input)) throw requestError("invalid_image_input_mode");
@@ -90,7 +91,7 @@ export function prepareSillyTavernRequest(request, adapters) {
   if (upstreamStream && native.toolConfig) native.toolConfig.functionCallingConfig.streamFunctionCallArguments = true;
   if (body.vertex_tucao_stop != null && typeof body.vertex_tucao_stop !== "boolean") throw requestError("invalid_tucao_stop");
   const tagStop = body.vertex_tag_stop == null ? null : validateTagStopRule(body.vertex_tag_stop);
-  return { body: native, toolName: prepared.toolName, schema: prepared.schema, meowCompat, meowAliases: prepared.meowAliases, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit,
+  return { body: native, inputBytes, toolName: prepared.toolName, schema: prepared.schema, meowCompat, meowAliases: prepared.meowAliases, model: body.model, stream: body.stream === true, upstreamStream, mode, continuation, clientTools, tools: prepared.payload.tools, outputLimit,
     waitForStopUsage: !outputLimit?.longDecode && normalizeStopUsageWait(body.vertex_wait_for_stop_usage),
     tucaoStop: tagStop !== null || body.vertex_tucao_stop === true, stopTag: tagStop?.tag, stopCount: tagStop?.count, stopExemptTag: tagStop?.exemptTag };
 }
@@ -205,13 +206,13 @@ async function readJson(response) {
   catch { throw protocolError("invalid_upstream_json"); }
 }
 
-export async function restoreSillyTavernResponse(upstream, prepared, credential, estimateUsage) {
+export async function restoreSillyTavernResponse(upstream, prepared, credential, estimateUsage, onNativeFrame) {
   if (!upstream.ok) {
     throw Object.assign(protocolError("vertex_upstream_http_error"), {
       status: upstream.status, upstreamError: await readUpstreamError(upstream, credential)
     });
   }
-  const stop = prepared.toolName && prepared.tucaoStop ? createTagStop(prepared.toolName, prepared.stopTag, prepared.stopCount, prepared.stopExemptTag) : null;
+  const stop = prepared.toolName && prepared.tucaoStop ? createTagStop(prepared.toolName, prepared.stopTag, prepared.stopCount, prepared.stopExemptTag, onNativeFrame) : null;
   let usageMetadata;
   const getReceipt = () => {
     if (stop?.marker()) return stop.receipt();
@@ -223,11 +224,12 @@ export async function restoreSillyTavernResponse(upstream, prepared, credential,
     if (!upstream.body) throw protocolError("empty_upstream_stream");
     if (stop) upstream = stop.stream(upstream, prepared.waitForStopUsage, undefined, fields);
     const translated = wrapNativeTextStream(upstream, fields ? null : prepared.toolName, prepared.model,
-      usage => { usageMetadata = usage; }, true, prepared.tools, undefined, stop ? undefined : fields);
+      usage => { usageMetadata = usage; }, true, prepared.tools, undefined, stop ? undefined : fields, stop ? undefined : onNativeFrame);
     const restored = wrapAntiTruncationStream(translated, prepared.toolName, () => {}, prepared.tools, undefined, fields?.hasReply);
     return toSillyTavernStream(guardCompletionStream(restored, () => {}, null, BODY_LIMIT), () => usageMetadata, prepared.model, () => stop?.marker(), undefined, getReceipt, estimateText);
   }
   const raw = await readJson(upstream);
+  if (!stop) onNativeFrame?.(raw);
   usageMetadata = raw.usageMetadata;
   if (fields) { stop?.observe(raw, true); fields(raw); }
   else stop?.process(raw, true);

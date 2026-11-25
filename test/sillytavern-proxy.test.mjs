@@ -154,7 +154,9 @@ test("a token exchange that gets no reply points to the network or proxy, not th
     assert.equal(response.status, 502);
     assert.equal(error.code, kind === "unreachable" ? "vertex_authentication_unreachable" : "vertex_authentication_failed");
     assert.match(error.message, kind === "unreachable" ? /^无法连接 Google.*requestProxy/ : /^Vertex 鉴权失败，请检查已保存的凭据。/);
-    assert.doesNotMatch(error.message, /ECONNREFUSED|7890|secret-detail/);
+    if (kind === "unreachable") assert.match(error.message, /ECONNREFUSED/);
+    else assert.equal(error.diagnostic.oauthStatus, 401);
+    assert.doesNotMatch(JSON.stringify(error), /127\.0\.0\.1|7890|secret-detail/);
     assert.equal(inference, 0);
   }
   // The token exchange's own time limit ends it the same way.

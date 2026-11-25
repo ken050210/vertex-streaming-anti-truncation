@@ -44,6 +44,7 @@ function signedAssertion(serviceAccount, nowMs) {
 
 async function mintToken(serviceAccountJson, timeoutMs, fetchImpl) {
   const serviceAccount = parseServiceAccount(serviceAccountJson);
+  const timeout = AbortSignal.timeout(timeoutMs);
   const response = await fetchImpl(serviceAccount.token_uri, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -52,9 +53,10 @@ async function mintToken(serviceAccountJson, timeoutMs, fetchImpl) {
       assertion: signedAssertion(serviceAccount, Date.now()),
     }),
     redirect: "error",
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: timeout,
   }).catch(cause => {
-    throw Object.assign(new Error("Vertex token exchange received no response", { cause }), { unreachable: true });
+    throw Object.assign(new Error("Vertex token exchange received no response", { cause }), {
+      unreachable: true, ...(timeout.aborted ? { oauthTimeoutMs: timeoutMs } : {}) });
   });
   let parsed = null;
   try {
@@ -63,7 +65,7 @@ async function mintToken(serviceAccountJson, timeoutMs, fetchImpl) {
     // Status alone is reported below; the body is never echoed into logs.
   }
   if (!response.ok) {
-    throw new Error(`vertex token exchange failed with HTTP ${response.status}`);
+    throw Object.assign(new Error(`vertex token exchange failed with HTTP ${response.status}`), { oauthStatus: response.status });
   }
   if (typeof parsed?.access_token !== "string" || !parsed.access_token) {
     throw new Error("vertex token exchange returned no access_token");

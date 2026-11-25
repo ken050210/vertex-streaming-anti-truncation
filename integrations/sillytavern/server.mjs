@@ -9,11 +9,13 @@ import { parseServiceAccount } from "../../src/vertex-auth.mjs";
 import { outputLimitHeaders, validateGemini4Connection } from "../../src/gemini4.mjs";
 import { fetchLongDecode, longDecodeUrl } from "../../src/vertex-long-decode.mjs";
 import { prepareSillyTavernRequest, restoreSillyTavernResponse, requestError } from "../../src/sillytavern.mjs";
-import { googleErrorDetail, sseData, upstreamMessage } from "../../src/wire.mjs";
+import { enumToken, googleErrorDetail, sseData, upstreamMessage } from "../../src/wire.mjs";
 import { waitWithSignal } from "../../src/abort.mjs";
 import { BODY_LIMIT, PLUGIN_FEATURES, PLUGIN_ID, PLUGIN_VERSION } from "./shared.js";
 
 import { loadUsageEstimator } from "./google-usage-estimate.mjs";
+import { DIAGNOSTIC_HEADER, systemCodes } from "./diagnostic-fields.js";
+import { identifyServerBuild, readDiagnostics, serverEnvironment, startDiagnostic } from "./server-diagnostics.mjs";
 
 export const info = { id: PLUGIN_ID, name: "Vertex AI Anti-Truncation", description: "Native Vertex text transport using SillyTavern's saved credentials." };
 
@@ -27,6 +29,8 @@ export async function convertImages(request, response) {
   if (!request.user?.directories) return response.sendStatus(401);
   const { mode, messages } = request.body ?? {};
   const client = new AbortController();
+  const diagnostic = startDiagnostic(request, PLUGIN_VERSION, "image");
+  response.setHeader(DIAGNOSTIC_HEADER, diagnostic.record.id);
   const close = () => client.abort();
   response.once("close", close);
   try {
@@ -34,9 +38,13 @@ export async function convertImages(request, response) {
     if (Buffer.byteLength(JSON.stringify(request.body)) > BODY_LIMIT) throw Object.assign(requestError("image_input_too_large"), { status: 413 });
     const { payload, metadata } = await prepareImageInput({ messages }, mode, BODY_LIMIT, { signal: client.signal });
     response.setHeader("cache-control", "no-store");
+    await diagnostic.finish("ok", null, null, null, response);
     return response.json({ messages: payload.messages, metadata });
   } catch (error) {
-    if (!client.signal.aborted) return response.status(error.status ?? 503).json({ error: { code: error.code ?? "image_render_failed", ...imageErrorLocation(error) } });
+    const code = error.code ?? "image_render_failed";
+    diagnostic.record.resultStatus = error.status ?? 503;
+    await diagnostic.finish(client.signal.aborted ? "disconnected" : "error", error, code, null, response);
+    if (!client.signal.aborted) return response.status(diagnostic.record.resultStatus).json({ error: { code, ...imageErrorLocation(error), diagnostic: diagnostic.record } });
   } finally { response.off("close", close); }
 }
 
@@ -76,14 +84,17 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
     if (!request.user?.directories) return response.status(401).json({ error: { message: "SillyTavern login required" } });
     const client = new AbortController();
     const deadline = AbortSignal.timeout(timeoutMs);
+    const diagnostic = startDiagnostic(request, PLUGIN_VERSION);
+    const log = diagnostic.record;
+    response.setHeader(DIAGNOSTIC_HEADER, log.id);
     const signal = AbortSignal.any([client.signal, deadline]);
     const close = () => { if (!response.writableEnded) client.abort(); };
     response.once("close", close);
-    let stage = "request";
+    let config;
     let credential;
-    const attempts = [];
+    const attempts = log.attempts;
     const writeRegionHeaders = () => {
-      if (attempts.length && !response.headersSent) {
+      if (config?.projectId && attempts.length && !response.headersSent) {
         response.setHeader("x-vertex-location", attempts.at(-1).location);
         response.setHeader("x-vertex-region-attempts", attempts.map(a => a.location + "=" + (a.status ?? "no-response")).join(","));
       }
@@ -92,46 +103,58 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
     try {
       // Validate normal plugin eligibility before spending CPU rasterizing.
       let prepared = prepareSillyTavernRequest(request, adapters);
+      log.inputBytes = prepared.inputBytes;
       if (imageMode !== "off") {
-        stage = "image";
+        diagnostic.stage("image");
         const converted = await prepareImageInput(request.body, imageMode, BODY_LIMIT, {signal});
         prepared = prepareSillyTavernRequest({ ...request, body: converted.payload }, adapters);
         response.setHeader("x-image-input", converted.metadata?.reason || "disabled");
         response.setHeader("x-image-input-pages", String(converted.metadata?.pages ?? 0));
       }
-      stage = "configuration";
-      const config = connectionForRequest(request, adapters, fetchImpl);
+      diagnostic.stage("configuration");
+      config = connectionForRequest(request, adapters, fetchImpl);
       const locations = requestLocations(config, prepared.model);
-      stage = "authentication";
+      Object.assign(log, { locations, transport: prepared.upstreamStream ? "streaming" : "buffered",
+        imageMode, textTool: prepared.meowCompat ? "meow" : !prepared.toolName ? "off" : request.body.vertex_transport_tool_name ? "preset" : "builtin",
+        tagStop: prepared.tucaoStop, stopCount: prepared.stopCount, waitForUsage: prepared.waitForStopUsage,
+        outputLimit: prepared.outputLimit, timeoutMs });
+      diagnostic.stage("authentication");
       credential = await waitWithSignal(() => config.accessToken(), signal);
       signal.throwIfAborted();
       const headers = { ...config.tierHeaders, "content-type": "application/json",
         ...(config.authMode === "express" ? { "x-goog-api-key": credential } : { authorization: `Bearer ${credential}` }) };
-      stage = "upstream";
+      diagnostic.stage("upstream");
       const longDecode = prepared.outputLimit?.longDecode === true;
       const sendRegion = createRegionSender({ locations, budget: { remaining: locations.length - 1 }, intervalMs: 1000, signal,
         retryLast: false, canRetry: () => !response.headersSent,
         onAttempt(attempt) {
-          if (!config.projectId || response.headersSent) return;
           // Repeated continuation segments share a region. Keep its latest status in the bounded header.
           if (attempts.at(-1)?.location === attempt.location) attempts.pop();
           attempts.push(attempt);
+          attempt.startedMs = diagnostic.elapsed();
         } });
       const post = body => {
         const serialized = JSON.stringify(body);
-        return sendRegion(location => {
+        return sendRegion(async location => {
           const base = location === config.location ? config.baseUrl : vertexBaseUrl(config.authMode, config.projectId, location);
           const url = buildNativeUrl(base, prepared.model, prepared.upstreamStream);
-          return fetchImpl(longDecode ? longDecodeUrl(url) : url, {
+          const reply = await fetchImpl(longDecode ? longDecodeUrl(url) : url, {
             method: "POST", headers, body: serialized, signal, redirect: "error",
           });
+          attempts.at(-1).headersMs = diagnostic.elapsed();
+          const traceId = reply.headers.get("x-goog-request-id") ?? reply.headers.get("x-request-id");
+          if (traceId && !traceId.includes(credential) && !/^(?:AIza|sk-|ghp_|github_pat_)/.test(traceId) && /^[a-z0-9_-]{1,96}$/i.test(traceId)) attempts.at(-1).upstreamRequestId = traceId;
+          return reply;
         }, Boolean(body.continuationToken || body.cachedContent));
       };
       const upstream = await (longDecode ? fetchLongDecode(post, prepared.body, prepared.upstreamStream) : post(prepared.body));
       writeRegionHeaders();
       if (upstream.status === 429 && upstream.headers.has("retry-after")) response.setHeader("retry-after", upstream.headers.get("retry-after"));
-      stage = "restoration";
-      const restored = await restoreSillyTavernResponse(upstream, prepared, credential, upstream.ok ? await loadUsageEstimator() : undefined);
+      diagnostic.stage("restoration");
+      const restored = await restoreSillyTavernResponse(upstream, prepared, credential, upstream.ok ? await loadUsageEstimator() : undefined, frame => {
+        const finish = enumToken(frame?.candidates?.[0]?.finishReason);
+        if (finish) log.upstreamFinish = finish;
+      });
       // ST's global compression() would hold SSE chunks until the reply ends; no-transform opts out.
       response.setHeader("cache-control", prepared.stream ? "no-store, no-transform" : "no-store");
       response.setHeader("x-content-type-options", "nosniff");
@@ -142,11 +165,20 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       if (prepared.stream) response.setHeader("x-accel-buffering", "no");
       for await (const bytes of restored.body) {
         signal.throwIfAborted();
+        log.firstWriteMs ??= diagnostic.elapsed();
+        log.lastWriteMs = diagnostic.elapsed();
+        log.bytesSent += bytes.length;
         if (!response.write(Buffer.from(bytes))) await once(response, "drain", { signal });
       }
+      signal.throwIfAborted();
       response.end();
+      await diagnostic.finish("ok", null, null, null, response);
     } catch (error) {
-      if (client.signal.aborted || response.destroyed) return;
+      if (client.signal.aborted || response.destroyed) {
+        await diagnostic.finish("disconnected", error, "downstream_disconnected", null, response);
+        return;
+      }
+      const stage = log.stage;
       writeRegionHeaders();
       const upstreamError = deadline.aborted ? null : error.upstreamError ?? googleErrorDetail(error.upstreamBody, credential);
       const status = deadline.aborted ? 504 : error.status ?? upstreamError?.code ?? (stage === "configuration" ? 400 : stage === "image" ? 503 : 502);
@@ -162,7 +194,13 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       const where = location.character ? ` ${location.character}，${location.param}。` : "";
       const message = upstreamMessage(upstreamError, ["invalid_transport_tool_name", "unsupported_primary_location"].includes(code) ? error.message : detail + where);
       const locationInResponse = response.headersSent ? "流式错误" : `HTTP ${status}`;
-      const payload = { error: { code, ...location, message: `${message} (${code}, ${locationInResponse})`, ...(upstreamError ? { upstreamError } : {}) } };
+      log.resultStatus = status;
+      await diagnostic.finish("error", error, code, upstreamError, response);
+      const cause = log.network.map(value => `${systemCodes[value]}（${value}）`).join("、");
+      const find = log.storage === "stderr" ? "酒馆服务端控制台" : "Vertex AI → 最近请求";
+      const payload = { error: { code, ...location, diagnostic: log,
+        message: [message, cause, `(${code}, ${locationInResponse})`, `${find} · ${log.id}`].filter(Boolean).join(" "),
+        ...(upstreamError ? { upstreamError } : {}) } };
       if (response.headersSent) { response.write(sseData(payload)); response.end(); }
       else {
         response.setHeader("content-type", "application/json; charset=utf-8");
@@ -173,6 +211,7 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
 }
 
 export async function init(router) {
+  await identifyServerBuild();
   // Installed at <SillyTavern>/plugins/<repo>/integrations/sillytavern/server.mjs.
   const [prompts, secrets, constants, nodeFetch] = await Promise.all([
     import(new URL("../../../../src/prompt-converters.js", import.meta.url)),
@@ -184,8 +223,9 @@ export async function init(router) {
   router.get("/status", (request, response) => {
     response.setHeader("cache-control", "no-store");
     if (!request.user?.directories) return response.sendStatus(401);
-    response.json({ id: PLUGIN_ID, version: PLUGIN_VERSION, ready: true, features: PLUGIN_FEATURES });
+    response.json({ id: PLUGIN_ID, version: PLUGIN_VERSION, environment: serverEnvironment, ready: true, features: PLUGIN_FEATURES });
   });
   router.post("/generate", createGenerateHandler(adapters, { fetchImpl: webFetch(nodeFetch.default) }));
   router.post("/image-input", convertImages);
+  router.get("/diagnostics", readDiagnostics);
 }

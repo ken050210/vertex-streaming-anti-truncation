@@ -18,6 +18,7 @@ async function fixture(t) {
     "assets/fonts/NotoColorEmoji.ttf", "assets/fonts/NotoEmoji-OFL.txt", "integrations/sillytavern/paygo.js", "integrations/sillytavern/optimized-input.js", "integrations/sillytavern/style.css", "integrations/sillytavern/server.mjs", "integrations/sillytavern/google-usage-estimate.mjs",
     ...["optimized-input","current","soliumbra","meow-compat","anti-truncation","completion-integrity","completion-stream","gemini4","sillytavern","tag-stop","tag-stop-rule","tauritavern","transport-tool-name","unicode-input","unsupported-params","vertex-native","vertex-partial-args","vertex-protocol","vertex-schema","vertex-text-stream","wire"].map(name=>"src/"+name+".mjs"), "LICENSE", "NOTICE.md",
     "LICENSES/Antigravity-gateway-MIT.txt", "docs/SILLYTAVERN.md", ...["install.mjs", "install-windows.cmd", "install.sh", "README.txt"].map(file => `integrations/sillytavern/installer/${file}`)];
+  files.push(...["diagnostic-fields.js", "diagnostic-stream.js", "diagnostics-ui.js", "server-diagnostics.mjs"].map(file => "integrations/sillytavern/" + file));
   for (const file of files) {
     await mkdir(path.dirname(path.join(root, file)), { recursive: true });
     await writeFile(path.join(root, file), `fixture ${file}\n`);

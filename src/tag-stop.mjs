@@ -12,7 +12,7 @@ export function hasUsageTotals(usage) {
 // and closing tags can span any number of events; unmatched closings do not count.
 // Structured replies can also feed their rendered text into clip, leaving this
 // reader responsible for cancellation and the optional metering tail.
-export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_STOP_COUNT, exemptTag = "") {
+export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_STOP_COUNT, exemptTag = "", onNativeFrame) {
   const opening = `<${tag}>`, closing = `</${tag}>`;
   const exemptOpen = exemptTag && `<${exemptTag}>`, exemptClose = exemptTag && `</${exemptTag}>`;
   const tokens = exemptTag ? [opening, closing, exemptOpen, exemptClose] : [opening, closing];
@@ -21,6 +21,7 @@ export function createTagStop(toolName, tag = DEFAULT_STOP_TAG, count = DEFAULT_
   let latestUsage, terminalUsage, pendingTailUsage, upstreamFinished = false;
   // Observe the provider's finish reason before clipping replaces it with STOP.
   const observe = (frame, buffered) => {
+    onNativeFrame?.(frame);
     if (frame?.error) return;
     const candidate = frame?.candidates?.[0], reason = candidate?.finishReason;
     const finished = buffered || (reason && reason !== "CONTINUATION" && reason !== "FINISH_REASON_UNSPECIFIED");

@@ -2,6 +2,10 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## SillyTavern 0.20.0
+
+- Copy the failed generation's diagnostic report above the chat input. Recent Requests in the Vertex connection panel also covers pending requests and the last completed reply. Reports match browser and server evidence by request ID, with environment, transport, network cause and stream timing.
+
 ## Gateway 0.25.0 / SillyTavern 0.19.0
 
 - Standard Vertex connections can select a primary location and an ordered list of fallback locations for HTTP 429 responses. Regional failover is off by default. Each new request starts in the primary location.

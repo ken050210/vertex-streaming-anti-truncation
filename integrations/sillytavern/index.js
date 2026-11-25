@@ -5,12 +5,15 @@ import { inputEncodingMode } from "../../src/optimized-input.mjs";
 import { installMeowStreamPreview } from "./meow-stream-preview.js";
 import { addRegionSuggestions, createRegionEditor } from "../../public/region-editor.js";
 import { supportedVertexLocations } from "../../src/vertex-locations.mjs";
+import { createDiagnostics } from "./diagnostics-ui.js";
+import { observeDelivery } from "./diagnostic-stream.js";
 
 // TauriTavern has no Node server to host the plugin, so the extension shapes the
 // request and restores the reply itself. Rendering text as images needs the server.
 const tauri = window.__TAURITAVERN__ ? await import("../../src/tauritavern.mjs") : null;
 const direct = tauri && { prepare: tauri.prepareTauriTavernRequest, restore: tauri.restoreTauriTavernResponse };
 const context = SillyTavern.getContext();
+let diagnostics;
 const meowStreams = installMeowStreamPreview(() => SillyTavern.getContext());
 const events = context.eventTypes ?? context.event_types;
 const labels = { off: "关闭（普通 Vertex）", buffered: "非流式抗截断", streaming: "流式抗截断" };
@@ -98,6 +101,7 @@ async function checkBackend(silent = false) {
     const data = response.ok ? await response.json() : null;
     if (data?.id === PLUGIN_ID && typeof data.version === "string") version = data.version;
     if (version && Array.isArray(data.features)) features = data.features;
+    if (version) diagnostics?.backend(data);
   } catch {}
   backendFeatures = features;
   backendReady = Boolean(version) && compareVersions(version, MIN_SERVER_VERSION) >= 0;
@@ -308,6 +312,9 @@ function mount() {
     check.addEventListener("click", () => checkBackend());
     connection.append(check);
   }
+  diagnostics = createDiagnostics({ context, path: PLUGIN_PATH, version: PLUGIN_VERSION, direct,
+    entryPoints: [mount, createFetchInterceptor, observeDelivery] });
+  diagnostics.mount(connection);
   parent.append(panel);
   enableMeowTransport(payGoInstalled);
   installTransport(false)(payGoInstalled);
@@ -363,7 +370,7 @@ function installTransport(compat) {
       },
       // Image input, Continue and client tools require a matching server plugin.
       ensureBackend: async feature => (backendReady || await checkBackend(true)) && (!feature || backendFeatures.includes(feature)),
-      onStatus: updateStatus, direct });
+      onStatus: updateStatus, startReport: diagnostics?.start, direct });
   };
 }
 
