@@ -27,6 +27,13 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm ci --ignore-scripts
       - run: npm run verify
+      - name: Test account rotation in the console over LAN HTTP
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 24
+        working-directory: test/browser
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright-core install --with-deps --only-shell chromium
+          npm test
 
   docker:
     runs-on: ubuntu-latest

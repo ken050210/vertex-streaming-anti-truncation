@@ -1,0 +1,11 @@
+{
+  "name": "gateway-console-browser-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test console-accounts.test.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.65.1"
+  }
+}
