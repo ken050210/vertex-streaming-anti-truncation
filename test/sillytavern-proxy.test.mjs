@@ -4,6 +4,7 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import { once } from "node:events";
+import { PassThrough } from "node:stream";
 import { generateKeyPairSync } from "node:crypto";
 import { createGenerateHandler, webFetch } from "../integrations/sillytavern/server.mjs";
 import { formatDiagnostic } from "../integrations/sillytavern/diagnostics-ui.js";
@@ -52,6 +53,26 @@ test("direct plugin retries only the selected model's regional candidates and pr
     assert.equal((await post({ ...input, vertex_fallback_locations: fallback })).status, 400);
   }
   assert.equal(calls.length, 2);
+});
+
+test("a buffered node-fetch 429 can be cancelled before the fallback region streams its reply", async t => {
+  const limited = new PassThrough();
+  const fetchImpl = webFetch(async (url, { body }) => {
+    if (url.endsWith("/token")) return { status: 200, body: new PassThrough().end(JSON.stringify({ access_token: "synthetic", expires_in: 3600 })) };
+    if (url.includes("/locations/eu/")) {
+      limited.write("capacity");
+      return { status: 429, body: limited };
+    }
+    const name = JSON.parse(body).tools[0].functionDeclarations[0].name;
+    const frames = nativeCall({ name, willContinue: true }) + piece("备用区域回复", false) + sseData({ candidates: [{ finishReason: "STOP" }] });
+    return { status: 200, headers: { "content-type": "text/event-stream" }, body: new PassThrough().end(frames) };
+  });
+  const post = await tavern(t, createGenerateHandler(adapters(serviceAccount()), { fetchImpl }));
+  const reply = await post({ model: "gemini-4-neon", vertexai_region: "eu", vertex_fallback_locations: ["us"] });
+  assert.equal(reply.status, 200);
+  assert.equal(reply.headers.get("x-vertex-region-attempts"), "eu=429,us=200");
+  assert.equal(contents(await reply.text()), "备用区域回复");
+  assert.ok(limited.destroyed);
 });
 
 // The part of SillyTavern's node-fetch this plugin relies on: https.request with no agent of its own, so

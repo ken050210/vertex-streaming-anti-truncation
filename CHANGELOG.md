@@ -2,6 +2,11 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## SillyTavern 0.20.6
+
+- Fixed a server crash during regional fallback when the first Vertex region returned HTTP 429 with data still buffered. The plugin now closes the old response and streams the reply from the fallback region.
+- Update the frontend extension and server plugin, restart SillyTavern, and refresh the page.
+
 ## Gateway 0.25.1 / SillyTavern 0.20.5
 
 - The Tavern extension shows the latest failure and its copy button next to Check Plugin Connection. Generation and manual connection checks both produce reports. Recent Requests keeps earlier failures available.

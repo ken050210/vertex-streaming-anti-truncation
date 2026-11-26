@@ -9,7 +9,7 @@ import { isMultiRegion, validVertexLocation } from "../../src/vertex-locations.m
 import { CLIENT_HEADER, clientHeader, DIAGNOSTIC_HEADER } from "./diagnostic-fields.js";
 import { observeDelivery } from "./diagnostic-stream.js";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.20.5";
+export const PLUGIN_VERSION = "0.20.6";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.

@@ -1,5 +1,4 @@
 import { once } from "node:events";
-import { Readable } from "node:stream";
 import { buildConnectionConfig, vertexBaseUrl } from "../../src/config.mjs";
 import { legacyVertexLocation, requestLocations } from "../../src/vertex-locations.mjs";
 import { createRegionSender } from "../../src/region-retry.mjs";
@@ -48,11 +47,29 @@ export async function convertImages(request, response) {
   } finally { response.off("close", close); }
 }
 
+function webResponseBody(source) {
+  // Read on demand. With Readable.toWeb, a queued 'data' event can hit a closed controller after a 429 retry.
+  const chunks = source[Symbol.asyncIterator]();
+  let cancelled = false;
+  return new ReadableStream({
+    async pull(controller) {
+      const { done, value } = await chunks.next();
+      if (cancelled) return;
+      if (done) controller.close();
+      else controller.enqueue(value);
+    },
+    cancel() {
+      cancelled = true;
+      source.destroy();
+      return chunks.return();
+    },
+  }, { highWaterMark: 0 });
+}
+
 // Tavern's node-fetch uses the http(s).globalAgent installed by requestProxy.
-// Convert its Node body without buffering so disconnects and deltas propagate.
 export const webFetch = nodeFetch => async (url, init) => {
   const reply = await nodeFetch(url, init);
-  const body = reply.body && ![204, 205, 304].includes(reply.status) ? Readable.toWeb(reply.body) : null;
+  const body = reply.body && ![204, 205, 304].includes(reply.status) ? webResponseBody(reply.body) : null;
   return new Response(body, { status: reply.status, headers: reply.headers });
 };
 
