@@ -122,6 +122,10 @@ test("only direct full Standard requests restore a selected multi-region and for
   await send({});
   assert.equal(calls[0][0], PLUGIN_PATH + "/generate");
   assert.equal(calls[0][1].vertexai_region, "eu"); assert.deepEqual(calls[0][1].vertex_fallback_locations, ["us"]);
+  await send({ vertexai_region: undefined });
+  assert.equal(calls.at(-1)[1].vertexai_region, "eu");
+  await send({ vertexai_region: "us" });
+  assert.equal(calls.at(-1)[1].vertexai_region, "us");
   for (const override of [{ vertexai_auth_mode: "express" }, { vertexai_service_tier: "priority" }, { reverse_proxy: "https://example.invalid" }]) {
     await send(override);
     assert.equal(calls.at(-1)[1].vertexai_region, "global");

@@ -75,6 +75,24 @@ test("a buffered node-fetch 429 can be cancelled before the fallback region stre
   assert.ok(limited.destroyed);
 });
 
+test("a Carbon request without a region starts at Tavern's global default, then retries the selected region", async t => {
+  const locations = [];
+  const post = await tavern(t, createGenerateHandler(adapters(serviceAccount()), { fetchImpl: async (url, init) => {
+    if (url.endsWith("/token")) return Response.json({ access_token: "synthetic", expires_in: 3600 });
+    locations.push(new URL(url).pathname.split("/locations/")[1].split("/")[0]);
+    if (locations.length === 1) return new Response(null, { status: 429 });
+    const name = JSON.parse(init.body).tools[0].functionDeclarations[0].name;
+    return Response.json({ candidates: [{ content: { parts: [{ functionCall: { name, args: { content: "ok" } } }] }, finishReason: "STOP" }] });
+  } }));
+  const input = { model: "gemini-4-carbon", stream: false, vertexai_region: undefined, vertex_fallback_locations: ["eu"] };
+  const response = await post(input);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).choices[0].message.content, "ok");
+  assert.deepEqual(locations, ["global", "eu"]);
+  assert.equal((await post({ ...input, vertexai_region: "us-central1" })).status, 400);
+  assert.equal(locations.length, 2);
+});
+
 // The part of SillyTavern's node-fetch this plugin relies on: https.request with no agent of its own, so
 // the global agent picks the route, and the reply body as a Node stream. The repository cannot depend on
 // node-fetch itself, since Git installs run npm ci in the plugin folder.

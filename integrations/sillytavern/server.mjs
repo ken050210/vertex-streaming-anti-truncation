@@ -10,7 +10,7 @@ import { fetchLongDecode, longDecodeUrl } from "../../src/vertex-long-decode.mjs
 import { prepareSillyTavernRequest, restoreSillyTavernResponse, requestError } from "../../src/sillytavern.mjs";
 import { enumToken, googleErrorDetail, sseData, upstreamMessage } from "../../src/wire.mjs";
 import { waitWithSignal } from "../../src/abort.mjs";
-import { BODY_LIMIT, PLUGIN_FEATURES, PLUGIN_ID, PLUGIN_VERSION } from "./shared.js";
+import { BODY_LIMIT, PLUGIN_FEATURES, PLUGIN_ID, PLUGIN_VERSION, tavernDefaultsToGlobal } from "./shared.js";
 
 import { loadUsageEstimator } from "./google-usage-estimate.mjs";
 import { configurationProblem, DIAGNOSTIC_HEADER, googleProblem, oauthProblem, systemCodes } from "./diagnostic-fields.js";
@@ -79,7 +79,7 @@ export function connectionForRequest(request, { readSecret, SECRET_KEYS }, fetch
   if (!["express", "full"].includes(auth) || body.reverse_proxy) throw requestError("unsupported_authentication_mode");
   const serviceTier = body.vertexai_service_tier || "standard";
   const fallback = auth === "full" && serviceTier === "standard" && body.vertex_fallback_locations != null;
-  const preferred = body.vertexai_region || "us-central1";
+  const preferred = body.vertexai_region || (tavernDefaultsToGlobal(body.model) ? "global" : "us-central1");
   const settings = { authMode: auth === "full" ? "service-account" : "express",
     location: fallback ? preferred : legacyVertexLocation(preferred, body.model),
     regionFallbackEnabled: fallback, fallbackLocations: body.vertex_fallback_locations ?? [],

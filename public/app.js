@@ -1,5 +1,10 @@
 import { addRegionSuggestions, createRegionEditor } from "./region-editor.js";
 const $ = id => document.getElementById(id);
+// getRandomValues also works when the console is opened over plain LAN HTTP.
+function randomHex(byteLength) {
+  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+}
 const authNames = { "service-account": "完整模式 · 服务账号", express: "快速模式 · API Key", "access-token": "临时 OAuth 令牌", custom: "自定义上游 · OpenAI 兼容" };
 const tierNames = { standard: "Standard", flex: "Flex", priority: "Priority" };
 const pageNames = { overview: "总览", connection: "连接配置", models: "模型与版本", events: "请求日志", test: "连接测试" };
@@ -614,7 +619,7 @@ $("settings-form").addEventListener("input", () => updateDraft());
 $("settings-form").addEventListener("change", () => updateDraft());
 $("gateway-key-mode").addEventListener("change", () => { $("gateway-access-confirm").checked = false; });
 $("add-account").addEventListener("click", () => {
-  addAccount({ id: crypto.randomUUID(), name: "账号 " + ($("account-list").children.length + 2),
+  addAccount({ id: randomHex(16), name: "账号 " + ($("account-list").children.length + 2),
     authMode: document.querySelector('[name="authMode"]:checked').value, location: "global" });
   updateDraft(); $("account-list").lastElementChild.querySelector("input").focus();
 });
@@ -694,7 +699,7 @@ $("service-file").addEventListener("change", async e => {
   } catch (error) { setError("form-error", error.message); } finally { e.target.value = ""; }
 });
 $("service-account").addEventListener("change", () => { try { const v = JSON.parse($("service-account").value); if (!$("project-id").value && v.project_id) { $("project-id").value = v.project_id; updateDraft(); } } catch { /* Save shows a safe validation message. */ } });
-$("generate-key").addEventListener("click", () => { $("gateway-key").value = [...crypto.getRandomValues(new Uint8Array(32))].map(b => b.toString(16).padStart(2, "0")).join(""); updateDraft(); toast("已生成新密钥，请复制后保存配置。"); });
+$("generate-key").addEventListener("click", () => { $("gateway-key").value = randomHex(32); updateDraft(); toast("已生成新密钥，请复制后保存配置。"); });
 async function copy(text, onFailure) {
   if (!text) return toast("没有可复制的内容。");
   try { await navigator.clipboard.writeText(text); toast("已复制到剪贴板。"); }

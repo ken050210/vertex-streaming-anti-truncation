@@ -2,6 +2,11 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.25.2 / SillyTavern 0.20.7
+
+- Add Account now works when the gateway console is opened over HTTP on a local network. Save and apply the configuration to include the new account in rotation.
+- With 429 regional fallback enabled, the Tavern plugin uses the region selected in the Vertex panel when the generation request omits it. Carbon, Neon and Hydrogen start at `global` when neither specifies a region. Update the extension and server plugin, restart SillyTavern, and refresh the page.
+
 ## SillyTavern 0.20.6
 
 - Fixed a server crash during regional fallback when the first Vertex region returned HTTP 429 with data still buffered. The plugin now closes the old response and streams the reply from the fallback region.
