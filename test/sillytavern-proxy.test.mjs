@@ -6,6 +6,7 @@ import net from "node:net";
 import { once } from "node:events";
 import { generateKeyPairSync } from "node:crypto";
 import { createGenerateHandler, webFetch } from "../integrations/sillytavern/server.mjs";
+import { formatDiagnostic } from "../integrations/sillytavern/diagnostics-ui.js";
 import { vertexAccessToken } from "../src/vertex-auth.mjs";
 import { sseData } from "../src/wire.mjs";
 
@@ -162,4 +163,32 @@ test("a token exchange that gets no reply points to the network or proxy, not th
   // The token exchange's own time limit ends it the same way.
   await assert.rejects(vertexAccessToken(serviceAccount(), 20, (url, { signal }) =>
     new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason)))), { unreachable: true });
+});
+
+test("configuration, token exchange and Vertex HTTP errors identify the failing stage using the real plugin handler", async t => {
+  const cases = [
+    ["missing service account", "", {}, null, "configuration", /没有服务账号/],
+    ["malformed account", "{", {}, null, "configuration", /服务账号 JSON 解析失败/],
+    ["empty Express key", "", {vertexai_auth_mode:"express"}, null, "configuration", /没有 API Key/],
+    ["OAuth grant", serviceAccount(), {}, { error:"invalid_grant", error_description:"PRIVATE-AUTH" }, "authentication", /Google 拒绝了服务账号签发的凭据/],
+    ["OAuth client", serviceAccount(), {}, { error:"invalid_client", error_description:"PRIVATE-AUTH" }, "authentication", /Google 拒绝了客户端身份/],
+    ["Vertex rejected inference", serviceAccount(), {}, { error:{ code:403, status:"PERMISSION_DENIED", message:"PRIVATE-UPSTREAM" } }, "upstream", /Vertex 拒绝了这次访问（PERMISSION_DENIED）/],
+  ];
+  for (const [name, secret, extra, failure, stage, expected] of cases) await t.test(name, async t => {
+    const calls = [];
+    const post = await tavern(t, createGenerateHandler(adapters(secret), { fetchImpl: async url => {
+      calls.push(url);
+      assert.ok(failure, "configuration errors must not send a request");
+      if (stage === "upstream" && url.endsWith("/token")) return Response.json({ access_token:"fixture", expires_in:3600 });
+      return Response.json(failure, { status: stage === "upstream" ? 403 : 400 });
+    } }));
+    const reply = await post(extra), { error } = await reply.json(), server = error.diagnostic;
+    assert.equal(server.stage, stage);
+    const report = formatDiagnostic({ id:server.id, at:server.at, route:"plugin", state:"error", server });
+    assert.match(report, expected);
+    if (stage !== "upstream") assert.match(error.message, expected);
+    if (stage === "authentication") assert.match(report, new RegExp("OAuth 原因=" + failure.error));
+    assert.doesNotMatch(report, /PRIVATE-|private_key":/);
+    assert.equal(calls.length, stage === "upstream" ? 2 : stage === "authentication" ? 1 : 0);
+  });
 });

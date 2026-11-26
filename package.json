@@ -1,10 +1,10 @@
 {
   "name": "vertex-streaming-anti-truncation",
-  "version": "0.25.0",
+  "version": "0.25.1",
   "private": true,
   "description": "Experimental Vertex Gemini text-tool gateway with progressive native function-argument streaming.",
   "type": "module",
-  "main": "integrations/sillytavern/server.mjs",
+  "main": "integrations/sillytavern/server-entry.mjs",
   "license": "MIT",
   "author": "ken050210",
   "repository": {

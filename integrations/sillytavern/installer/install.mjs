@@ -1,6 +1,6 @@
 // One-step installer shipped at the root of the packaged SillyTavern bundle.
 // Usage: node install.mjs [SillyTavern folder] [--skip-deps]
-import { cp, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -117,6 +117,22 @@ try {
     await cp(path.join(here, kind, NAME), path.join(staging, kind), { recursive: true });
     await writeFile(path.join(staging, kind, MARKER), JSON.stringify({ version }, null, 2) + "\n");
   }
+  // This directory contains only the public receipt. A Windows directory junction
+  // works for ordinary users who cannot create a file symlink.
+  const receipt = { id: NAME, version, installedAt: new Date().toISOString() };
+  const publicDir = "public-install-receipt";
+  await mkdir(path.join(staging, "server", publicDir));
+  await writeFile(path.join(staging, "server", publicDir, "installation.json"), JSON.stringify(receipt));
+  const source = path.join(targets.server, publicDir);
+  let linked = true;
+  try {
+    await symlink(process.platform === "win32" ? source : path.relative(targets.extension, source),
+      path.join(staging, "extension", "vertex-server-receipt"), process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (!["EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EINVAL"].includes(error.code)) throw error;
+    linked = false;
+  }
+  await writeFile(path.join(staging, "extension", "vertex-installation.json"), JSON.stringify({ ...receipt, linked }));
   if (!skipDeps) {
     console.log("\n正在安装图片输入需要的渲染组件（需要联网，可能要一两分钟）……");
     depsInstalled = spawnSync("npm ci --omit=dev --ignore-scripts --no-audit --no-fund", { cwd: path.join(staging, "server"), stdio: "inherit", shell: true }).status === 0;

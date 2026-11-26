@@ -14,10 +14,10 @@ import { waitWithSignal } from "../../src/abort.mjs";
 import { BODY_LIMIT, PLUGIN_FEATURES, PLUGIN_ID, PLUGIN_VERSION } from "./shared.js";
 
 import { loadUsageEstimator } from "./google-usage-estimate.mjs";
-import { DIAGNOSTIC_HEADER, systemCodes } from "./diagnostic-fields.js";
+import { configurationProblem, DIAGNOSTIC_HEADER, googleProblem, oauthProblem, systemCodes } from "./diagnostic-fields.js";
 import { identifyServerBuild, readDiagnostics, serverEnvironment, startDiagnostic } from "./server-diagnostics.mjs";
 
-export const info = { id: PLUGIN_ID, name: "Vertex AI Anti-Truncation", description: "Native Vertex text transport using SillyTavern's saved credentials." };
+export { info } from "./server-entry.mjs";
 
 function imageErrorLocation(error) {
   return error.code === "image_input_unsupported_characters"
@@ -69,12 +69,30 @@ export function connectionForRequest(request, { readSecret, SECRET_KEYS }, fetch
     serviceTier, projectId: body.vertexai_express_project_id || "" };
   if (auth === "full") {
     settings.serviceAccountJson = readSecret(request.user.directories, SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT, body.secret_id);
+    if (!settings.serviceAccountJson) throw requestError("vertex_service_account_missing");
     settings.projectId = parseServiceAccount(settings.serviceAccountJson).project_id;
   } else {
     settings.apiKey = readSecret(request.user.directories, SECRET_KEYS.VERTEXAI, body.secret_id);
+    if (!settings.apiKey) throw requestError("vertex_api_key_missing");
   }
-  // Reuse the gateway's validated official Google destinations and token cache.
-  const config = buildConnectionConfig(settings, { fetchImpl, maxFallbackLocations: 2 });
+  // The shared token exchange consumes failed responses for their HTTP status.
+  // Preserve its standard error code for this request without forwarding Google's free text.
+  let rejection;
+  const tokenFetch = async (...args) => {
+    const response = await (fetchImpl ?? fetch)(...args);
+    if (response.ok) return response;
+    const body = await response.json().catch(() => null);
+    rejection = oauthProblem(body?.error) ? body.error : undefined;
+    return new Response(null, { status: response.status });
+  };
+  const config = buildConnectionConfig(settings, { fetchImpl: tokenFetch, maxFallbackLocations: 2 });
+  if (auth === "full") {
+    const token = config.accessToken;
+    config.accessToken = () => token().catch(error => {
+      if (error.oauthStatus && rejection) error.oauthReason = rejection;
+      throw error;
+    });
+  }
   validateGemini4Connection(config, body.model);
   return config;
 }
@@ -150,7 +168,7 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       const upstream = await (longDecode ? fetchLongDecode(post, prepared.body, prepared.upstreamStream) : post(prepared.body));
       writeRegionHeaders();
       if (upstream.status === 429 && upstream.headers.has("retry-after")) response.setHeader("retry-after", upstream.headers.get("retry-after"));
-      diagnostic.stage("restoration");
+      if (upstream.ok) diagnostic.stage("restoration");
       const restored = await restoreSillyTavernResponse(upstream, prepared, credential, upstream.ok ? await loadUsageEstimator() : undefined, frame => {
         const finish = enumToken(frame?.candidates?.[0]?.finishReason);
         if (finish) log.upstreamFinish = finish;
@@ -185,14 +203,14 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
       const code = deadline.aborted ? "vertex_timeout" : error.protocolFailure || error.status ? error.code
         : error.unreachable && stage === "authentication" ? "vertex_authentication_unreachable"
         : stage === "image" ? "image_render_failed" : `vertex_${stage}_failed`;
-      const detail = code === "express_project_required" ? "快速模式使用此 Gemini 4 模型需要填写 API Key 所属的项目 ID，以指定 global 地区。" :
-        stage === "configuration" ? "检查 Vertex 凭据和地区；Express、Flex、Priority 需要 global。" :
+      const detail = configurationProblem(error.message) ?? configurationProblem(code) ?? oauthProblem(error.oauthReason) ?? (
+        stage === "configuration" ? "读取 Vertex 连接设置失败。" :
         code === "vertex_authentication_unreachable" ? "无法连接 Google 换取 Vertex 令牌。请检查网络和酒馆 config.yaml 中的 requestProxy 代理设置。" :
         stage === "authentication" ? "Vertex 鉴权失败，请检查已保存的凭据。" : stage === "image" ? "图片输入转换失败，未改用明文发送。" :
-        imageMode !== "off" && request.body?.vertex_anti_truncation === "off" ? "Vertex 图片输入请求失败。" : "Vertex 抗截断请求失败。";
+        imageMode !== "off" && request.body?.vertex_anti_truncation === "off" ? "Vertex 图片输入请求失败。" : "Vertex 抗截断请求失败。");
       const location = imageErrorLocation(error);
       const where = location.character ? ` ${location.character}，${location.param}。` : "";
-      const message = upstreamMessage(upstreamError, ["invalid_transport_tool_name", "unsupported_primary_location"].includes(code) ? error.message : detail + where);
+      const message = [googleProblem(upstreamError), upstreamMessage(upstreamError, ["invalid_transport_tool_name", "unsupported_primary_location"].includes(code) ? error.message : detail + where)].filter(Boolean).join(" · ");
       const locationInResponse = response.headersSent ? "流式错误" : `HTTP ${status}`;
       log.resultStatus = status;
       await diagnostic.finish("error", error, code, upstreamError, response);
@@ -211,13 +229,16 @@ export function createGenerateHandler(adapters, { fetchImpl = fetch, timeoutMs =
 }
 
 export async function init(router) {
-  await identifyServerBuild();
+  const part = (phase, promise) => promise.catch(cause => {
+    throw Object.assign(new Error("Plugin startup failed", { cause }), { startupPhase: phase });
+  });
+  await part("build", identifyServerBuild());
   // Installed at <SillyTavern>/plugins/<repo>/integrations/sillytavern/server.mjs.
   const [prompts, secrets, constants, nodeFetch] = await Promise.all([
-    import(new URL("../../../../src/prompt-converters.js", import.meta.url)),
-    import(new URL("../../../../src/endpoints/secrets.js", import.meta.url)),
-    import(new URL("../../../../src/constants.js", import.meta.url)),
-    import("node-fetch"),
+    part("tavern-prompts", import(new URL("../../../../src/prompt-converters.js", import.meta.url))),
+    part("tavern-secrets", import(new URL("../../../../src/endpoints/secrets.js", import.meta.url))),
+    part("tavern-constants", import(new URL("../../../../src/constants.js", import.meta.url))),
+    part("node-fetch", import("node-fetch")),
   ]);
   const adapters = { ...prompts, ...secrets, safetySettings: [...constants.GEMINI_SAFETY, ...constants.VERTEX_SAFETY] };
   router.get("/status", (request, response) => {

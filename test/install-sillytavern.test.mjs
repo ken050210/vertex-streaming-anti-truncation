@@ -48,6 +48,20 @@ test("installer places both halves, enables server plugins once with a backup, a
   assert.equal(await readFile(path.join(extension, "index.js"), "utf8"), "v1");
   assert.deepEqual(JSON.parse(await readFile(path.join(extension, ".vertex-installer.json"), "utf8")), { version: "9.9.9" });
   assert.ok(existsSync(path.join(server, ".vertex-installer.json")));
+  const receipt = JSON.parse(await readFile(path.join(extension, "vertex-installation.json"), "utf8"));
+  assert.equal(receipt.id, "vertex-anti-truncation");
+  assert.equal(receipt.version, "9.9.9");
+  assert.ok(Number.isFinite(Date.parse(receipt.installedAt)));
+  const markerFile = path.join(server, "public-install-receipt", "installation.json");
+  const visibleFile = path.join(extension, "vertex-server-receipt", "installation.json");
+  const marker = JSON.parse(await readFile(markerFile, "utf8"));
+  assert.deepEqual(marker, { id: receipt.id, version: receipt.version, installedAt: receipt.installedAt });
+  if (receipt.linked) {
+    assert.deepEqual(await readdir(path.dirname(visibleFile)), ["installation.json"]);
+    assert.deepEqual(JSON.parse(await readFile(visibleFile, "utf8")), marker);
+    await rm(markerFile);
+    await assert.rejects(readFile(visibleFile), { code: "ENOENT" });
+  } else assert.equal(existsSync(visibleFile), false);
   assert.equal(await readFile(path.join(tavern, "config.yaml"), "utf8"), config.replace("enableServerPlugins: false", "enableServerPlugins: true"));
   const [backup] = await backups(tavern);
   assert.equal(await readFile(path.join(tavern, backup), "utf8"), config);
@@ -56,6 +70,7 @@ test("installer places both halves, enables server plugins once with a backup, a
   await writeFile(path.join(pkg, "server/vertex-anti-truncation/server.mjs"), "v2");
   await writeFile(path.join(server, "stale.mjs"), "old file");
   await run();
+  if (receipt.linked) assert.deepEqual(JSON.parse(await readFile(visibleFile, "utf8")), JSON.parse(await readFile(markerFile, "utf8")));
   assert.equal(await readFile(path.join(server, "server.mjs"), "utf8"), "v2");
   assert.ok(!existsSync(path.join(server, "stale.mjs")));
   assert.equal((await backups(tavern)).length, 1);

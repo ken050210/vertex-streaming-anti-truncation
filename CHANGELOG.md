@@ -2,6 +2,12 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## Gateway 0.25.1 / SillyTavern 0.20.5
+
+- The Tavern extension shows the latest failure and its copy button next to Check Plugin Connection. Generation and manual connection checks both produce reports. Recent Requests keeps earlier failures available.
+- Tavern checks the paired server plugin, regional settings and request dispatch, and identifies configuration, authentication and response-format problems. Malformed non-streaming plugin JSON over 512 KiB now produces an error report.
+- Failed rows in the gateway overview and request log can copy the full request ID and diagnostics. Both UIs select the report for manual copying if the clipboard is unavailable.
+
 ## SillyTavern 0.20.0
 
 - Copy the failed generation's diagnostic report above the chat input. Recent Requests in the Vertex connection panel also covers pending requests and the last completed reply. Reports match browser and server evidence by request ID, with environment, transport, network cause and stream timing.

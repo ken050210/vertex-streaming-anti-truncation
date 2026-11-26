@@ -11,11 +11,11 @@ import { CLIENT_HEADER, clientHeader, DIAGNOSTIC_HEADER } from "./diagnostic-fie
 // PayGo owns the request URL, single-use ticket, stream flag, service tier and
 // usage observer. Shape only the submitted messages/tools and consume its reply.
 export async function sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, waitForStopUsage, longDecode,
-  unicode, transportToolName, meowCompat, ensureBackend, getRequestHeaders, onStatus, trace }) {
+  unicode, transportToolName, meowCompat, requireBackend, fetchGeneration, getRequestHeaders, onStatus, trace }) {
   const signal = init?.signal ?? input?.signal;
   let image;
   if (imageMode !== "off") {
-    if (!await ensureBackend("image-input-convert")) throw new Error("paygo_image_backend_required");
+    await requireBackend("image-input-convert", "paygo_image_backend_required");
     const headers = { ...getRequestHeaders(), ...(trace ? { [DIAGNOSTIC_HEADER]: trace.record.id, [CLIENT_HEADER]: clientHeader(trace.record) } : {}) };
     const converted = await originalFetch(PLUGIN_PATH + "/image-input", {
       method: "POST", headers, signal, cache: "no-store",
@@ -40,7 +40,7 @@ export async function sendPayGoRequest({ originalFetch, input, init, body, mode,
   const payload = JSON.stringify(prepared.payload);
   if (new TextEncoder().encode(payload).byteLength > BODY_LIMIT) throw new Error("request_too_large");
   signal?.throwIfAborted();
-  const reply = await originalFetch(input, { ...init, body: payload });
+  const reply = await fetchGeneration(input, { ...init, body: payload });
   if (trace) Object.assign(trace.record, { hostStatus: reply.status, hostHeadersMs: trace.elapsed() });
   if (!reply.ok) return reply;
   const live = mode === "streaming" && body.stream === true;

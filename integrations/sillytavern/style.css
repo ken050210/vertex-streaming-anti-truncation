@@ -1,9 +1,6 @@
 @import url("../../public/region-editor.css");
-#vertex-generation-errors:empty { display: none; }
-.vertex-error-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .4em; padding: .4em .6em; background: var(--SmartThemeBlurTintColor); }
-.vertex-error-bar span { flex: 1 1 12em; overflow-wrap: anywhere; }
-.vertex-error-bar .menu_button { width: auto; margin: 0; }
-.vertex-error-bar textarea, .vertex-diagnostic-panel textarea { flex-basis: 100%; width: 100%; resize: vertical; }
+.vertex-connection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4em; }
+.vertex-connection textarea { width: 100%; min-inline-size: 0; resize: vertical; }
 .vertex-diagnostic-panel select { width: 100%; }
 .vertex-diagnostic-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 #vertex_anti_truncation_settings {

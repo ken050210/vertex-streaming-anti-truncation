@@ -2,18 +2,14 @@ import { randomUUID, createHash } from "node:crypto";
 import { readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import https from "node:https";
-import { DIAGNOSTIC_HEADER, HISTORY_LIMIT, networkCodes, pluginFrames, readClientHeader, requestFields, safeCode } from "./diagnostic-fields.js";
+import { DIAGNOSTIC_HEADER, HISTORY_LIMIT, configurationProblem, diagnosticId, networkCodes, pluginFrames, readClientHeader, requestFields, safeCode } from "./diagnostic-fields.js";
 import { enumToken } from "../../src/wire.mjs";
+import { PLUGIN_ID, PLUGIN_VERSION } from "./shared.js";
 
 const filename = "vertex-anti-truncation-errors.json";
 const writes = new Map();
 const live = new Map();
 const recent = new Map();
-const uuid = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i;
-const configReasons = new Set(["Invalid VERTEX_FALLBACK_LOCATIONS", "Invalid service tier", "Invalid VERTEX_PROJECT_ID", "Invalid VERTEX_LOCATION",
-  "Invalid VERTEX_API_KEY", "Express, Flex and Priority require the global location", "Service account must contain a valid RSA private key",
-  "vertex service account secret is not valid JSON", "vertex service account secret must contain type, client_email, private_key and an HTTPS token_uri",
-  "Only Google's OAuth token endpoint is allowed", "vertex token exchange returned no access_token"]);
 
 export const serverEnvironment = { node: process.versions.node, os: process.platform, arch: process.arch };
 export async function identifyServerBuild() {
@@ -50,9 +46,9 @@ async function writeFailure(root, record) {
 
 export function startDiagnostic(request, version, stage = "request") {
   const root = request.user.directories.root;
-  const incoming = request.headers?.[DIAGNOSTIC_HEADER];
-  const id = typeof incoming === "string" && uuid.test(incoming) ? incoming : randomUUID();
-  const record = { id, at: new Date().toISOString(), version, ...serverEnvironment,
+  const incoming = diagnosticId(request.headers?.[DIAGNOSTIC_HEADER]);
+  const id = incoming ?? randomUUID();
+  const record = { id, idSource: incoming ? "request" : "server", at: new Date().toISOString(), version, ...serverEnvironment,
     proxyAgent: https.globalAgent.constructor.name === "ProxyAgent", request: requestFields(request.body ?? {}), client: readClientHeader(request.headers),
     stage, timeline: { [stage]: 0 }, attempts: [], bytesSent: 0, state: "pending" };
   const start = performance.now();
@@ -71,8 +67,9 @@ export function startDiagnostic(request, version, stage = "request") {
         record.network = networkCodes(error);
         record.exception = ["TypeError", "Error", "FetchError", "AbortError", "TimeoutError", "SyntaxError", "AggregateError"].includes(error.name) ? error.name : "Error";
         record.frames = pluginFrames(error);
-        if (configReasons.has(error.message)) record.configReason = error.message;
+        if (configurationProblem(error.message)) record.configReason = error.message;
         if (error.oauthStatus) record.oauthStatus = error.oauthStatus;
+        if (error.oauthReason) record.oauthReason = error.oauthReason;
         if (error.oauthTimeoutMs) record.oauthTimeoutMs = error.oauthTimeoutMs;
       }
       if (upstream) record.google = { status: enumToken(upstream.status), reason: enumToken(upstream.reason),
@@ -102,5 +99,5 @@ export async function readDiagnostics(request, response) {
   catch { storage = "unavailable"; }
   const entries = new Map(saved.map(item => [item.id, item]));
   for (const item of [...recent.get(root) ?? [], ...live.get(root) ?? []]) entries.set(item.id, item);
-  return response.json({ records: [...entries.values()].sort((a, b) => b.at.localeCompare(a.at)), storage });
+  return response.json({ id: PLUGIN_ID, version: PLUGIN_VERSION, records: [...entries.values()].sort((a, b) => b.at.localeCompare(a.at)), storage });
 }

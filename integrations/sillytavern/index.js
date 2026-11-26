@@ -1,4 +1,4 @@
-import { PLUGIN_ID, PLUGIN_PATH, PLUGIN_VERSION, MIN_SERVER_VERSION, MODES, compareVersions, createFetchInterceptor, latestUserInput } from "./shared.js";
+import { PLUGIN_ID, PLUGIN_PATH, PLUGIN_VERSION, MODES, compareVersions, createFetchInterceptor, latestUserInput } from "./shared.js";
 import { normalizeStopUsageWait, DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { validateTransportToolName } from "../../src/transport-tool-name.mjs";
 import { inputEncodingMode } from "../../src/optimized-input.mjs";
@@ -7,6 +7,7 @@ import { addRegionSuggestions, createRegionEditor } from "../../public/region-ed
 import { supportedVertexLocations } from "../../src/vertex-locations.mjs";
 import { createDiagnostics } from "./diagnostics-ui.js";
 import { observeDelivery } from "./diagnostic-stream.js";
+import { backendFinding, probeBackend } from "./backend-status.js";
 
 // TauriTavern has no Node server to host the plugin, so the extension shapes the
 // request and restores the reply itself. Rendering text as images needs the server.
@@ -27,13 +28,13 @@ const reasons = { "existing-tools": "旧版 functions 工具", "tool-choice": "�
 const errors = { unicode_floor_required: "找不到真实用户楼层，也没有聊天变量“我的行动”，已停止发送。请先输入消息，或关闭 Unicode 转码。",
   input_tokenizer_unavailable: "无法获取 Gemma 分词计数。请重试，或手动选择转码格式。",
   unicode_input_too_large: "转码后的请求超过大小限制，已停止发送。请缩短输入或关闭 Unicode 转码。",
-  plugin_not_ready: "服务端插件未就绪或版本太旧，本次请求已停止发送。点“检查插件连接”查看原因和更新办法。",
+  plugin_not_ready: "本次请求未通过服务端插件检查。",
   paygo_image_backend_required: "PayGo 图片转码需要配套的新版抗截断服务端插件。请更新后重启酒馆。",
   paygo_long_decode_unsupported: "当前 PayGo 后端不支持 Gemini 4 分段续写。请降低最大回复长度，或关闭 long decode 后使用单次上限。",
   natural_stop_usage_not_supported: "当前服务端插件不支持等待 Google 自然结束。请更新服务端并重启酒馆，或选择其他截停等待方式。",
   tag_stop_not_supported: "服务端插件不支持自定义标签截停。请更新服务端插件并重启酒馆，或关闭此开关。",
   meow_compat_not_supported: "服务端不支持小猫兼容模式。请更新服务端插件并重启酒馆。",
-  region_routing_not_supported: "当前服务端不支持所选区域路由。请更新服务端插件并重启酒馆。",
+  region_routing_not_supported: "本次区域路由未通过服务端插件检查。",
   transport_tool_name_not_supported: "服务端插件不支持复用预设正文工具。请更新服务端并重启酒馆。",
   invalid_tag_stop: "截停标签名须为 1–64 位字母、数字、下划线、点、冒号或连字符，以字母或下划线开头；次数须为正整数。",
   image_input_requires_supported_request: "图片输入不支持此请求，已停止发送，未改用明文。请去掉不支持的内容或换用支持的模型，或关闭图片输入。",
@@ -44,7 +45,7 @@ const errors = { unicode_floor_required: "找不到真实用户楼层，也没�
   request_too_large: "请求超过 8 MiB，插件已拒绝发送。请减少附件或聊天历史。",
   gemini4_long_decode_required: "服务端插件较旧，输出上限超过 Gemini 4 Argon 单次上限时会拒绝发送。请更新服务端插件后重启酒馆；或在预设里把最大回复长度降到 32,768（非流式）／65,536（流式）以内。" };
 const updateServer = "用安装包装的，下载新版安装包再运行一次；用 Git 装的，在服务端插件目录运行 git pull --ff-only 和 npm ci --ignore-scripts。之后重启酒馆并重新检查。";
-let status, backendReady, backendFeatures = [], backendWarning;
+let status, backendWarning;
 function settings() {
   const store = SillyTavern.getContext().extensionSettings;
   // Existing profiles without a saved switch used the old enabled default.
@@ -60,9 +61,10 @@ function saveSettings(changes) {
 function showStatus(text = "") {
   if (!status) return;
   // A failed version check stays visible until a later check succeeds.
-  if (!text && backendReady === false) text = backendWarning;
+  if (!text && backendWarning) text = backendWarning;
   status.textContent = text;
   status.hidden = !text;
+  diagnostics?.statusChanged(text);
 }
 function updateStatus(result) {
   const regions = result.regions ? "区域 · " + result.regions.split(",").map(pair => pair.replace("=", " HTTP ")).join(" → ") : "";
@@ -71,7 +73,7 @@ function updateStatus(result) {
     const code = result.status ? `${result.error}，HTTP ${result.status}` : result.error;
     const cause = result.bypass ? `原因：${reasons[result.bypass] ?? result.bypass}。` : "";
     const where = result.character && result.param ? ` ${result.character}，位置 ${result.param}。` : "";
-    return showStatus([(errors[result.error] || `请求失败（${code}）。请查看酒馆错误提示。`) + where + cause, regions].filter(Boolean).join(" "));
+      return showStatus([(errors[result.error] || `请求失败（${code}）。`) + where + cause, regions].filter(Boolean).join(" "));
   }
   const unicode = result.unicode ? { encoded: result.unicode.method === "all-context" ? `已对全部上下文中的 ${result.unicode.matchedMessages} 条消息转码。` : result.unicode.method === "recent-floors" ? `已在所选楼层范围内对 ${result.unicode.matchedMessages} 条请求消息转码。` : "已对当前用户输入的匹配文本转码。", "floor-not-found": "请求中没有找到所选楼层的原文，按原文发送。", "no-encodable-text": "所选范围没有需要转码的字符。" }[result.unicode.reason] || "" : "";
   const format = { alternate: "隔字 Unicode", table: "高频字表", gbk: "GBK 十六进制" }[result.unicode?.format];
@@ -95,23 +97,14 @@ function updateStatus(result) {
 
 async function checkBackend(silent = false) {
   if (!silent) showStatus("正在检查服务端插件…");
-  let version, features = [];
-  try {
-    const response = await fetch(`${PLUGIN_PATH}/status`, { headers: context.getRequestHeaders(), signal: AbortSignal.timeout(5000) });
-    const data = response.ok ? await response.json() : null;
-    if (data?.id === PLUGIN_ID && typeof data.version === "string") version = data.version;
-    if (version && Array.isArray(data.features)) features = data.features;
-    if (version) diagnostics?.backend(data);
-  } catch {}
-  backendFeatures = features;
-  backendReady = Boolean(version) && compareVersions(version, MIN_SERVER_VERSION) >= 0;
-  backendWarning = !version ? "找不到服务端插件。请安装配套服务端插件，确认 config.yaml 中 enableServerPlugins 为 true，重启酒馆后重新检查。"
-    : `服务端插件 ${version} 太旧，需要 ${MIN_SERVER_VERSION} 或更新。${updateServer}`;
+  const info = await probeBackend(() => context.getRequestHeaders(), !silent || mode() !== "off");
+  const version = info.version, backendReady = info.result === "ok";
+  backendWarning = backendReady ? "" : backendFinding(info);
   const difference = backendReady ? compareVersions(version, PLUGIN_VERSION) : 0;
   showStatus(silent || !backendReady ? "" : difference < 0 ? `服务端插件已就绪（${version}），可以使用；它比扩展 ${PLUGIN_VERSION} 旧，建议更新：${updateServer}`
     : difference > 0 ? `服务端插件已就绪（${version}），可以使用；扩展 ${PLUGIN_VERSION} 比它旧，建议在扩展管理器里更新本扩展。`
     : `服务端插件已就绪（${version}）。`);
-  return backendReady;
+  if (backendReady || !silent || mode() !== "off") await diagnostics.connectionChecked(info, !silent);
 }
 
 function mountInputEncoding(panel, saved) {
@@ -261,6 +254,7 @@ function mount() {
     </details>
     <div class="vertex-connection">
       <small class="vertex-antitruncation-status" role="status" aria-live="polite" hidden></small>
+      <div class="vertex-connection-actions"></div>
     </div>`;
   const select = panel.querySelector("#vertex_anti_truncation_mode");
   for (const value of MODES) select.add(new Option(labels[value], value));
@@ -268,6 +262,7 @@ function mount() {
   const saved = settings();
   payGoInstalled ||= !direct && window.fetch.name === "payGoFetch";
   const connection = panel.querySelector(".vertex-connection");
+  const actions = connection.querySelector(".vertex-connection-actions");
   status = connection.querySelector("[role=status]");
   mountInputEncoding(panel, saved);
   mountTransportOptions(panel, select, saved, payGoInstalled);
@@ -296,7 +291,7 @@ function mount() {
     render();
   }
   if (direct) {
-    connection.append(Object.assign(document.createElement("small"), { textContent: "TauriTavern 扩展已加载。" }));
+    actions.append(Object.assign(document.createElement("small"), { textContent: "TauriTavern 扩展已加载。" }));
   } else {
     if (saved.longDecode === true) {
       const legacy = document.createElement("div");
@@ -310,11 +305,11 @@ function mount() {
     const check = Object.assign(document.createElement("button"), { type: "button", className: "menu_button",
       textContent: "检查插件连接", title: "只检查酒馆服务端插件，不调用模型" });
     check.addEventListener("click", () => checkBackend());
-    connection.append(check);
+    actions.append(check);
   }
   diagnostics = createDiagnostics({ context, path: PLUGIN_PATH, version: PLUGIN_VERSION, direct,
-    entryPoints: [mount, createFetchInterceptor, observeDelivery] });
-  diagnostics.mount(connection);
+    entryPoints: [mount, createFetchInterceptor, observeDelivery, probeBackend] });
+  diagnostics.mount(connection, actions);
   parent.append(panel);
   enableMeowTransport(payGoInstalled);
   installTransport(false)(payGoInstalled);
@@ -368,8 +363,6 @@ function installTransport(compat) {
         const context = SillyTavern.getContext();
         return latestUserInput(context.chat, context.chatMetadata?.variables);
       },
-      // Image input, Continue and client tools require a matching server plugin.
-      ensureBackend: async feature => (backendReady || await checkBackend(true)) && (!feature || backendFeatures.includes(feature)),
       onStatus: updateStatus, startReport: diagnostics?.start, direct });
   };
 }

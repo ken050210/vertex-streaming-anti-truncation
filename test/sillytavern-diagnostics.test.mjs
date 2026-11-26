@@ -32,7 +32,10 @@ test("concurrent failures survive reload in the right account; disk failures ret
   assert.ok(persisted.every(r => r.network[0] === "ECONNRESET" && r.google.status === "UNAVAILABLE"));
   assert.ok(persisted.every(r => r.client.tavern === "1.19.0" && r.client.os === "Android 14"));
   assert.doesNotMatch(JSON.stringify(persisted), /private |user:pass|http:|proxy_password|secret-agent-name/);
-  assert.deepEqual((await readDiagnostics(other, response)).records, []);
+  const empty = await readDiagnostics(other, response);
+  assert.deepEqual(empty.records, []);
+  assert.equal(empty.id, "vertex-anti-truncation");
+  assert.match(empty.version, /^\d+\.\d+\.\d+$/);
   assert.equal(await readDiagnostics({}, response), 401);
   const restarted = await import("../integrations/sillytavern/server-diagnostics.mjs?restart");
   assert.equal((await restarted.readDiagnostics(user, response)).records.length, 20);
@@ -89,6 +92,81 @@ test("an HTML gateway rejection and a socket read failure preserve their distinc
   const upstream = new ReadableStream({ pull(controller) { controller.error(new TypeError("socket error")); } });
   await assert.rejects(observeDelivery(new Response(upstream), broken, () => {}).text(), /socket error/);
   assert.equal(broken.record.code, "response_read_failed");
+});
+
+test("HTTP rejections labelled as SSE keep the HTTP cause through empty, misleading and valid events", async () => {
+  for (const [wire, expected] of [
+    [sseData("[DONE]"), /HTTP 拒绝详情=授权范围不足（insufficient_scope）/],
+    ["Invalid CSRF token. Please refresh the page and try again.", /酒馆提示 CSRF 令牌无效/],
+    [sseData({ error: { code: "access_policy_denied" } }) + sseData("[DONE]"), /访问策略拒绝/],
+  ]) {
+    const trace = browserTrace();
+    const reply = observeDelivery(new Response(wire, { status: 403, headers: {
+      "content-type": "text/event-stream", "www-authenticate": 'Bearer error="insufficient_scope"'
+    } }), trace, () => {});
+    assert.equal(await reply.text(), wire);
+    assert.equal(trace.record.state, "error");
+    assert.match(formatDiagnostic(trace.record), expected);
+  }
+});
+
+test("a successful HTTP status still reports a malformed plugin generation in the copied headline", async t => {
+  for (const [type, wire, expected] of [
+    ["application/json", '{"PRIVATE-DATA"', /JSON 正文解析失败/],
+    ["application/json", '"PRIVATE-DATA"', /应为 JSON 对象/],
+    ["application/json", '{"other":"PRIVATE-DATA"}', /JSON 正文缺少回复字段/],
+    ["text/event-stream", 'data: "PRIVATE-DATA"\n\ndata: [DONE]\n\n', /流式事件应为 JSON 对象/],
+    ["text/event-stream", 'data: {PRIVATE-DATA\n\ndata: [DONE]\n\n', /流式事件的 JSON 解析失败/],
+    ["text/html", "<html>PRIVATE-DATA</html>", /收到 HTML 网页/],
+    ["application/json", "", /响应正文为空/],
+  ]) await t.test(type + " " + expected.source, async () => {
+    const trace = browserTrace();
+    const reply = observeDelivery(new Response(wire, { headers: { "content-type": type } }), trace, () => {});
+    assert.equal(await reply.text(), wire);
+    assert.equal(trace.record.state, "error");
+    const report = formatDiagnostic(trace.record);
+    assert.match(report.split("\n")[0], /响应格式错误/);
+    assert.match(report.split("\n")[0], expected);
+    assert.match(report, /HTTP=200/);
+    assert.doesNotMatch(report, /PRIVATE-DATA/);
+  });
+});
+
+test("a correctly formed completion and a large successful reply retain their result", async () => {
+  for (const content of ["ok", "a".repeat(540000)]) {
+    const trace = browserTrace();
+    const wire = JSON.stringify({ choices: [{ message: { content } }] });
+    const incoming = new Response(wire, { headers: { "content-type": "Application/JSON; charset=UTF-8" } });
+    assert.equal(await observeDelivery(incoming, trace, () => {}).text(), wire);
+    assert.equal(trace.record.state, "ok");
+    assert.equal(trace.record.bytesReceived, Buffer.byteLength(wire));
+  }
+});
+
+test("a truncated large unary JSON reply fails both Tavern's parser and the error report", async () => {
+  const trace = browserTrace();
+  const wire = JSON.stringify({ choices: [{ message: { content: "不应进入报告".repeat(35000) } }] }).slice(0, -1);
+  assert.ok(Buffer.byteLength(wire) > 512 * 1024);
+  const incoming = new Response(wire, { headers: { "content-type": "application/json" } });
+  await assert.rejects(observeDelivery(incoming, trace, () => {}).json(), SyntaxError);
+  assert.equal(trace.record.state, "error");
+  const report = formatDiagnostic(trace.record);
+  assert.match(report.split("\n")[0], /响应格式错误，JSON 正文解析失败/);
+  assert.doesNotMatch(report, /不应进入报告/);
+});
+
+test("a server-assigned id retains the actual failure while a conflicting record stays separate", async () => {
+  const other = randomUUID(), wrong = randomUUID();
+  for (const [header, serverId, expected] of [[other, other, true], [null, other, true], [wrong, other, false], ["PRIVATE-HEADER", wrong, false]]) {
+    const trace = browserTrace();
+    const server = { id: serverId, idSource: "server", version: "0.20.3", stage: "configuration", state: "error", configReason: "Invalid VERTEX_LOCATION" };
+    const headers = header ? { [DIAGNOSTIC_HEADER]: header } : {};
+    await observeDelivery(Response.json({ error:{ diagnostic:server } }, {status:400,headers}), trace, () => {}).text();
+    assert.equal(Boolean(trace.record.server), expected);
+    const report = formatDiagnostic(trace.record);
+    if (expected) assert.match(report, /所选 Vertex 地区格式错误/);
+    assert.doesNotMatch(report, /PRIVATE-HEADER/);
+  }
 });
 
 test("Tauri and PayGo report the host HTTP failure and keep plugin diagnostic headers out of their requests", async () => {

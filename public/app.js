@@ -559,7 +559,8 @@ function eventTable(events) {
     // Pass-through requests keep the plain stream label; every audited transport, fallback and skip reason has its own.
     const transport = transportNames[a.transport] || (!a.transport || a.transport === "disabled" ? (e.stream ? "SSE 流式" : "普通响应") : a.transport);
     const success = e.status >= 200 && e.status < 300;
-    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small></td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code" title="${esc(errorMessage(e.code))}">${esc(e.code)}</small>` : ""}${integrityBadge(e.responseIntegrity)}${e.upstreamError ? `<small>上游：${esc([e.upstreamError.status, e.upstreamError.reason].filter(Boolean).join(" · "))}</small>` : ""}${compatibilityBadge(e.geminiCompatibility)}${inputBadge(e)}${accountBadge(e)}${e.regionAttempts?.length ? "<small>区域：" + e.regionAttempts.map(a => esc(a.location) + " (" + esc(a.status ?? "无响应") + ")").join(" → ") + "</small>" : ""}</td><td><span title="${esc(a.transport || "")}">${esc(transport)}</span><small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td>${usageCell(e)}<td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
+    const reportButton = e.status >= 400 ? `<button type="button" class="text-button" data-error-report="${esc(e.requestId)}">复制错误报告</button>` : "";
+    return `<tr><td><span class="mono">${esc(new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false }))}</span><small title="${esc(e.requestId)}">${esc(e.requestId.slice(0, 8))}</small>${reportButton}</td><td><span class="mono">${esc(e.model || "—")}</span><small>${esc(modeNames[e.mode] || "")}</small></td><td><span class="badge ${success ? "go" : "stop"}">${e.status}</span>${e.code ? `<small class="error-code" title="${esc(errorMessage(e.code))}">${esc(e.code)}</small>` : ""}${integrityBadge(e.responseIntegrity)}${e.upstreamError ? `<small>上游：${esc([e.upstreamError.status, e.upstreamError.reason].filter(Boolean).join(" · "))}</small>` : ""}${compatibilityBadge(e.geminiCompatibility)}${inputBadge(e)}${accountBadge(e)}${e.regionAttempts?.length ? "<small>区域：" + e.regionAttempts.map(a => esc(a.location) + " (" + esc(a.status ?? "无响应") + ")").join(" → ") + "</small>" : ""}</td><td><span title="${esc(a.transport || "")}">${esc(transport)}</span><small>${esc(a.finishReason || "—")}</small></td><td><span class="badge ${a.restored ? "go" : ""}">${recovered}</span><small>${a.streamDone === true ? "流已结束" : a.streamDone === false ? "流未完成" : ""}</small></td><td>${esc(tierNames[e.serviceTier] || "Standard")}<small>${esc(e.trafficType || "上游未报告")}</small></td>${usageCell(e)}<td class="mono">${(e.latencyMs / 1000).toFixed(2)} s</td></tr>`;
   }).join("") + "</tbody></table></div>";
 }
 function accountBadge(event) {
@@ -694,9 +695,10 @@ $("service-file").addEventListener("change", async e => {
 });
 $("service-account").addEventListener("change", () => { try { const v = JSON.parse($("service-account").value); if (!$("project-id").value && v.project_id) { $("project-id").value = v.project_id; updateDraft(); } } catch { /* Save shows a safe validation message. */ } });
 $("generate-key").addEventListener("click", () => { $("gateway-key").value = [...crypto.getRandomValues(new Uint8Array(32))].map(b => b.toString(16).padStart(2, "0")).join(""); updateDraft(); toast("已生成新密钥，请复制后保存配置。"); });
-async function copy(text) {
+async function copy(text, onFailure) {
   if (!text) return toast("没有可复制的内容。");
-  try { await navigator.clipboard.writeText(text); toast("已复制到剪贴板。"); } catch { toast("复制失败，请手动选择文本复制。"); }
+  try { await navigator.clipboard.writeText(text); toast("已复制到剪贴板。"); }
+  catch { if (onFailure) onFailure(); else toast("复制失败，请手动选择文本复制。"); }
 }
 $("copy-key").addEventListener("click", () => $("gateway-key").value ? copy($("gateway-key").value)
   : toast(!state.config.settings.gatewayKeySet ? "请先生成或输入密钥。" : state.config.saved ? "已保存的密钥不回显。需要更换时，请生成新密钥。" : "密钥已从环境变量导入，页面不回显。需要更换时，请生成新密钥。"));
@@ -717,6 +719,29 @@ $("logout-button").addEventListener("click", e => {
   });
 });
 $("event-filter").addEventListener("change", () => renderEvents(true));
+for (const table of [$("recent-events"), $("all-events")]) table.addEventListener("click", event => {
+  const button = event.target.closest("button[data-error-report]");
+  if (!button) return;
+  const e = state.events.find(row => row.requestId === button.dataset.errorReport);
+  if (!e) return toast("这条记录已移出最近 200 条请求。");
+  const fields = [
+    ["请求编号", e.requestId], ["时间", e.at], ["网关版本", $("gateway-version").textContent],
+    ["HTTP", e.status], ["错误码", e.code], ["上游状态", e.upstreamError?.status], ["上游原因", e.upstreamError?.reason],
+    ["模型", e.model], ["上游模型", e.upstreamModel], ["模式", modeNames[e.mode]], ["流式", e.stream ? "是" : "否"],
+    ["耗时毫秒", e.latencyMs], ["请求档位", e.serviceTier], ["实际上游档位", e.trafficType], ["区域", e.location],
+    ["区域尝试", e.regionAttempts], ["账号尝试", e.accountAttempts], ["限流重试次数", e.rateLimitRetries],
+    ["响应完整性", e.responseIntegrity], ["抗截断", e.antiTruncation], ["输出上限", e.outputLimit], ["图片输入", e.imageInput],
+    ["输入转码", e.unicodeInput], ["兼容处理", e.geminiCompatibility], ["已忽略参数", e.droppedParams], ["用量", e.usage], ["估算费用（美元）", e.estimatedCostUsd],
+  ];
+  const report = ["Vertex Gateway · " + (e.code ? errorMessage(e.code) : "HTTP " + e.status),
+    ...fields.filter(([, value]) => value != null).map(([key, value]) => key + "　" + (typeof value === "object" ? JSON.stringify(value) : value))].join("\n");
+  void copy(report, () => {
+    const area = $("manual-report-text");
+    area.value = report;
+    $("manual-report").showModal();
+    area.focus(); area.select();
+  });
+});
 $("probe-consent").addEventListener("change", updateProbeModel);
 $("probe-cancel").addEventListener("click", () => state.probe?.abort());
 $("probe-button").addEventListener("click", async () => {

@@ -90,3 +90,6 @@ main {max-width:1510px;margin:0 auto;padding:30px 34px 20px}.page {display:grid;
 .account-row legend {font-weight:600;padding:0 8px 0 0}
 .account-row textarea {margin-top:8px;max-width:100%}
 .account-row .form-grid [hidden] {display:none}
+#manual-report { width:min(38rem, 92vw); padding:1.25rem; border:1px solid var(--line); border-radius:8px; color:var(--ink); background:var(--panel); }
+#manual-report form { display:grid; gap:12px; }
+#manual-report button { justify-self:end; }

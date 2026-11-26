@@ -5,11 +5,11 @@ import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
 import { SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason, useBuiltinForMeow } from "../../src/transport-tool-name.mjs";
 import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
-import { isMultiRegion } from "../../src/vertex-locations.mjs";
+import { isMultiRegion, validVertexLocation } from "../../src/vertex-locations.mjs";
 import { CLIENT_HEADER, clientHeader, DIAGNOSTIC_HEADER } from "./diagnostic-fields.js";
 import { observeDelivery } from "./diagnostic-stream.js";
 export const PLUGIN_ID = "vertex-anti-truncation";
-export const PLUGIN_VERSION = "0.20.0";
+export const PLUGIN_VERSION = "0.20.5";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -153,6 +153,23 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     } catch (error) { trace?.thrown(error, "request_failed"); throw error; }
   };
   async function send({ input, init, url, body, mode, imageMode, unicodeMode, optimized, recent, unicodeEnabled, imageEnabled, trace }) {
+    const signal = init?.signal ?? input?.signal;
+    signal?.throwIfAborted();
+    const supports = trace?.supportsBackend ?? ensureBackend;
+    async function requireBackend(feature, code) {
+      const supported = await supports(feature);
+      signal?.throwIfAborted();
+      if (supported) return;
+      if (trace) trace.record.backendBlocked = true;
+      const message = trace?.backendMessage?.();
+      onStatus(message ? { error: code, message } : { error: code });
+      throw Object.assign(new Error(message ?? code), { code });
+    }
+    function fetchGeneration(...args) {
+      signal?.throwIfAborted();
+      if (trace) trace.record.dispatched = true;
+      return originalFetch(...args);
+    }
     if (imageEnabled && unicodeEnabled) throw new Error("input_encoding_conflict");
     let unicode;
     if (unicodeEnabled) {
@@ -185,7 +202,26 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     // Image conversion still needs its normal backend when only the text tool is skipped.
     const imageOnlyBypass = imageEnabled && reason?.startsWith("target-tool-") ? reason : null;
     if (imageOnlyBypass) reason = null;
-    if (!reason && !direct && !payGo && usesTools(body) && !await ensureBackend(TOOLS_FEATURE)) reason = "server-tools";
+    const regionFields = {};
+    let needsRegionBackend = false;
+    if (!reason && !direct && !payGo && body.vertexai_auth_mode === "full" && (body.vertexai_service_tier || "standard") === "standard") {
+      const regions = getRegions(body.model), fallback = regions.regionFallbackEnabled === true;
+      // Tavern can replace the selected multi-region with global for these models.
+      if (body.vertexai_region === "global" && /^gemini-4-(carbon|neon|hydrogen)$/.test(body.model) && regions.preferred &&
+          (isMultiRegion(regions.preferred) || fallback)) regionFields.vertexai_region = regions.preferred;
+      if (fallback) regionFields.vertex_fallback_locations = regions.fallbackLocations;
+      const effective = regionFields.vertexai_region ?? body.vertexai_region;
+      const multi = isMultiRegion(effective);
+      needsRegionBackend = fallback || multi;
+      if (trace) {
+        const region = value => !value ? "未指定" : validVertexLocation(value) ? value : "格式无效";
+        const locations = regions.fallbackLocations ?? [];
+        trace.record.routing = { input: region(body.vertexai_region), preferred: region(regions.preferred), effective: region(effective),
+          fallback, locations: Array.isArray(locations) ? locations.map(region).join(" → ") || "无" : "格式无效",
+          reason: [fallback && "已开启 429 区域切换", multi && ("多区域 " + effective)].filter(Boolean).join("、") || "无" };
+      }
+    }
+    if (!reason && !direct && !payGo && usesTools(body) && !await supports(TOOLS_FEATURE)) reason = "server-tools";
     const tagStop = !reason && !imageOnlyBypass && mode !== "off" ? getTagStop() : null;
     const waitForStopUsage = normalizeStopUsageWait(tagStop && getWaitForStopUsage());
     delete body.vertex_long_decode;
@@ -210,12 +246,9 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (!reason && tagStop) {
       try { validateTagStopRule(tagStop); }
       catch (error) { onStatus({ error: error.code }); throw error; }
-      if (!direct && !payGo && !await ensureBackend(tagStop.exemptTag ? EXEMPT_TAG_FEATURE : TAG_STOP_FEATURE)) {
-        onStatus({ error: "tag_stop_not_supported" }); throw new Error("tag_stop_not_supported");
-      }
-      if (!direct && !payGo && mode === "streaming" && body.stream === true && waitForStopUsage === "natural" && !await ensureBackend(NATURAL_STOP_USAGE_FEATURE)) {
-        onStatus({ error: "natural_stop_usage_not_supported" }); throw new Error("natural_stop_usage_not_supported");
-      }
+      if (!direct && !payGo) await requireBackend(tagStop.exemptTag ? EXEMPT_TAG_FEATURE : TAG_STOP_FEATURE, "tag_stop_not_supported");
+      if (!direct && !payGo && mode === "streaming" && body.stream === true && waitForStopUsage === "natural")
+        await requireBackend(NATURAL_STOP_USAGE_FEATURE, "natural_stop_usage_not_supported");
     }
     if (imageEnabled) {
       if (!["current-turn", "all"].includes(imageMode) || reason) { onStatus({ error: "image_input_requires_supported_request", bypass: reason }); throw new Error("image_input_requires_supported_request"); }
@@ -225,23 +258,13 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
       const { sendPayGoRequest } = await import("./paygo.js");
       try {
         const reply = await sendPayGoRequest({ originalFetch, input, init, body, mode, imageMode, tagStop, waitForStopUsage, unicode, transportToolName, meowCompat, longDecode: getLongDecode() === true,
-          ensureBackend, getRequestHeaders, onStatus: reportTransport, trace });
+          requireBackend, fetchGeneration, getRequestHeaders, onStatus: reportTransport, trace });
         return await reportResponse(reply, onStatus, trace);
       } catch (error) {
         onStatus({ error: error.code ?? error.message, ...(error.message && error.message !== error.code ? { message: error.message } : {}),
           character: error.character, param: error.param });
         throw error;
       }
-    }
-    let regionFields = {}, needsRegionBackend = false;
-    if (!reason && !direct && body.vertexai_auth_mode === "full" && (body.vertexai_service_tier || "standard") === "standard") {
-      const regions = getRegions(body.model);
-      // Some Tavern versions force these models to global when composing the request.
-      // Restore an explicitly selected multi-region (or the configured primary when opting in).
-      if (body.vertexai_region === "global" && /^gemini-4-(carbon|neon|hydrogen)$/.test(body.model) && regions.preferred &&
-          (isMultiRegion(regions.preferred) || regions.regionFallbackEnabled)) regionFields.vertexai_region = regions.preferred;
-      if (regions.regionFallbackEnabled) regionFields.vertex_fallback_locations = regions.fallbackLocations;
-      needsRegionBackend = regions.regionFallbackEnabled || isMultiRegion(regionFields.vertexai_region ?? body.vertexai_region);
     }
     let payload = reason ? null : JSON.stringify(prepared?.body ??
       { ...body, ...regionFields, vertex_anti_truncation: mode, ...(meowCompat ? { vertex_meow_compat: true } : {}), ...(transportToolName ? { vertex_transport_tool_name: transportToolName } : {}),
@@ -252,22 +275,15 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (reason && trace) Object.assign(trace.record, { route: "native", bypass: reason });
     if (reason && !unicodeEnabled) {
       onStatus({ bypass: reason });
-      const reply = await originalFetch(input, init);
+      const reply = await fetchGeneration(input, init);
       return trace ? reportResponse(reply, onStatus, trace) : reply;
     }
-    if (!reason && needsRegionBackend && !await ensureBackend(REGION_FEATURE)) {
-      onStatus({ error: "region_routing_not_supported" }); throw new Error("region_routing_not_supported");
-    }
+    if (!reason && needsRegionBackend) await requireBackend(REGION_FEATURE, "region_routing_not_supported");
     const transportFeature = meowCompat ? MEOW_FEATURE : soliumbraSchema(transportToolName, body.tools) ? SOLIUMBRA_FEATURE : TRANSPORT_NAME_FEATURE;
-    if (!reason && !direct && transportToolName && !await ensureBackend(transportFeature)) {
-      const error = meowCompat ? "meow_compat_not_supported" : "transport_tool_name_not_supported";
-      onStatus({ error }); throw new Error(error);
-    }
+    if (!reason && !direct && transportToolName) await requireBackend(transportFeature, meowCompat ? "meow_compat_not_supported" : "transport_tool_name_not_supported");
     // Old plugins ignore image settings and Continue semantics. Check only
     // eligible plugin requests; disabled/bypass routes retain ST's behavior.
-    if (!reason && !direct && (imageEnabled || body.type === "continue") && !await ensureBackend()) {
-      onStatus({ error: "plugin_not_ready" }); throw new Error("plugin_not_ready");
-    }
+    if (!reason && !direct && (imageEnabled || body.type === "continue")) await requireBackend(undefined, "plugin_not_ready");
     reportTransport({ mode, bypass: reason ?? imageOnlyBypass, unicode });
     if (reason) payload = JSON.stringify(body);
     const target = reason || direct ? url.href : new URL(`${PLUGIN_PATH}/generate`, origin).href;
@@ -286,11 +302,11 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
           credentials: source.credentials, cache: source.cache, redirect: source.redirect,
           referrer: source.referrer, referrerPolicy: source.referrerPolicy, mode: source.mode,
         });
-        response = await originalFetch(redirected);
+        response = await fetchGeneration(redirected);
       } else {
-        response = await originalFetch(reason || direct ? input : `${PLUGIN_PATH}/generate`, { ...init, body: payload });
+        response = await fetchGeneration(reason || direct ? input : `${PLUGIN_PATH}/generate`, { ...init, body: payload });
       }
-    } catch (error) { onStatus({ error: "network" }); throw error; }
+    } catch (error) { if (!signal?.aborted) onStatus({ error: "network" }); throw error; }
     if (direct && !reason) {
       if (trace) Object.assign(trace.record, { hostStatus: response.status, hostHeadersMs: trace.elapsed() });
       response = await direct.restore(response, prepared, init?.signal ?? (input instanceof Request ? input.signal : undefined));

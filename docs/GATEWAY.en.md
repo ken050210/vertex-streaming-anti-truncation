@@ -401,6 +401,8 @@ Version 0.7.0 of the console, using demo settings and a simulated upstream. The 
 
 The overview shows gateway status, the client URL, saved models and recent requests.
 
+In Recent Requests and the request log, each failed row has a copy-report button under its request ID. The report includes the full ID, gateway version, HTTP status, and recorded upstream, regional and transport details. If clipboard access fails, the console selects the report text for manual copying.
+
 ![Light overview with gateway status, client connection details and recent requests](screenshots/console-overview.jpg)
 
 <details>
