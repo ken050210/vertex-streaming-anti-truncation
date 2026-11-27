@@ -1,3 +1,6 @@
+import { displayEncodingChoice, encodingHistory, recordEncodingChoice } from "./optimized-input.js";
+import { chatFloorFormat, installChatFloorInput } from "./chat-floor-input.js";
+import { presetFormat } from "./preset-input.js";
 import { PLUGIN_ID, PLUGIN_PATH, PLUGIN_VERSION, MODES, compareVersions, createFetchInterceptor, latestUserInput } from "./shared.js";
 import { normalizeStopUsageWait, DEFAULT_STOP_TAG, DEFAULT_STOP_COUNT, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { validateTransportToolName } from "../../src/transport-tool-name.mjs";
@@ -14,6 +17,29 @@ import { backendFinding, probeBackend } from "./backend-status.js";
 const tauri = window.__TAURITAVERN__ ? await import("../../src/tauritavern.mjs") : null;
 const direct = tauri && { prepare: tauri.prepareTauriTavernRequest, restore: tauri.restoreTauriTavernResponse };
 const context = SillyTavern.getContext();
+const chatFloorBridge = globalThis[Symbol.for("vertex.chatFloorInput.v1")];
+let floorReceipt;
+function renderEncodingHistory() {
+  const list = document.getElementById("vertex_encoding_history");
+  if (!list) return;
+  const entries = encodingHistory(context.accountStorage);
+  list.parentElement.hidden = !entries.length;
+  list.replaceChildren(...entries.map(entry => {
+    const item = document.createElement("li");
+    item.textContent = displayEncodingChoice(entry);
+    return item;
+  }));
+}
+function onEncodingChoice(format, scope) {
+  const id = recordEncodingChoice(context.accountStorage, format, scope);
+  renderEncodingHistory();
+  return id;
+}
+installChatFloorInput(chatFloorBridge, { settings, onEncodingChoice, context: () => SillyTavern.getContext(), report: result => {
+  if (floorReceipt) floorReceipt.textContent = result.error ? (errors[result.error] || result.error)
+    : result.excludePreset ? `本次转码 ${result.matchedMessages} 条；整条保留的预设 ${result.excluded} 条，混排 ${result.mixed} 条。${result.unknown ? " 另有 " + result.unknown + " 条来源未确认，按原文发送。" : ""}`
+    : `本次识别 ${result.selected} 条聊天消息，已转码 ${result.matchedMessages} 条；数据库 ${result.databaseParts || 0} 段。${result.format ? " 格式：" + result.format : ""}`;
+} });
 let diagnostics;
 const meowStreams = installMeowStreamPreview(() => SillyTavern.getContext());
 const events = context.eventTypes ?? context.event_types;
@@ -114,29 +140,45 @@ function mountInputEncoding(panel, saved) {
   if (!direct) method.add(new Option("文字转图", "image"));
   const unicode = saved.unicodeInput;
   const encoded = inputEncodingMode(unicode);
-  if (encoded) method.value = encoded[1];
+  const chatFormat = chatFloorFormat(unicode);
+  if (chatFloorBridge) scope.add(new Option(chatFloorBridge.databaseVersion === 1 ? "全部聊天楼层（含当前输入及数据库）" : "全部聊天楼层（含当前输入）", "chat"));
+  const presetSupported = chatFloorBridge?.presetVersion === 1;
+  const excludeFormat = presetSupported && presetFormat(unicode);
+  if (presetSupported) scope.add(new Option("全部上下文（排除预设）", "except-preset"));
+  if (excludeFormat) method.value = excludeFormat;
+  else if (chatFloorBridge && chatFormat) method.value = chatFormat;
+  else if (encoded) method.value = encoded[1];
   else if (unicode === true || unicode === "all" || unicode === "recent") method.value = "unicode";
   else if (!direct && ["current-turn", "all"].includes(saved.imageInput)) method.value = "image";
   scope.value = (method.value === "image" ? saved.imageInput === "all" : unicode === "all" || encoded?.[2] === "all") ? "all" : "current";
 
   if (unicode === "recent" || encoded?.[2] === "recent") scope.value = "recent";
+  if (chatFloorBridge && chatFormat) scope.value = "chat";
+  if (excludeFormat) scope.value = "except-preset";
+  floorReceipt = panel.querySelector("#vertex_chat_floor_receipt");
+  if (excludeFormat) floorReceipt.textContent = "下次发送后显示预设排除结果。";
 
   function render() {
     const image = method.value === "image";
     scope.options[2].hidden = image;
+    if (chatFloorBridge) scope.querySelector('[value="chat"]').hidden = image;
+    if (presetSupported) scope.querySelector('[value="except-preset"]').hidden = image;
+    floorReceipt.hidden = method.value === "off" || image || !["chat", "except-preset"].includes(scope.value);
     scope.options[0].text = image ? "当前轮" : "当前输入";
     scope.options[1].text = image ? "全部会话" : "全部上下文";
     scope.parentElement.hidden = method.value === "off";
     summary.textContent = method.selectedOptions[0].text + (method.value === "off" ? "" : " · " + scope.selectedOptions[0].text);
   }
   function change() {
-    if (method.value === "image" && scope.value === "recent") scope.value = "current";
+    if (method.value === "image" && ["recent", "chat", "except-preset"].includes(scope.value)) scope.value = "current";
     const recent = scope.value === "recent";
     const all = scope.value === "all";
-    const unicodeInput = method.value === "unicode" ? (recent ? "recent" : all ? "all" : true)
+    const unicodeInput = ["chat", "except-preset"].includes(scope.value) && method.value !== "off" ? method.value + "-" + scope.value
+      : method.value === "unicode" ? (recent ? "recent" : all ? "all" : true)
       : inputEncodingMode(method.value) ? method.value + (recent ? "-recent" : all ? "-all" : "") : false;
     const imageInput = method.value === "image" ? (all ? "all" : "current-turn") : "off";
     saveSettings({ unicodeInput, imageInput });
+    floorReceipt.textContent = "下次发送后显示此范围的转码结果。";
     render();
   }
   method.addEventListener("change", change);
@@ -229,6 +271,8 @@ function mount() {
           <option value="current">当前输入</option><option value="all">全部上下文</option>
           <option value="recent">最近两个 AI 楼层与当前输入</option>
         </select></label>
+        <details hidden><summary>最近自动转码记录</summary><ol id="vertex_encoding_history"></ol></details>
+        <small id="vertex_chat_floor_receipt" aria-live="polite" hidden>转码本次发送的用户和 AI 聊天楼层，以及数据库条目和召回纪要。</small>
       </div>
     </details>
     <details id="vertex_transport_options">
@@ -311,6 +355,7 @@ function mount() {
     entryPoints: [mount, createFetchInterceptor, observeDelivery, probeBackend] });
   diagnostics.mount(connection, actions);
   parent.append(panel);
+  renderEncodingHistory();
   enableMeowTransport(payGoInstalled);
   installTransport(false)(payGoInstalled);
   // A deferred preset regex leaves the legacy HTML comment in the live Markdown.
@@ -332,6 +377,7 @@ function installTransport(compat) {
   const previous = window.fetch.bind(window);
   let transport;
   window.fetch = (input, init) => {
+    init = chatFloorBridge?.finishFetch?.(input, init) ?? init;
     const meowActive = context.extensionSettings?.[PLUGIN_ID]?.meowCompat === true && mode() !== "off";
     if (!transport || meowActive !== compat) return previous(input, init);
     const processor = compat && SillyTavern.getContext().streamingProcessor;
@@ -363,7 +409,7 @@ function installTransport(compat) {
         const context = SillyTavern.getContext();
         return latestUserInput(context.chat, context.chatMetadata?.variables);
       },
-      onStatus: updateStatus, startReport: diagnostics?.start, direct });
+      onEncodingChoice, onStatus: updateStatus, startReport: diagnostics?.start, direct });
   };
 }
 

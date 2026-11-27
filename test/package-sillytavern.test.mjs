@@ -14,11 +14,12 @@ async function fixture(t) {
   const temporary = await mkdtemp(path.join(tmpdir(), "vertex-package-test-"));
   const root = path.join(temporary, "repo");
   t.after(() => rm(temporary, { recursive: true, force: true }));
-  const files = ["package-lock.json", "assets/fonts/NotoSansCJKsc-Regular.otf", "assets/fonts/OFL.txt", "manifest.json", "package.json", "public/region-editor.js", "public/region-editor.css", "src/vertex-locations.mjs", "integrations/sillytavern/index.js", "integrations/sillytavern/shared.js", "integrations/sillytavern/meow-stream-preview.js",
+  const files = ["package-lock.json", "assets/fonts/NotoSansCJKsc-Regular.otf", "assets/fonts/OFL.txt", "manifest.json", "package.json", "public/region-editor.js", "public/region-editor.css", "src/vertex-locations.mjs", "integrations/sillytavern/index.js", "integrations/sillytavern/preset-input.js", "integrations/sillytavern/chat-floor-input.js", "integrations/sillytavern/shared.js", "integrations/sillytavern/meow-stream-preview.js",
     "assets/fonts/NotoColorEmoji.ttf", "assets/fonts/NotoEmoji-OFL.txt", "integrations/sillytavern/paygo.js", "integrations/sillytavern/optimized-input.js", "integrations/sillytavern/style.css", "integrations/sillytavern/server.mjs", "integrations/sillytavern/server-entry.mjs", "integrations/sillytavern/google-usage-estimate.mjs",
     ...["optimized-input","current","soliumbra","meow-compat","anti-truncation","completion-integrity","completion-stream","gemini4","sillytavern","tag-stop","tag-stop-rule","tauritavern","transport-tool-name","unicode-input","unsupported-params","vertex-native","vertex-partial-args","vertex-protocol","vertex-schema","vertex-text-stream","wire"].map(name=>"src/"+name+".mjs"), "LICENSE", "NOTICE.md",
     "LICENSES/Antigravity-gateway-MIT.txt", "docs/SILLYTAVERN.md", ...["install.mjs", "install-windows.cmd", "install.sh", "README.txt"].map(file => `integrations/sillytavern/installer/${file}`)];
   files.push(...["diagnostic-fields.js", "diagnostic-stream.js", "diagnostics-ui.js", "backend-status.js", "server-diagnostics.mjs"].map(file => "integrations/sillytavern/" + file));
+  files.push(...["chat-floor-input", "chat-database-input", "preset-exclusion", "encoding-choice-monitor"].map(file => `patches/sillytavern/${file}.patch`));
   for (const file of files) {
     await mkdir(path.dirname(path.join(root, file)), { recursive: true });
     await writeFile(path.join(root, file), `fixture ${file}\n`);

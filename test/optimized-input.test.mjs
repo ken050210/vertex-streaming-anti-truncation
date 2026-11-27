@@ -6,6 +6,26 @@ import { prepareOptimizedInput } from "../integrations/sillytavern/optimized-inp
 const tokenizer = "/api/tokenizers/gemma/encode";
 const noFetch = () => assert.fail("unexpected tokenizer request");
 
+test("automatic choice is reported before dispatch and survives rejection; manual and empty inputs have no choice", async () => {
+  const choices = [];
+  let mode = "optimized-all", expectedId = "17";
+  const intercept = createFetchInterceptor(async (url, init) => {
+    if (url === tokenizer) return Response.json({ count: JSON.parse(init.body).text.includes("共用字表") ? 1 : 40 });
+    assert.equal(new Headers(init.headers).get("x-vertex-encoding-choice"), expectedId);
+    throw new Error("upstream unavailable");
+  }, { origin: "http://localhost", getMode: () => "off", getUnicodeInput: () => mode,
+    onEncodingChoice(format, scope) { choices.push([format, scope]); return 17; } });
+  const send = content => intercept(GENERATE_PATH, { method: "POST", body: JSON.stringify({
+    chat_completion_source: "vertexai", messages: [{ role: "user", content }],
+  }) });
+  await assert.rejects(send("山水"), /upstream unavailable/);
+  expectedId = null;
+  await assert.rejects(send("123"), /upstream unavailable/);
+  mode = "table-all";
+  await assert.rejects(send("山水"), /upstream unavailable/);
+  assert.deepEqual(choices, [["table", "all"]]);
+});
+
 test("optimized current input counts all three guides, changes floor copies and delivers one provider response", async () => {
   const floor = "你好𠀀", requests = [], comparisons = [], statuses = [];
   let tokenizerLoading = false;

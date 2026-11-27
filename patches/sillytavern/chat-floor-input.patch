@@ -1,0 +1,38 @@
+--- a/public/script.js
++++ b/public/script.js
+@@ -4617,5 +4617,6 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
+     const historyCoverage = !dryRun && !quiet_prompt && !isImpersonate && type !== 'quiet'
+         ? startHistoryCoverage(chat, type) : null;
+-    const databaseFloors = databasePolicy || historyCoverage ? new Map(chat.map((entry, index) => [entry, index])) : null;
++    const encodeChatFloors = !dryRun && main_api === 'openai' && globalThis[Symbol.for("vertex.chatFloorInput.v1")]?.enabled?.();
++    const databaseFloors = databasePolicy || historyCoverage || encodeChatFloors ? new Map(chat.map((entry, index) => [entry, index])) : null;
+     // Collect messages with usable content
+     const canUseTools = ToolManager.isToolCallingSupported();
+--- a/public/scripts/openai.js
++++ b/public/scripts/openai.js
+@@ -575,4 +575,5 @@ async function validateReverseProxy() {
+  */
+ const databaseFloor = Symbol.for("acu.historyFloor");
++const vertexChatFloorInput = globalThis[Symbol.for("vertex.chatFloorInput.v1")] ??= {};
+ globalThis.acuHistoryBudgetPromptVersion = 1;
+ 
+@@ -1688,5 +1689,6 @@ export async function prepareOpenAIMessages({
+ 
+     const chat = chatCompletion.getChat();
+-    if (databaseBudget || historyCoverage) {
++    const encodeChatFloors = !dryRun && vertexChatFloorInput.enabled?.();
++    if (databaseBudget || historyCoverage || encodeChatFloors) {
+         const records = chatCompletion.messages.flatten().filter(m => m.content || m.tool_calls).map(m => ({
+             floor: m[databaseFloor], tokens: m.getTokens(), media: m.databaseMediaTokens || 0,
+@@ -1694,4 +1696,5 @@ export async function prepareOpenAIMessages({
+         databaseBudget?.bind(chat, records);
+         historyCoverage?.bind(chat, records);
++        if (encodeChatFloors) vertexChatFloorInput.bind(chat, records);
+     }
+ 
+@@ -3250,4 +3253,5 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null, hi
+ 
+     window.__meowTiming?.mark(40);
++    if (vertexChatFloorInput.enabled?.()) await vertexChatFloorInput.apply(generate_data, signal);
+     const googleUsage = beginGoogleUsage(type, generate_data);
+     const generate_url = '/api/backends/chat-completions/generate';

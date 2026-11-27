@@ -1,0 +1,141 @@
+--- a/public/scripts/openai.js
++++ b/public/scripts/openai.js
+@@ -577,4 +577,5 @@
+ const vertexChatFloorInput = globalThis[Symbol.for("vertex.chatFloorInput.v1")] ??= {};
+ vertexChatFloorInput.databaseVersion = 1;
++vertexChatFloorInput.presetVersion = 1;
+ globalThis.acuHistoryBudgetPromptVersion = 1;
+ 
+@@ -875,4 +876,7 @@
+                 if (jointPrompt && jointPrompt.length) {
+                     const message = { role, content: jointPrompt, injected: true };
++                    if (orderPrompts.some(p => p.role === role && p.presetInput)) {
++                        message.presetInput = vertexChatFloorInput.depthPresetRanges(orderPrompts.filter(p => p.role === role), rolePrompts);
++                    }
+                     const ext = extensionPrompt.trim();
+                     if (chatDatabase && ext) {
+@@ -920,4 +924,5 @@
+     const newChat = selected_group ? oai_settings.new_group_chat_prompt : oai_settings.new_chat_prompt;
+     const newChatMessage = await Message.createAsync('system', substituteParams(newChat), 'newMainChat');
++    if (vertexChatFloorInput.excludesPreset?.()) newChatMessage.presetInput = true;
+     chatCompletion.reserveBudget(newChatMessage);
+ 
+@@ -951,4 +956,5 @@
+         const preparedNudgePrompt = promptManager.preparePrompt(continueNudgePrompt);
+         const continueNudgeMessage = await Message.fromPromptAsync(preparedNudgePrompt);
++        if (vertexChatFloorInput.excludesPreset?.()) continueNudgeMessage.presetInput = true;
+         continueMessageCollection.add(continueNudgeMessage);
+         chatCompletion.reserveBudget(continueMessageCollection);
+@@ -957,4 +963,5 @@
+     const lastChatPrompt = messages[messages.length - 1];
+     const message = await Message.createAsync('user', oai_settings.send_if_empty, 'emptyUserMessageReplacement');
++    if (vertexChatFloorInput.excludesPreset?.()) message.presetInput = true;
+     if (lastChatPrompt && lastChatPrompt.role === 'assistant' && oai_settings.send_if_empty && chatCompletion.canAfford(message)) {
+         chatCompletion.insert(message, 'chatHistory');
+@@ -983,4 +990,5 @@
+         const chatMessage = await Message.fromPromptAsync(promptManager.preparePrompt(prompt));
+         chatMessage[databaseFloor] = chatPrompt[databaseFloor];
++        if (chatPrompt.presetInput?.length) chatMessage.presetInput = chatMessage.content === chatPrompt.content ? chatPrompt.presetInput : "unknown";
+         if (chatPrompt.databaseSpans?.length && chatMessage.content === chatPrompt.content) chatMessage.databaseSpans = chatPrompt.databaseSpans;
+ 
+@@ -1145,4 +1153,5 @@
+     if (Array.isArray(messageExamples) && messageExamples.length) {
+         const newExampleChat = await Message.createAsync('system', substituteParams(oai_settings.new_example_chat_prompt), 'newChat');
++        if (vertexChatFloorInput.excludesPreset?.()) newExampleChat.presetInput = true;
+         for (const dialogue of [...messageExamples]) {
+             const dialogueIndex = messageExamples.indexOf(dialogue);
+@@ -1317,4 +1326,5 @@
+                 const main = absolutePrompts[indexOfMain];
+                 const promptCopy = new Prompt(prompt);
++                promptCopy.presetInput = prompt.presetInput;
+                 promptCopy.role = main.role;
+                 promptCopy.injection_position = main.injection_position;
+@@ -1518,4 +1528,8 @@
+     // This is the prompt order defined by the user
+     const prompts = promptManager.getPromptCollection(type);
++    const trackPreset = vertexChatFloorInput.enabled?.() && vertexChatFloorInput.excludesPreset?.();
++    if (trackPreset) for (const p of prompts.collection) p.presetInput = true;
++
++    const resolveNames = literal => literal.replace(/\{\{(?:char|user)\}\}/gi, name => substituteParams(name));
+ 
+     // Merge system prompts with prompt manager prompts
+@@ -1536,4 +1550,17 @@
+ 
+         const newPrompt = promptManager.preparePrompt(prompt);
++        if (trackPreset) {
++            // Native slots replace the preset's ordering markers. Only their format
++            // strings come from the preset. Character and extension values have their own source.
++            if (prompt.identifier === 'impersonate' || prompt.identifier === 'groupNudge') newPrompt.presetInput = true;
++            else if (prompt.identifier === 'worldInfoBefore' || prompt.identifier === 'worldInfoAfter') {
++                const slot = prompt.identifier === 'worldInfoBefore' ? worldInfoBefore : worldInfoAfter;
++                if (oai_settings.wi_format?.trim()) newPrompt.presetInput = vertexChatFloorInput.formattedSlot(newPrompt.content, slot, oai_settings.wi_format, '{0}', false, resolveNames);
++            } else if (prompt.identifier === 'scenario' && oai_settings.scenario_format && scenario) {
++                newPrompt.presetInput = vertexChatFloorInput.formattedSlot(newPrompt.content, scenario, oai_settings.scenario_format, /\{\{scenario\}\}/i, false, resolveNames);
++            } else if (prompt.identifier === 'charPersonality' && oai_settings.personality_format && charPersonality) {
++                newPrompt.presetInput = vertexChatFloorInput.formattedSlot(newPrompt.content, charPersonality, oai_settings.personality_format, /\{\{personality\}\}/i, false, resolveNames);
++            }
++        }
+         const markerIndex = prompts.index(prompt.identifier);
+ 
+@@ -1549,4 +1576,5 @@
+         systemPrompt.content = systemPromptOverride;
+         const mainReplacement = promptManager.preparePrompt(systemPrompt, mainOriginalContent);
++        if (trackPreset) mainReplacement.presetInput = vertexChatFloorInput.formattedSlot(mainReplacement.content, mainOriginalContent, systemPromptOverride, /\{\{original\}\}/i, true);
+         prompts.override(mainReplacement, prompts.index('main'));
+     }
+@@ -1559,4 +1587,5 @@
+         jailbreakPrompt.content = jailbreakPromptOverride;
+         const jbReplacement = promptManager.preparePrompt(jailbreakPrompt, jbOriginalContent);
++        if (trackPreset) jbReplacement.presetInput = vertexChatFloorInput.formattedSlot(jbReplacement.content, jbOriginalContent, jailbreakPromptOverride, /\{\{original\}\}/i, true);
+         prompts.override(jbReplacement, prompts.index('jailbreak'));
+     }
+@@ -1706,5 +1735,5 @@
+     if (databaseBudget || historyCoverage || encodeChatFloors) {
+         const records = chatCompletion.messages.flatten().filter(m => m.content || m.tool_calls).map(m => ({
+-            database: m.databaseSpans, floor: m[databaseFloor], tokens: m.getTokens(), media: m.databaseMediaTokens || 0,
++            preset: m.presetInput, database: m.databaseSpans, floor: m[databaseFloor], tokens: m.getTokens(), media: m.databaseMediaTokens || 0,
+         }));
+         databaseBudget?.bind(chat, records);
+@@ -3263,9 +3292,10 @@
+     const { generate_data, stream, canMultiSwipe } = await createGenerationParameters(oai_settings, model, type, messages, { jsonSchema });
+     await eventSource.emit(event_types.CHAT_COMPLETION_SETTINGS_READY, generate_data);
++    const beforeBudget = databaseBudget && vertexChatFloorInput.excludesPreset?.() ? new Set(generate_data.messages) : null;
+     const applied = databaseBudget ? (window.__meowTiming?.preparing ? await window.__meowTiming.measure(39, async () => (await databaseBudget.apply(generate_data, signal))) : (await databaseBudget.apply(generate_data, signal))) : undefined;
+     historyCoverage?.measure(generate_data.messages, applied?.ranges, applied?.removedFloors, applied);
+ 
+     window.__meowTiming?.mark(40);
+-    if (vertexChatFloorInput.enabled?.()) await vertexChatFloorInput.apply(generate_data, signal);
++    if (vertexChatFloorInput.enabled?.()) await vertexChatFloorInput.apply(generate_data, signal, beforeBudget);
+     const googleUsage = beginGoogleUsage(type, generate_data);
+     const generate_url = '/api/backends/chat-completions/generate';
+@@ -3937,6 +3967,8 @@
+      * @returns {Promise<Message>} A new instance of Message.
+      */
+-    static fromPromptAsync(prompt) {
+-        return Message.createAsync(prompt.role, prompt.content, prompt.identifier);
++    static async fromPromptAsync(prompt) {
++        const message = await Message.createAsync(prompt.role, prompt.content, prompt.identifier);
++        if (prompt.presetInput) message.presetInput = prompt.presetInput;
++        return message;
+     }
+ 
+@@ -4086,4 +4118,10 @@
+             if (shouldSquash(message)) {
+                 if (lastMessage && shouldSquash(lastMessage) && lastMessage[databaseFloor] === message[databaseFloor]) {
++                    if (lastMessage.presetInput === "unknown" || message.presetInput === "unknown") lastMessage.presetInput = "unknown";
++                    else if (lastMessage.presetInput || message.presetInput) {
++                        const offset = lastMessage.content.length + 1;
++                        lastMessage.presetInput = [...vertexChatFloorInput.presetRanges(lastMessage.content, lastMessage.presetInput),
++                            ...vertexChatFloorInput.presetRanges(message.content, message.presetInput).map(([a, b]) => [a + offset, b + offset])];
++                    }
+                     if (message.databaseSpans?.length) {
+                         const offset = lastMessage.content.length + 1;
+--- a/public/scripts/world-info.js
++++ b/public/scripts/world-info.js
+@@ -5255,5 +5255,5 @@
+                 : entry.position === world_info_position.after ? 'worldInfoAfter'
+                 : entry.position === world_info_position.atDepth ? `depth-${regexDepth}-${entry.role ?? extension_prompt_roles.SYSTEM}` : null;
+-            if (slot) globalScanData.chatDatabase.collect(slot, entry, content);
++            globalScanData.chatDatabase.collect(slot, entry, content);
+         }
+         switch (entry.position) {

@@ -1,0 +1,46 @@
+--- a/public/scripts/openai.js
++++ b/public/scripts/openai.js
+@@ -3296,14 +3296,16 @@
+     historyCoverage?.measure(generate_data.messages, applied?.ranges, applied?.removedFloors, applied);
+ 
+     window.__meowTiming?.mark(40);
+-    if (vertexChatFloorInput.enabled?.()) await vertexChatFloorInput.apply(generate_data, signal, beforeBudget);
++    const encodingChoice = vertexChatFloorInput.enabled?.() ? await vertexChatFloorInput.apply(generate_data, signal, beforeBudget) : undefined;
+     const googleUsage = beginGoogleUsage(type, generate_data);
+     const generate_url = '/api/backends/chat-completions/generate';
+     window.__meowTiming?.event("requestReady",stream,generate_data.messages?.length);
++    const generationHeaders = (window.__meowTiming?.preparing ? await window.__meowTiming.measure(42, async () => (await googlePrefixHeaders(googleUsage, getRequestHeaders()))) : (await googlePrefixHeaders(googleUsage, getRequestHeaders())));
++    if (encodingChoice !== undefined) generationHeaders["x-vertex-encoding-choice"] = String(encodingChoice);
+         const response = await fetch(generate_url, {
+         method: 'POST',
+         body: window.__meowTiming?.preparing ? (()=>{const end=window.__meowTiming.span(41);try{return JSON.stringify(generate_data);}finally{end();}})() : JSON.stringify(generate_data),
+-        headers: (window.__meowTiming?.preparing ? await window.__meowTiming.measure(42, async () => (await googlePrefixHeaders(googleUsage, getRequestHeaders()))) : (await googlePrefixHeaders(googleUsage, getRequestHeaders()))),
++        headers: generationHeaders,
+         signal: signal,
+     });
+     window.__meowTiming?.event("bind",response.status,stream);
+--- a/public/scripts/meow-timing-1711.js
++++ b/public/scripts/meow-timing-1711.js
+@@ -309,6 +309,8 @@
+     const key=sid+'.'+gen+'.'+req;
+     row(gen,req,'fetch',route,typeof init?.body === 'string' ? init.body.length : -1);
+     const headers=new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
++    const choice = headers.get('x-vertex-encoding-choice');
++    if (choice !== null && /^\d{1,15}$/.test(choice)) row(gen,req,'auxiliary',3,0,107,Number(choice));
+     headers.set('x-meow-timing',key);
+     return nativeFetch(input,{...init,headers}).then(r=>{
+       const mime=r.headers.get('content-type')??'';
+@@ -468,6 +470,13 @@
+ 
+   window.__meowTiming = {
+     span, mark, register, callback, ownerId,
++    encodingChoice(id, format, scope) {
++      const formatCode = ['alternate','table','gbk'].indexOf(format) + 1;
++      const scopeCode = ['current','recent','all','chat','except-preset'].indexOf(scope) + 1;
++      row(g,0,'auxiliary',3,0,106,id,formatCode,scopeCode);
++      persist();
++      void flush();
++    },
+     get preparing(){return preparing;},
+     async measure(id,fn,...fields){const end=span(id,...fields);try{return await fn();}finally{end?.();}},
+     // The core module and its imports finish evaluating in the current task.

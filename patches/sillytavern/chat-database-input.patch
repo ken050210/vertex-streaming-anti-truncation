@@ -1,0 +1,143 @@
+--- a/public/script.js
++++ b/public/script.js
+@@ -4756,5 +4756,7 @@
+     const chatForWI = coreChat.map(x => world_info_include_names ? `${x.name}: ${x.mes}` : x.mes).reverse();
+     /** @type {import('./scripts/world-info.js').WIGlobalScanData} */
++    const chatDatabase = encodeChatFloors && await globalThis[Symbol.for("vertex.chatFloorInput.v1")]?.beginDatabase?.();
+     const globalScanData = {
++        chatDatabase,
+         databasePolicy: databasePolicy || databaseStoryRecall,
+         personaDescription: persona,
+@@ -5448,5 +5450,5 @@
+                 systemPromptOverride: system,
+                 jailbreakPromptOverride: jailbreak,
+-                databasePolicy, historyCoverage,
++                databasePolicy, historyCoverage, chatDatabase,
+                 messages: oaiMessages,
+                 messageExamples: oaiMessageExamples,
+--- a/public/scripts/openai.js
++++ b/public/scripts/openai.js
+@@ -576,4 +576,5 @@
+ const databaseFloor = Symbol.for("acu.historyFloor");
+ const vertexChatFloorInput = globalThis[Symbol.for("vertex.chatFloorInput.v1")] ??= {};
++vertexChatFloorInput.databaseVersion = 1;
+ globalThis.acuHistoryBudgetPromptVersion = 1;
+ 
+@@ -819,5 +820,5 @@
+  * @returns {Promise<Object[]>} - Array containing all messages with injections.
+  */
+-async function populationInjectionPrompts(prompts, messages) {
++async function populationInjectionPrompts(prompts, messages, chatDatabase) {
+     const traceEnd=window.__meowTiming?.span(35);
+     try {
+@@ -873,5 +874,12 @@
+ 
+                 if (jointPrompt && jointPrompt.length) {
+-                    roleMessages.push({ 'role': role, 'content': jointPrompt, injected: true });
++                    const message = { role, content: jointPrompt, injected: true };
++                    const ext = extensionPrompt.trim();
++                    if (chatDatabase && ext) {
++                        const offset = jointPrompt.length - ext.length;
++                        message.databaseSpans = chatDatabase.locate(`depth-${i}-${roleTypes[role]}`, ext)
++                            .map(r => ({ ...r, start: r.start + offset }));
++                    }
++                    roleMessages.push(message);
+                 }
+             }
+@@ -975,4 +983,5 @@
+         const chatMessage = await Message.fromPromptAsync(promptManager.preparePrompt(prompt));
+         chatMessage[databaseFloor] = chatPrompt[databaseFloor];
++        if (chatPrompt.databaseSpans?.length && chatMessage.content === chatPrompt.content) chatMessage.databaseSpans = chatPrompt.databaseSpans;
+ 
+         if (promptManager.serviceSettings.names_behavior === character_names_behavior.COMPLETION && prompt.name) {
+@@ -1214,5 +1223,5 @@
+  * @returns {Promise<void>}
+  */
+-async function populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples }) {
++async function populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples, chatDatabase }) {
+     const traceEnd=window.__meowTiming?.span(32);
+     try {
+@@ -1367,5 +1376,5 @@
+ 
+     // Add in-chat injections
+-    messages = await populationInjectionPrompts(absolutePrompts, messages);
++    messages = await populationInjectionPrompts(absolutePrompts, messages, chatDatabase);
+ 
+     // Decide whether dialogue examples should always be added
+@@ -1583,5 +1592,5 @@
+  */
+ export async function prepareOpenAIMessages({
+-    databasePolicy, historyCoverage,
++    databasePolicy, historyCoverage, chatDatabase,
+     name2,
+     charDescription,
+@@ -1659,5 +1668,5 @@
+         // Fill the chat completion with as much context as the budget allows
+         } finally { bulkEnd?.(); }
+-        await populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples });
++        await populateChatCompletion(prompts, chatCompletion, { bias, quietPrompt, quietImage, type, cyclePrompt, messages, messageExamples, chatDatabase });
+     } catch (error) {
+         if (error instanceof TokenBudgetExceededError) {
+@@ -1680,4 +1689,9 @@
+         promptManager.setChatCompletion(chatCompletion);
+ 
++        if (chatDatabase) {
++            for (const m of chatCompletion.messages.flatten()) {
++                if (m.identifier === 'worldInfoBefore' || m.identifier === 'worldInfoAfter') m.databaseSpans = chatDatabase.locate(m.identifier, m.content);
++            }
++        }
+         if (oai_settings.squash_system_messages && dryRun == false) {
+             await chatCompletion.squashSystemMessages();
+@@ -1692,9 +1706,9 @@
+     if (databaseBudget || historyCoverage || encodeChatFloors) {
+         const records = chatCompletion.messages.flatten().filter(m => m.content || m.tool_calls).map(m => ({
+-            floor: m[databaseFloor], tokens: m.getTokens(), media: m.databaseMediaTokens || 0,
++            database: m.databaseSpans, floor: m[databaseFloor], tokens: m.getTokens(), media: m.databaseMediaTokens || 0,
+         }));
+         databaseBudget?.bind(chat, records);
+         historyCoverage?.bind(chat, records);
+-        if (encodeChatFloors) vertexChatFloorInput.bind(chat, records);
++        if (encodeChatFloors) vertexChatFloorInput.bind(chat, records, chatDatabase);
+     }
+ 
+@@ -4072,4 +4086,8 @@
+             if (shouldSquash(message)) {
+                 if (lastMessage && shouldSquash(lastMessage) && lastMessage[databaseFloor] === message[databaseFloor]) {
++                    if (message.databaseSpans?.length) {
++                        const offset = lastMessage.content.length + 1;
++                        lastMessage.databaseSpans = [...(lastMessage.databaseSpans || []), ...message.databaseSpans.map(r => ({ ...r, start: r.start + offset }))];
++                    }
+                     lastMessage.content += '\n' + message.content;
+                     lastMessage.tokens = await tokenHandler.countAsync({ role: lastMessage.role, content: lastMessage.content });
+--- a/public/scripts/world-info.js
++++ b/public/scripts/world-info.js
+@@ -5251,4 +5251,10 @@
+         }
+ 
++        if (globalScanData?.chatDatabase) {
++            const slot = entry.position === world_info_position.before ? 'worldInfoBefore'
++                : entry.position === world_info_position.after ? 'worldInfoAfter'
++                : entry.position === world_info_position.atDepth ? `depth-${regexDepth}-${entry.role ?? extension_prompt_roles.SYSTEM}` : null;
++            if (slot) globalScanData.chatDatabase.collect(slot, entry, content);
++        }
+         switch (entry.position) {
+             case world_info_position.before:
+--- a/public/lib/shujuku-api-routing-fix/shujuku-naiv1.3.9-routing-p2.js
++++ b/public/lib/shujuku-api-routing-fix/shujuku-naiv1.3.9-routing-p2.js
+@@ -1165,4 +1165,16 @@
+         supports: historyBudgetOnHost_ACU,
+         worldEntries: historyBudgetWorldEntries_ACU,
++        async databaseInputOwner() {
++            const world = await getInjectionTargetLorebook_ACU();
++            if (!world) return null;
++            const prefix = getIsolationPrefix_ACU();
++            return entry => {
++                if (entry.world !== world || !entry.comment?.startsWith(prefix)) return false;
++                const name = entry.comment.slice(prefix.length).replace(/^外部导入-/, '');
++                return /^(?:重要人物条目|小?总结条目)\d+$/.test(name)
++                    || /^TavernDB-ACU-(?:ReadableDataTable|OutlineTable|ImportantPersonsIndex|PersonsHeader|VectorMemory)$/.test(name)
++                    || /^TavernDB-ACU-(?:CustomExport-|ImportedTxt-).+/.test(name);
++            };
++        },
+         recallWorldPolicy: storyRecallWorldPolicy_ACU,
+         last: null,

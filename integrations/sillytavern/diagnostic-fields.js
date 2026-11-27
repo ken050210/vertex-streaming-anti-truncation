@@ -109,17 +109,18 @@ export function deviceEnvironment(ua) {
   return { os, browser };
 }
 
-export function clientHeader({ env, encoding }) {
-  return [env.extension, env.build, env.tavern, env.revision, encoding].join(" ");
+export function clientHeader({ env, encoding, selectedFormat }) {
+  return [env.extension, env.build, env.tavern, env.revision, encoding, ...(selectedFormat ? [selectedFormat] : [])].join(" ");
 }
 
 export function readClientHeader(headers = {}) {
   const raw = headers[CLIENT_HEADER];
   if (typeof raw !== "string" || raw.length > 170) return;
-  const [extension, build, tavern, revision, encoding] = raw.split(" ");
+  const [extension, build, tavern, revision, encoding, selectedFormat] = raw.split(" ");
   return { host: "SillyTavern", extension: safeVersion(extension), build: /^[a-f0-9]{8}$/.test(build) ? build : undefined,
     tavern: safeVersion(tavern), revision: /^[a-f0-9]{6,40}$/.test(revision) ? revision : undefined,
-    encoding: /^(?:off|unicode|all|recent|(?:alternate|gbk|table|optimized)(?:_(?:all|recent))?)$/.test(encoding) ? encoding : undefined,
+    encoding: /^(?:off|unicode|all|recent|(?:unicode|alternate|gbk|table|optimized)(?:_(?:all|recent|chat|except_preset))?)$/.test(encoding) ? encoding : undefined,
+    ...(["alternate", "gbk", "table"].includes(selectedFormat) ? { selectedFormat } : {}),
     ...deviceEnvironment(headers["user-agent"] ?? "") };
 }
 export const systemCodes = {

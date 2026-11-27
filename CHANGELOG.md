@@ -2,6 +2,12 @@
 
 [中文](CHANGELOG.zh-CN.md) | English
 
+## SillyTavern 0.21.0
+
+- The patched Tavern can encode the current input, user and assistant history sent to the model, and database tables, indexes and recalled summaries injected into the request. Fixed a pre-send error when this scope was selected without the database extension loaded.
+- A second scope encodes all context except preset prompts. It includes character data and ordinary worldbook entries. Tavern tracks the source during assembly, so a preset prompt and a chat message can share both role and text and still be handled separately. Verified with Izumi 1029 and Meowssiah 2.1.7. [Scope and compatibility guide (Chinese)](docs/SILLYTAVERN.md#定制酒馆的转码范围)
+- Input Encoding now shows the last 32 automatic selections with the chosen format, scope and time. A selection is recorded before dispatch and remains available after an upstream error, interrupted stream or manual stop. On the patched Tavern, a selection ID links the record to the outgoing request in the monitor.
+
 ## Gateway 0.25.2 / SillyTavern 0.20.7
 
 - Add Account now works when the gateway console is opened over HTTP on a local network. Save and apply the configuration to include the new account in rotation.

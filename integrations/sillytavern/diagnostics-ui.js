@@ -2,6 +2,7 @@ import { configurationProblem, deviceEnvironment, googleProblem, HISTORY_LIMIT, 
 import { validVertexLocation } from "../../src/vertex-locations.mjs";
 import { backendFinding, endpointProblem, probeBackend, readDiagnosticEndpoint, readPluginJournal } from "./backend-status.js";
 import { PLUGIN_PATH } from "./shared.js";
+import { encodingHistory } from "./optimized-input.js";
 
 const stages = { request: "校验请求", image: "图片转换", configuration: "读取连接配置", authentication: "获取 Google 凭据",
   upstream: "请求 Vertex", restoration: "读取或还原 Vertex 回复" };
@@ -69,7 +70,7 @@ export function formatDiagnostic(row) {
       ["429 区域切换", routing.fallback ? "开" : "关"], ["配置的备用顺序", routing.locations], ["需要区域路由的原因", routing.reason]])],
     ["请求", fields([["消息数", req.messages], ["工具数", req.tools], ["请求字节", s?.inputBytes ?? row.inputBytes], ["最大输出", req.requestedTokens],
       ["实际输出上限", s?.outputLimit?.applied ?? row.applied], ["酒馆流式", req.stream], ["抗截断模式", row.mode], ["上游传输", s?.transport ?? row.transport],
-      ["转码", row.encoding ?? s?.client?.encoding], ["转图", row.imageMode ?? s?.imageMode], ["正文工具", s?.textTool ?? row.textTool], ["分段续写", s?.outputLimit?.longDecode ?? row.longDecode],
+      ["转码", row.encoding ?? s?.client?.encoding], ["自动选中格式", row.selectedFormat ?? s?.client?.selectedFormat], ["转图", row.imageMode ?? s?.imageMode], ["正文工具", s?.textTool ?? row.textTool], ["分段续写", s?.outputLimit?.longDecode ?? row.longDecode],
       ["标签截停次数", s?.tagStop ? s.stopCount : row.stopCount], ["截停等待", s?.waitForUsage ?? row.waitForUsage]])],
     ["浏览器", fields([["状态", states[row.state]], ["生成请求", row.dispatched == null ? undefined : row.dispatched ? "已发起" : "未发出"], ["HTTP", row.httpStatus], ["内容类型", row.contentType],
       ["宿主后端 HTTP", row.hostStatus], ["宿主响应头毫秒", row.hostHeadersMs],
@@ -246,12 +247,13 @@ export function createDiagnostics({ context, path, version, direct, entryPoints 
       if (row.id === (button === quickCopy ? latestFailure?.id : list.value)) button.textContent = "手动复制";
     }
   }
-  function start(body, { mode, imageMode, unicodeMode, signal }) {
+  function start(body, { mode, imageMode, unicodeMode, signal, choiceId }) {
     const id = requestId(), at = new Date(), began = performance.now();
     const row = { id, at: at.toISOString(), offset: "UTC" + (at.getTimezoneOffset() > 0 ? "−" : "+") +
       String(Math.floor(Math.abs(at.getTimezoneOffset()) / 60)).padStart(2, "0") + ":" + String(Math.abs(at.getTimezoneOffset()) % 60).padStart(2, "0"),
       state: "pending", route: "prepare", dispatched: false, env: { ...env }, request: requestFields(body), mode, imageMode,
       encoding: unicodeMode === true ? "unicode" : unicodeMode ? safeCode(String(unicodeMode).replaceAll("-", "_")) : "off",
+      selectedFormat: choiceId ? encodingHistory(context.accountStorage).find(entry => String(entry.id) === choiceId)?.format : undefined,
       region: validVertexLocation(body.vertexai_region) ? body.vertexai_region : undefined,
       inputBytes: new Blob([JSON.stringify(body)]).size, bytesReceived: 0 };
     active.set(id, row);

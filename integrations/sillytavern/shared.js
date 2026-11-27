@@ -1,6 +1,6 @@
 import { prepareUnicodeInput } from "../../src/unicode-input.mjs";
 import { inputEncodingMode } from "../../src/optimized-input.mjs";
-import { prepareOptimizedInput } from "./optimized-input.js";
+import { choiceHeader, prepareOptimizedInput } from "./optimized-input.js";
 import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
 import { SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason, useBuiltinForMeow } from "../../src/transport-tool-name.mjs";
 import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
@@ -10,7 +10,7 @@ import { CLIENT_HEADER, clientHeader, DIAGNOSTIC_HEADER } from "./diagnostic-fie
 import { observeDelivery } from "./diagnostic-stream.js";
 export const PLUGIN_ID = "vertex-anti-truncation";
 export const tavernDefaultsToGlobal = model => /^gemini-4-(carbon|neon|hydrogen)$/.test(model);
-export const PLUGIN_VERSION = "0.20.7";
+export const PLUGIN_VERSION = "0.21.0";
 // The oldest server plugin that understands every request this extension may
 // send (Continue arrived in 0.3.1). SillyTavern updates a Git-installed server
 // plugin on start but not the extension, so a newer server is common.
@@ -126,7 +126,7 @@ export function bypassReason(body, mode, payGo = false, transportToolName = "", 
 
 // ST 1.19 exposes a settings event, but not a generation-URL override. Intercept
 // only its same-origin Vertex POST; preserve the original fetch for everything else.
-export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getRegions = () => ({}), getTransportToolName = () => "", getMeowCompat = () => false, getTagStop = () => null, getWaitForStopUsage = () => false, getUserFloor = () => "", getRecentAiFloors = () => [], ensureBackend = async () => true, onStatus = () => {}, startReport, direct, payGoInstalled = false, getRequestHeaders = () => ({ "Content-Type": "application/json" }) }) {
+export function createFetchInterceptor(originalFetch, { origin, getMode, getUnicodeInput = () => false, getImageInput = () => "off", getLongDecode = () => false, getRegions = () => ({}), getTransportToolName = () => "", getMeowCompat = () => false, getTagStop = () => null, getWaitForStopUsage = () => false, getUserFloor = () => "", getRecentAiFloors = () => [], ensureBackend = async () => true, onStatus = () => {}, onEncodingChoice, startReport, direct, payGoInstalled = false, getRequestHeaders = () => ({ "Content-Type": "application/json" }) }) {
   return async function vertexFetch(input, init) {
     let url;
     try { url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, origin); }
@@ -148,7 +148,8 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
         : init?.body == null && input instanceof Request ? await input.clone().json() : null;
     } catch { return originalFetch(input, init); }
     if (!body || body.chat_completion_source !== "vertexai") return originalFetch(input, init);
-    const trace = startReport?.(body, { mode, imageMode, unicodeMode, signal: init?.signal ?? input?.signal });
+    const trace = startReport?.(body, { mode, imageMode, unicodeMode, signal: init?.signal ?? input?.signal,
+      choiceId: new Headers(init?.headers ?? input?.headers).get(choiceHeader) });
     try {
       return await send({ input, init, url, body, mode, imageMode, unicodeMode, optimized, recent, unicodeEnabled, imageEnabled, trace });
     } catch (error) { trace?.thrown(error, "request_failed"); throw error; }
@@ -182,6 +183,13 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
             signal: init?.signal ?? (input instanceof Request ? input.signal : undefined) }, optimized[1])
           : prepareUnicodeInput(source, scope, BODY_LIMIT);
         body = prepared.payload; unicode = prepared.metadata;
+        if (optimized?.[1] === "optimized" && unicode.format && onEncodingChoice) {
+          const id = onEncodingChoice(unicode.format, scope === true ? "current" : scope);
+          const headers = new Headers(init?.headers ?? input?.headers);
+          headers.set(choiceHeader, String(id));
+          init = { ...init, headers };
+          if (trace) trace.record.selectedFormat = unicode.format;
+        }
       } catch (error) { onStatus({ error: error.code || "unicode_input_failed" }); throw error; }
     }
     // PayGo can be on either side of this wrapper. Before prepare it marks the
