@@ -72,7 +72,7 @@ export function formatDiagnostic(row) {
       ["转码", row.encoding ?? s?.client?.encoding], ["转图", row.imageMode ?? s?.imageMode], ["正文工具", s?.textTool ?? row.textTool], ["分段续写", s?.outputLimit?.longDecode ?? row.longDecode],
       ["标签截停次数", s?.tagStop ? s.stopCount : row.stopCount], ["截停等待", s?.waitForUsage ?? row.waitForUsage]])],
     ["浏览器", fields([["状态", states[row.state]], ["生成请求", row.dispatched == null ? undefined : row.dispatched ? "已发起" : "未发出"], ["HTTP", row.httpStatus], ["内容类型", row.contentType],
-      ["宿主后端 HTTP", row.hostStatus], ["宿主响应头毫秒", row.hostHeadersMs],
+      ["宿主后端 HTTP", row.hostStatus], ["宿主响应头毫秒", row.hostHeadersMs], ["区域尝试", row.regionAttempts?.replaceAll(",", " → ")],
       ["耗时毫秒", row.elapsedMs ?? (row.state === "pending" ? Math.max(0, Date.now() - Date.parse(row.at)) : undefined)],
       ["响应头毫秒", row.headersMs], ["首段正文毫秒", row.firstTextMs], ["最近数据毫秒", row.lastDataMs],
       ["收到字节", row.bytesReceived], ["结束标记", row.doneMarker], ["结束原因", row.finishReason], ["标签截停", row.tagStopped],

@@ -12,7 +12,8 @@ import { backendFinding, probeBackend } from "./backend-status.js";
 // TauriTavern has no Node server to host the plugin, so the extension shapes the
 // request and restores the reply itself. Rendering text as images needs the server.
 const tauri = window.__TAURITAVERN__ ? await import("../../src/tauritavern.mjs") : null;
-const direct = tauri && { prepare: tauri.prepareTauriTavernRequest, restore: tauri.restoreTauriTavernResponse };
+const direct = tauri && { prepare: tauri.prepareTauriTavernRequest, restore: tauri.restoreTauriTavernResponse,
+  sendWithRegions: tauri.sendTauriTavernWithRegions };
 const context = SillyTavern.getContext();
 let diagnostics;
 const meowStreams = installMeowStreamPreview(() => SillyTavern.getContext());
@@ -267,12 +268,13 @@ function mount() {
   mountInputEncoding(panel, saved);
   mountTransportOptions(panel, select, saved, payGoInstalled);
   const regionPanel = panel.querySelector("#vertex_region_options");
-  regionPanel.hidden = Boolean(direct || payGoInstalled);
+  regionPanel.hidden = payGoInstalled;
   if (!regionPanel.hidden) {
     const field = id => document.getElementById(id);
     addRegionSuggestions(field("vertexai_region_suggestions"));
     const editor = createRegionEditor(regionPanel, { limit: 2, buttonClass: "menu_button",
-      help: "沿用酒馆的首选区域。插件直连遇到 HTTP 429 时按顺序换区，每个备用区域最多尝试一次。",
+      help: direct ? "沿用酒馆的首选区域。收到 429 且回复尚未开始时，按顺序尝试备用区域。抗截断关闭时也可使用。"
+        : "沿用酒馆的首选区域。插件直连遇到 HTTP 429 时按顺序换区，每个备用区域最多尝试一次。",
       onChange: () => saveSettings(editor.value) });
     editor.setValue(saved);
     const render = () => {
@@ -280,7 +282,7 @@ function mount() {
       const region = field("vertexai_region")?.value.trim() || "us-central1";
       const reason = field("vertexai_auth_mode")?.value !== "full" || (field("vertexai_service_tier")?.value || "standard") !== "standard"
         ? "跨区域重试适用于完整服务账号和 Standard。"
-        : select.value === "off" && !["all", "current-turn"].includes(settings().imageInput) ? "启用抗截断传输或图片输入后，由插件直连 Vertex。" : "";
+        : !direct && select.value === "off" && !["all", "current-turn"].includes(settings().imageInput) ? "启用抗截断传输或图片输入后，由插件直连 Vertex。" : "";
       editor.setContext(region, supportedVertexLocations(model), reason);
     };
     for (const id of ["vertexai_region", "vertexai_auth_mode", "vertexai_service_tier", "model_vertexai_select"]) {

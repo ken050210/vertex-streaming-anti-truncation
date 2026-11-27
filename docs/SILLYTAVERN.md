@@ -2,9 +2,9 @@
 
 扩展把「抗截断传输」加到酒馆的「API 连接 → Google Vertex AI」面板。它使用你选好的模型、地区、服务等级和酒馆里已有的凭据。抗截断默认关闭。
 
-完整服务账号 + Standard 直连时，在酒馆原有「地区」栏选择首选区域。展开「429 区域切换」即可启用并排序最多两个备用区域。此设置默认关闭。Neon、Carbon、Hydrogen 可选 `global`、`us`、`eu`，Argon 还支持新加坡与伦敦。已知模型只尝试其支持的备用区域。每次生成从首选开始，收到上游 HTTP 429 后至少等待 1 秒，并遵守更长的 `Retry-After`。最后一次失败会带回上游错误；面板显示本次区域和状态。
+完整服务账号 + Standard 直连时，在酒馆原有「地区」栏选择首选区域。展开「429 区域切换」即可启用并排序最多两个备用区域。此设置默认关闭。Neon、Carbon、Hydrogen 可选 `global`、`us`、`eu`，Argon 还支持新加坡与伦敦。已知模型只尝试其支持的备用区域。每次生成从首选开始，收到上游 HTTP 429 后至少等待 1 秒，响应提供更长的 `Retry-After` 时按该值等候。地区和状态会显示在面板上。备用区域用完后，酒馆显示最后一次请求的错误。
 
-该功能用于服务端插件接管的生成，包括插件图片输入。普通酒馆旁路、PayGo、TauriTavern 各自由宿主发送。分段续写留在签发令牌的区域。已返回正文时不会换区重放。使用多区域或开启备用区域需同时更新配套服务端插件并重启酒馆。
+SillyTavern 的换区适用于服务端插件接管的生成，包括插件图片输入。分段续写留在签发令牌的区域。使用多区域或开启备用区域需同时更新配套服务端插件并重启酒馆。
 
 | 你用的酒馆 | 安装位置 | 如何确认加载 |
 | --- | --- | --- |
@@ -24,11 +24,13 @@ https://github.com/ken050210/vertex-streaming-anti-truncation
 
 重新加载后，打开「API 连接 → Google Vertex AI」。底部应显示「TauriTavern 扩展已加载」。选择抗截断模式后，展开「传输与截停」即可配置截停规则和预设正文工具名。
 
+TT 的 Vertex Standard 服务账号直连可在同一面板开启「429 区域切换」，抗截断关闭时也能用。扩展只在收到 429 且生成尚未开始时换区，已收到正文、思考或工具事件的请求留在原区域。使用反向代理或指定区域缓存的请求不参与换区。
+
 桌面端也可以先关闭 TT，把完整仓库克隆到 `<数据目录>/default-user/extensions/vertex-streaming-anti-truncation`。便携版通常使用程序旁的 `data`，安装版使用应用数据目录下的 `com.tauritavern.client/data`。如果上一级目录里有 `tauritavern-runtime.json`，以它的 `data_root` 为准。SillyTavern 的 ZIP 和 `dist/sillytavern/extension/` 都省略了 TT 需要的模块，手动安装也要用完整仓库。
 
 ### TT 如何接收回复
 
-TT 后台负责提示词转换、凭据、采样参数和思考设置。扩展把所需的 `tools` 和 `toolConfig` 合并到「附加参数」(`custom_include_body`)，仍向酒馆的 `/api/backends/chat-completions/generate` 发送一次请求。附加参数可以留空或填 JSON 对象。填了 YAML 时，面板会说明原因，本次走普通 Vertex。
+TT 后台负责提示词转换、凭据、采样参数和思考设置。扩展把所需的 `tools` 和 `toolConfig` 合并到「附加参数」(`custom_include_body`)，通过酒馆的 `/api/backends/chat-completions/generate` 生成。附加参数可以留空或填 JSON 对象。填了 YAML 时，面板会说明原因，本次走普通 Vertex。
 
 两种抗截断模式都读取 TT 转发的 `streamGenerateContent` 事件，以便检查 Google 的原始结束原因。流式抗截断配合酒馆流式开关使用 `streamFunctionCallArguments`，文字到一段显示一段。非流式抗截断等正文通过检查后整段交付。命中截停规则时，两种模式都会在结束标签处结束读取，按酒馆要求的格式交付回复。
 

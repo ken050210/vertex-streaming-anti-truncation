@@ -47,27 +47,128 @@ export function prepareTauriTavernRequest(body, mode, tagStop, transportToolName
   };
 }
 
-// TT's buildErrorStreamChunk wraps failures as one text part with its localized
-// API Error label, index 0, and no Google metadata or finish reason.
 const only = (value, ...allowed) => isObject(value) && Object.keys(value).every(key => allowed.includes(key));
-function tauriErrorFrame(parsed, structuredReply) {
+function tauriErrorText(text) {
+  if (typeof text !== "string" || !text.startsWith("[")) return;
+  if (text.startsWith("[API Error]")) return text;
+  const label = globalThis.SillyTavern?.i18n?.translate?.("API Error", "API Error");
+  if (label && text.startsWith(`[${label}]`)) return text;
+}
+
+// TT's buildErrorStreamChunk uses one text part with no Google metadata or finish reason.
+function tauriErrorCandidate(parsed) {
   if (!only(parsed, "candidates") || parsed.candidates?.length !== 1) return;
   const candidate = parsed.candidates[0];
   if (!only(candidate, "index", "content") || candidate.index !== 0 ||
       !only(candidate.content, "parts") || candidate.content.parts?.length !== 1) return;
   const part = candidate.content.parts[0];
-  if (!only(part, "text") || typeof part.text !== "string" || !part.text.startsWith("[")) return;
-  if (!part.text.startsWith("[API Error]")) {
-    const label = globalThis.SillyTavern?.i18n?.translate?.("API Error", "API Error");
-    if (!label || !part.text.startsWith(`[${label}]`)) return;
-  }
+  if (only(part, "text") && tauriErrorText(part.text)) return candidate;
+}
+
+function tauriErrorStatus(text) {
+  const diagnostic = text?.replace(/^\[[^\]\r\n]+\]\s*/, "");
+  const match = /^(?:Too many requests:\s*)?(?:HTTP\s+|(?:Google )?Vertex AI endpoint failed with status\s+)([45]\d{2})\b/i.exec(diagnostic ?? "");
+  return match ? Number(match[1]) : undefined;
+}
+
+function tauriErrorFrame(parsed, structuredReply) {
+  const candidate = tauriErrorCandidate(parsed);
+  if (!candidate) return;
   if (!structuredReply) return { candidates: [{ ...candidate, finishReason: "STOP" }] };
   // A synthetic STOP would make the preset validate a tool call that never
   // arrived. Some TT diagnostics name the HTTP status; others only have text.
-  const diagnostic = part.text.slice(part.text.indexOf("]") + 1).trimStart();
-  const match = /^(?:HTTP\s+|(?:Google )?Vertex AI endpoint failed with status\s+)([45]\d{2})\b/i.exec(diagnostic);
-  const status = match ? Number(match[1]) : undefined;
-  throw Object.assign(protocolError("upstream_stream_error"), { status, upstreamBody: { error: { code: status, message: part.text } } });
+  const message = candidate.content.parts[0].text;
+  const status = tauriErrorStatus(message);
+  throw Object.assign(protocolError("upstream_stream_error"), { status, upstreamBody: { error: { code: status, message } } });
+}
+
+function responseErrorStatus(data, stream) {
+  if (stream) return tauriErrorStatus(tauriErrorCandidate(data)?.content.parts[0].text) ?? googleErrorDetail(data)?.code;
+  if (data?.object === "chat.completion" && /^tauritavern-error-\d+$/.test(data.id) && data.choices?.length === 1)
+    return tauriErrorStatus(tauriErrorText(data.choices[0]?.message?.content));
+  if (data?.error === true || isObject(data?.error)) return tauriErrorStatus(data.error?.message ?? data.message);
+}
+
+// Inspect only the first SSE data event. A reply with any upstream content has
+// already started, even if the anti-truncation adapter has yet to emit text.
+async function inspectRegionalReply(response, signal) {
+  const type = response.headers.get("content-type") ?? "";
+  const stream = response.ok && type.includes("text/event-stream");
+  if (response.status === 429 || !response.body || (!stream && !type.includes("json")))
+    return { response, status: response.status };
+  const reader = response.body.getReader(), chunks = [];
+  const limit = 64 * 1024;
+  let hasData = false, status, size = 0, ended = false, readError;
+  const parser = stream && createSseParser(({ data }) => {
+    if (!data?.trim()) return;
+    hasData = true;
+    status = responseErrorStatus(JSON.parse(data), true);
+    return false;
+  }, limit);
+  const decoder = !stream && new TextDecoder();
+  let json = "";
+  const abort = () => { void reader.cancel(signal.reason).catch(() => {}); };
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    signal?.throwIfAborted();
+    while (!hasData && size < limit) {
+      const { done, value } = await reader.read();
+      if (done) { ended = true; break; }
+      chunks.push(value);
+      size += value.byteLength;
+      // Inspect only the prefix even if the host batches many frames together.
+      const prefix = value.subarray(0, limit - size + value.byteLength);
+      if (stream) {
+        try { parser.push(prefix); } catch { break; }
+      } else json += decoder.decode(prefix, { stream: true });
+    }
+    if (ended) {
+      try {
+        if (stream && !hasData) parser.finish();
+        else if (!stream) status = responseErrorStatus(JSON.parse(json + decoder.decode()), false);
+      } catch { /* Preserve malformed or oversized replies for the normal reader. */ }
+    }
+  } catch (error) { readError = error; }
+  finally { signal?.removeEventListener("abort", abort); }
+  if (signal?.aborted) abort();
+  signal?.throwIfAborted();
+  const body = new ReadableStream({
+    async pull(controller) {
+      if (chunks.length) return controller.enqueue(chunks.shift());
+      if (readError) return controller.error(readError);
+      if (ended) return controller.close();
+      const chunk = await reader.read();
+      if (chunk.done) controller.close();
+      else controller.enqueue(chunk.value);
+    },
+    cancel(reason) { return reader.cancel(reason); },
+  });
+  return { response: new Response(body, response), status: status ?? response.status };
+}
+
+function waitForRegion(headers, signal) {
+  const after = headers.get("retry-after") ?? "";
+  const ms = /^\d+$/.test(after) ? Number(after) * 1000 : Date.parse(after) - Date.now();
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, Math.min(2147483647, Math.max(1000, ms || 0)));
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+export async function sendTauriTavernWithRegions(locations, send, signal) {
+  const attempts = [];
+  for (const location of locations) {
+    const { response, status } = await inspectRegionalReply(await send(location), signal);
+    attempts.push(`${location}=${status}`);
+    if (status !== 429 || attempts.length === locations.length) return { response, status, regions: attempts.join(",") };
+    void response.body?.cancel().catch(() => {});
+    await waitForRegion(response.headers, signal);
+  }
 }
 
 function normalizeTauriStream(response, normalizeError) {

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { prepareTauriTavernRequest, restoreTauriTavernResponse } from "../src/tauritavern.mjs";
+import { prepareTauriTavernRequest, restoreTauriTavernResponse, sendTauriTavernWithRegions } from "../src/tauritavern.mjs";
 import { createFetchInterceptor, GENERATE_PATH } from "../integrations/sillytavern/shared.js";
 import { CONTINUATION_INSTRUCTION } from "../src/anti-truncation.mjs";
 import { sseData } from "../src/wire.mjs";
@@ -42,6 +42,118 @@ function host(wire, calls = []) {
 const intercept = (original, mode, extra = {}) => createFetchInterceptor(original, { origin: "http://tauri.localhost", getMode: () => mode,
   getTagStop: () => ({ tag: "tucao", count: 2 }), ensureBackend: () => assert.fail("TT has no server plugin"), direct, ...extra });
 const send = (wrapped, patch = {}, init = {}) => wrapped(GENERATE_PATH, { method: "POST", headers: { "x-csrf-token": "fixture" }, body: JSON.stringify({ ...body, ...patch }), ...init });
+
+const busy = "[API Error]\nGoogle Vertex AI endpoint failed with status 429: RESOURCE_EXHAUSTED";
+const ttStandard = { model: "gemini-4-carbon", vertexai_auth_mode: "full", vertexai_region: "global" };
+const sseReply = wire => new Response(wire, { headers: { "content-type": "text/event-stream" } });
+const regionalOptions = (fallbackLocations = ["us", "eu"], extra = {}) => ({
+  direct: { ...direct, sendWithRegions: sendTauriTavernWithRegions },
+  getRegions: () => ({ regionFallbackEnabled: true, fallbackLocations }), ...extra,
+});
+
+test("TT retries a split host 429 before exposing any stream and starts the next generation at the primary", async () => {
+  const statuses = [], calls = [];
+  let cancelled = 0;
+  const original = host((name, sent) => {
+    if (sent.vertexai_region === "global" && calls.length === 1) {
+      const frame = hostText(busy);
+      const encoder = new TextEncoder();
+      return sseReply(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(": keepalive\n\n" + frame.slice(0, 45)));
+          controller.enqueue(encoder.encode(frame.slice(45)));
+        },
+        cancel() { cancelled++; },
+      }));
+    }
+    return sseReply(partial(name, ["第一段", "第二段"]) + finish() + done);
+  }, calls);
+  const wrapped = intercept(original, "streaming", regionalOptions(["global", "asia-southeast1", "eu", "eu"], {
+    onStatus: status => statuses.push(status),
+  }));
+  for (let i = 0; i < 2; i++) {
+    const reply = await send(wrapped, ttStandard);
+    assert.equal(contents(await reply.text()), "第一段第二段");
+  }
+  assert.deepEqual(calls.map(c => c.sent.vertexai_region), ["global", "eu", "global"]);
+  assert.ok(calls.every(c => c.input === GENERATE_PATH));
+  assert.deepEqual({ ...calls[0].sent, vertexai_region: "eu" }, calls[1].sent);
+  assert.equal(cancelled, 1);
+  assert.deepEqual(statuses.filter(s => s.regions).map(s => s.regions), ["global=429,eu=200", "global=200"]);
+});
+
+test("TT can retry normal non-streaming 429s with transport off, and returns the final host error", async () => {
+  const calls = [], statuses = [];
+  const error = { id: "tauritavern-error-123", object: "chat.completion",
+    choices: [{ message: { role: "assistant", content: busy.replace("\n", "\nToo many requests: ") } }] };
+  const original = async request => {
+    assert.equal(request.headers.get("x-fixture"), "yes");
+    calls.push(await request.json());
+    return Response.json(error);
+  };
+  const wrapped = intercept(original, "off", regionalOptions(["eu", "us"], { onStatus: status => statuses.push(status) }));
+  const req = new Request("http://tauri.localhost" + GENERATE_PATH, { method: "POST", headers: { "x-fixture": "yes" },
+    body: JSON.stringify({ ...body, ...ttStandard, stream: false }) });
+  assert.deepEqual(await (await wrapped(req)).json(), error);
+  assert.deepEqual(calls.map(c => c.vertexai_region), ["global", "eu", "us"]);
+  assert.ok(calls.every(c => c.stream === false && c.custom_include_body === ""));
+  assert.deepEqual(statuses.at(-1), { error: "429", regions: "global=429,eu=429,us=429" });
+});
+
+test("TT buffered mode restores only the fallback response after an HTTP 429", async () => {
+  const original = host((name, sent) => sent.vertexai_region === "global"
+    ? new Response(null, { status: 429 })
+    : sseReply(call({ name, args: { content: "备用回复" } }) + finish() + done));
+  const wrapped = intercept(original, "buffered", regionalOptions());
+  const reply = await send(wrapped, { ...ttStandard, stream: false });
+  assert.equal((await reply.json()).choices[0].message.content, "备用回复");
+  assert.deepEqual(original.calls.map(c => c.sent.vertexai_region), ["global", "us"]);
+});
+
+test("TT never retries after a model event, on non-429 errors, or with ineligible settings", async () => {
+  const normal = google({ content: { role: "model", parts: [{ text: busy }] } });
+  const tool = call({ name: "lookup", args: { query: "one" } });
+  const cases = [
+    [normal + hostText(busy), {}],
+    [tool + hostText(busy), {}],
+    [hostText(busy.replace("429", "403")), {}],
+    [hostText(busy), { vertexai_auth_mode: "express" }],
+    [hostText(busy), { vertexai_service_tier: "priority" }],
+    [hostText(busy), { reverse_proxy: "https://example.invalid" }],
+    [hostText(busy), { custom_include_body: "cachedContent: projects/test/locations/global/cachedContents/example" }],
+  ];
+  for (const [wire, patch] of cases) {
+    const original = async () => { original.calls++; return sseReply(wire + done); };
+    original.calls = 0;
+    const wrapped = intercept(original, "off", regionalOptions());
+    assert.equal(await (await send(wrapped, { ...ttStandard, ...patch })).text(), wire + done);
+    assert.equal(original.calls, 1);
+  }
+  const original = host(hostText(busy) + done);
+  const wrapped = intercept(original, "off", regionalOptions([], { getRegions: () => ({ regionFallbackEnabled: false, fallbackLocations: ["us"] }) }));
+  assert.equal(await (await send(wrapped, ttStandard)).text(), hostText(busy) + done);
+  assert.equal(original.calls.length, 1);
+  const enabled = intercept(() => assert.fail("Invalid regional configuration must not generate"), "off", regionalOptions());
+  await assert.rejects(send(enabled, { ...ttStandard, model: "gemini-new-model", vertexai_region: "invalid/region" }),
+    { code: "invalid_primary_location" });
+});
+
+test("TT stop cancels the first regional stream and interrupts a Retry-After wait", async () => {
+  const controller = new AbortController();
+  let calls = 0, markCancelled;
+  const cancelled = new Promise(resolve => { markCancelled = resolve; });
+  const original = async () => {
+    calls++;
+    const stream = new ReadableStream({ cancel: markCancelled });
+    return new Response(stream, { status: 429, headers: { "retry-after": "120" } });
+  };
+  const wrapped = intercept(original, "off", regionalOptions());
+  const pending = send(wrapped, ttStandard, { signal: controller.signal });
+  await cancelled;
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.equal(calls, 1);
+});
 
 test("TauriTavern requests keep ST's own route and carry the transport in body overrides", async () => {
   const original = host(name => new Response(call({ name, args: { content: "好" } }) + finish() + done));
