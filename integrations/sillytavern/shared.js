@@ -5,7 +5,7 @@ import { vertexJsonSchema } from "../../src/vertex-schema.mjs";
 import { SOLIUMBRA_TOOL, soliumbraSchema, transportToolBypassReason, useBuiltinForMeow } from "../../src/transport-tool-name.mjs";
 import { normalizeStopUsageWait, validateTagStopRule } from "../../src/tag-stop-rule.mjs";
 import { createSseParser } from "../../src/wire.mjs";
-import { isMultiRegion, validVertexLocation } from "../../src/vertex-locations.mjs";
+import { isMultiRegion, requestLocations, validVertexLocation } from "../../src/vertex-locations.mjs";
 import { CLIENT_HEADER, clientHeader, DIAGNOSTIC_HEADER } from "./diagnostic-fields.js";
 import { observeDelivery } from "./diagnostic-stream.js";
 export const PLUGIN_ID = "vertex-anti-truncation";
@@ -32,6 +32,23 @@ export const GENERATE_PATH = "/api/backends/chat-completions/generate";
 const PAYGO_GENERATE_PATH = "/api/plugins/vertex-paygo/native-gemini/generate";
 export const PLUGIN_PATH = `/api/plugins/${PLUGIN_ID}`;
 export const BODY_LIMIT = 8 * 1024 * 1024;
+const standardServiceAccount = body => body.vertexai_auth_mode === "full" && (body.vertexai_service_tier || "standard") === "standard";
+const textGemini = model => /^gemini-[\w.-]+$/.test(model || "") && !/image|embedding/i.test(model);
+
+function tauriRequestLocations(body, { preferred, regionFallbackEnabled, fallbackLocations }) {
+  if (!regionFallbackEnabled || !Array.isArray(fallbackLocations)) return;
+  // An explicit Vertex context cache belongs to the region that created it.
+  if (body.cachedContent || /\bcachedContent\b/.test(typeof body.custom_include_body === "string"
+    ? body.custom_include_body : JSON.stringify(body.custom_include_body))) return;
+  const backups = [...new Set(fallbackLocations.filter(validVertexLocation))];
+  if (!backups.length) return;
+  const primary = ((typeof body.vertexai_region === "string" && body.vertexai_region.trim()) || preferred ||
+    (tavernDefaultsToGlobal(body.model) ? "global" : "us-central1")).toLowerCase();
+  if (!validVertexLocation(primary)) {
+    throw Object.assign(new Error("Vertex 首选区域格式无效。"), { code: "invalid_primary_location" });
+  }
+  return requestLocations({ location: primary, regionFallbackEnabled: true, fallbackLocations: backups }, body.model).slice(0, 3);
+}
 
 // ST displays error.message in its toast. Keep the same message in the panel,
 // including errors received after the first SSE byte, without teeing the reply.
@@ -112,7 +129,7 @@ export function bypassReason(body, mode, payGo = false, transportToolName = "", 
   if (mode === "off" || !MODES.includes(mode)) return "disabled";
   if (body?.chat_completion_source !== "vertexai") return "other-provider";
   if (body.reverse_proxy && !payGo) return "reverse-proxy";
-  if (!/^gemini-[\w.-]+$/.test(body.model || "") || /image|embedding/i.test(body.model)) return "model";
+  if (!textGemini(body.model)) return "model";
   if (body.functions?.length || body.function_call != null) return "existing-tools";
   if (body.tools != null && (!Array.isArray(body.tools) || !body.tools.every(nativeTool))) return "tool-schema";
   if (body.json_schema || body.responseSchema || (body.responseMimeType && body.responseMimeType !== "text/plain") ||
@@ -139,7 +156,9 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const unicodeEnabled = recent || optimized || unicodeMode === true || unicodeMode === "all";
     const imageMode = getImageInput();
     const imageEnabled = imageMode !== "off";
-    if ((mode === "off" && !unicodeEnabled && !imageEnabled) || url.origin !== origin || ![GENERATE_PATH, PAYGO_GENERATE_PATH].includes(url.pathname) || method.toUpperCase() !== "POST") {
+    const tauriRegionalRoute = direct?.sendWithRegions && url.pathname === GENERATE_PATH;
+    const transportEnabled = mode !== "off" || unicodeEnabled || imageEnabled;
+    if ((!transportEnabled && !tauriRegionalRoute) || url.origin !== origin || ![GENERATE_PATH, PAYGO_GENERATE_PATH].includes(url.pathname) || method.toUpperCase() !== "POST") {
       return originalFetch(input, init);
     }
     let body;
@@ -148,14 +167,22 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
         : init?.body == null && input instanceof Request ? await input.clone().json() : null;
     } catch { return originalFetch(input, init); }
     if (!body || body.chat_completion_source !== "vertexai") return originalFetch(input, init);
+    const tauriSettings = tauriRegionalRoute && standardServiceAccount(body) && !body.reverse_proxy && !body.request_images
+      && textGemini(body.model) && getRegions(body.model);
+    if (!transportEnabled && !tauriSettings?.regionFallbackEnabled) return originalFetch(input, init);
     const trace = startReport?.(body, { mode, imageMode, unicodeMode, signal: init?.signal ?? input?.signal });
     try {
-      return await send({ input, init, url, body, mode, imageMode, unicodeMode, optimized, recent, unicodeEnabled, imageEnabled, trace });
+      return await send({ input, init, url, body, mode, imageMode, unicodeMode, optimized, recent, unicodeEnabled, imageEnabled, trace, tauriSettings });
     } catch (error) { trace?.thrown(error, "request_failed"); throw error; }
   };
-  async function send({ input, init, url, body, mode, imageMode, unicodeMode, optimized, recent, unicodeEnabled, imageEnabled, trace }) {
+  async function send({ input, init, url, body, mode, imageMode, unicodeMode, optimized, recent, unicodeEnabled, imageEnabled, trace, tauriSettings }) {
     const signal = init?.signal ?? input?.signal;
     signal?.throwIfAborted();
+    let tauriLocations;
+    if (tauriSettings) {
+      try { tauriLocations = tauriRequestLocations(body, tauriSettings); }
+      catch (error) { onStatus({ error: error.code, message: error.message }); throw error; }
+    }
     const supports = trace?.supportsBackend ?? ensureBackend;
     async function requireBackend(feature, code) {
       const supported = await supports(feature);
@@ -205,7 +232,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     if (imageOnlyBypass) reason = null;
     const regionFields = {};
     let needsRegionBackend = false;
-    if (!reason && !direct && !payGo && body.vertexai_auth_mode === "full" && (body.vertexai_service_tier || "standard") === "standard") {
+    if (!reason && !direct && !payGo && standardServiceAccount(body)) {
       const regions = getRegions(body.model), fallback = regions.regionFallbackEnabled === true;
       // Some Tavern requests omit the region or replace the selected region with the model's default.
       const missingOrDefault = !body.vertexai_region || (body.vertexai_region === "global" && tavernDefaultsToGlobal(body.model));
@@ -276,7 +303,7 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     // anti-truncation. Image input never falls back to plaintext.
     if (payload && !imageEnabled && new TextEncoder().encode(payload).length > BODY_LIMIT) reason = "too-large";
     if (reason && trace) Object.assign(trace.record, { route: "native", bypass: reason });
-    if (reason && !unicodeEnabled) {
+    if (reason && !unicodeEnabled && !tauriLocations) {
       onStatus({ bypass: reason });
       const reply = await fetchGeneration(input, init);
       return trace ? reportResponse(reply, onStatus, trace) : reply;
@@ -296,18 +323,22 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
       headers.set(CLIENT_HEADER, clientHeader(trace.record));
       init = { ...init, headers };
     }
-    let response;
+    let response, regional;
     try {
-      if (input instanceof Request) {
-        const source = new Request(input.clone(), init);
-        const redirected = new Request(target, {
-          method: "POST", headers: source.headers, body: payload, signal: source.signal,
+      const source = input instanceof Request ? new Request(input.clone(), init) : null;
+      const dispatch = body => source
+        ? fetchGeneration(new Request(target, {
+          method: "POST", headers: source.headers, body, signal: source.signal,
           credentials: source.credentials, cache: source.cache, redirect: source.redirect,
           referrer: source.referrer, referrerPolicy: source.referrerPolicy, mode: source.mode,
-        });
-        response = await fetchGeneration(redirected);
+        }))
+        : fetchGeneration(reason || direct ? input : `${PLUGIN_PATH}/generate`, { ...init, body });
+      if (tauriLocations?.length > 1) {
+        const request = reason ? body : prepared.body;
+        regional = await direct.sendWithRegions(tauriLocations, location => dispatch(JSON.stringify({ ...request, vertexai_region: location })), signal);
+        response = regional.response;
       } else {
-        response = await fetchGeneration(reason || direct ? input : `${PLUGIN_PATH}/generate`, { ...init, body: payload });
+        response = await dispatch(tauriLocations ? JSON.stringify({ ...(reason ? body : prepared.body), vertexai_region: tauriLocations[0] }) : payload);
       }
     } catch (error) { if (!signal?.aborted) onStatus({ error: "network" }); throw error; }
     if (direct && !reason) {
@@ -317,11 +348,13 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
     const applied = Number(response.headers.get("x-gemini-output-tokens-applied"));
     const outputLimit = !reason && applied > 0 ? { requested: Number(response.headers.get("x-gemini-output-tokens-requested")), applied,
       longDecode: response.headers.get("x-gemini-long-decode") === "true" } : null;
-    const regions = !direct && !reason && response.headers.get("x-vertex-region-attempts");
-    if (response.ok && !reason && (regions || imageEnabled || body.type === "continue" || outputLimit)) {
+    const regions = regional?.regions ?? (!direct && !reason && response.headers.get("x-vertex-region-attempts"));
+    if (regional && trace) trace.record.regionAttempts = regions;
+    if (regional?.status === 429) onStatus({ error: "429", regions });
+    else if (regional || (response.ok && !reason && (regions || imageEnabled || body.type === "continue" || outputLimit))) {
       // The plugin reports whether any text was converted; "no-text" was sent as plain text.
       reportTransport({ mode, ...(regions ? { regions } : {}),
-        ...(imageOnlyBypass ? { bypass: imageOnlyBypass } : {}),
+        ...(reason || imageOnlyBypass ? { bypass: reason ?? imageOnlyBypass } : {}),
         ...(unicode ? { unicode } : {}),
         ...(outputLimit ? { outputLimit } : {}),
         ...(response.headers.get("x-vertex-continuation") === "suffix" ? { continuation: true } : {}),
@@ -329,6 +362,6 @@ export function createFetchInterceptor(originalFetch, { origin, getMode, getUnic
           pages: Number(response.headers.get("x-image-input-pages")) || 0, transport: response.headers.get("x-anti-truncation-transport") } } : {}) });
     }
     // Never resubmit to the original route after a failed plugin request.
-    return reportResponse(response, onStatus, trace);
+    return reportResponse(response, regional ? state => onStatus({ ...state, regions }) : onStatus, trace);
   }
 }
